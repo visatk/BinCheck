@@ -1,0 +1,26 @@
+<resources>
+    <string name="app_name">BinCheck</string>
+    <string name="input_placeholder">453225005536xxx3|08|2028|113</string>
+    <string name="action_start_validation">Start batch validation</string>
+    <string name="action_stop_validation">Stop batch validation</string>
+    <string name="action_open_settings">Configure validator and pattern tools</string>
+    <string name="tab_live">Live</string>
+    <string name="tab_die">Die</string>
+    <string name="tab_unknown">Unknown</string>
+    <string name="copy_all">Copy All</string>
+    <string name="clear_tab">Clear</string>
+    <string name="expand_wildcards">Expand x Wildcards</string>
+    <string name="clear_input">Clear Input</string>
+    <string name="paste_clipboard">Paste</string>
+    <string name="settings_title">Validator &amp; Pattern Studio</string>
+    <string name="mode_local_luhn">Deterministic Luhn + BIN + Expiry + CVV</string>
+    <string name="mode_remote_webhook">Custom HTTP Endpoint + Local Pre-check</string>
+    <string name="endpoint_url_label">Webhook / API URL (uses {card}, {mm}, {yyyy}, {cvv} or JSON POST)</string>
+    <string name="generator_section_title">Pattern Wildcard Generator</string>
+    <string name="generate_batch_button">Generate Valid Luhn Batch into Console</string>
+    <string name="save_close">Apply &amp; Close</string>
+    <string name="developer_channel_title">Developer Channel</string>
+    <string name="developer_channel_handle">@drkingbd</string>
+    <string name="developer_channel_url">https://t.me/drkingbd</string>
+    <string name="open_telegram">Join Channel</string>
+</resources>
