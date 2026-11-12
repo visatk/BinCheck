@@ -34,8 +34,21 @@ jobs:
           distribution: "temurin"
           java-version: "21"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Android SDK & Accept Licenses
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=${SDK_ROOT}" >> "${GITHUB_ENV}"
+          echo "ANDROID_SDK_ROOT=${SDK_ROOT}" >> "${GITHUB_ENV}"
+
+          SDKMANAGER=$(find "${SDK_ROOT}/cmdline-tools" -name sdkmanager -type f | sort -V | tail -n 1)
+          if [ -z "${SDKMANAGER}" ] && [ -x "${SDK_ROOT}/tools/bin/sdkmanager" ]; then
+            SDKMANAGER="${SDK_ROOT}/tools/bin/sdkmanager"
+          fi
+
+          if [ -n "${SDKMANAGER}" ]; then
+            yes | "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" --licenses > /dev/null || true
+            "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" "platform-tools" "build-tools;35.0.0" || true
+          fi
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -70,6 +83,7 @@ jobs:
           else
             STORE_PASS="androidrelease"
             KEY_PASS="androidrelease"
+            rm -f "${KEYSTORE_FILE}"
             keytool -genkeypair -v \
               -keystore "${KEYSTORE_FILE}" \
               -storepass "${STORE_PASS}" \
@@ -92,10 +106,10 @@ jobs:
           fi
 
       - name: Run Unit Tests
-        run: gradle :app:testDebugUnitTest
+        run: gradle :app:testDebugUnitTest --no-daemon
 
       - name: Build Signed Release APK & AAB
-        run: gradle :app:assembleRelease :app:bundleRelease
+        run: gradle :app:assembleRelease :app:bundleRelease --no-daemon
 
       - name: Collect & Checksum Release Artifacts
         id: artifacts
@@ -103,9 +117,17 @@ jobs:
           mkdir -p release-assets
           RAW_TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
           SAFE_TAG="${RAW_TAG#refs/tags/}"
+          if [[ "${SAFE_TAG}" == "main" || "${SAFE_TAG}" == "master" || -z "${SAFE_TAG}" ]]; then
+            SAFE_TAG="v1.0.${GITHUB_RUN_NUMBER}"
+          fi
 
           APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           AAB_PATH=$(find app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+
+          if [ -z "${APK_PATH}" ] || [ -z "${AAB_PATH}" ]; then
+            echo "Error: Release APK or AAB not found!"
+            exit 1
+          fi
 
           cp "${APK_PATH}" "release-assets/BinCheck-${SAFE_TAG}-release.apk"
           cp "${AAB_PATH}" "release-assets/BinCheck-${SAFE_TAG}-release.aab"
@@ -125,6 +147,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.artifacts.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: ${{ github.event.inputs.release_name || format('BinCheck {0}', steps.artifacts.outputs.tag) }}
           generate_release_notes: true
           draft: false
