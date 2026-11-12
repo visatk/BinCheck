@@ -1,0 +1,135 @@
+name: Android Release Build & Publish
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag (e.g., v1.0.0)"
+        required: true
+        default: "v1.0.0"
+      release_name:
+        description: "Release title"
+        required: false
+        default: "BinCheck Stable Release"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build Signed Release APK/AAB & Publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Prepare Debug & Release Keystores
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          SECRET_STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          SECRET_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          # Ensure debug.keystore exists for debug/test tasks
+          if [ ! -f "${GITHUB_WORKSPACE}/debug.keystore" ]; then
+            keytool -genkeypair -v \
+              -keystore "${GITHUB_WORKSPACE}/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+          # Prepare release keystore from GitHub Secrets or generate a fallback upload keystore
+          KEYSTORE_FILE="${GITHUB_WORKSPACE}/my-upload-key.jks"
+          if [ -n "${KEYSTORE_BASE64}" ]; then
+            echo "${KEYSTORE_BASE64}" | base64 --decode > "${KEYSTORE_FILE}"
+            STORE_PASS="${SECRET_STORE_PASSWORD:-androidrelease}"
+            KEY_PASS="${SECRET_KEY_PASSWORD:-androidrelease}"
+          else
+            STORE_PASS="androidrelease"
+            KEY_PASS="androidrelease"
+            keytool -genkeypair -v \
+              -keystore "${KEYSTORE_FILE}" \
+              -storepass "${STORE_PASS}" \
+              -alias upload \
+              -keypass "${KEY_PASS}" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=BinCheck Release,O=AIStudio,C=US"
+          fi
+
+          echo "KEYSTORE_PATH=${KEYSTORE_FILE}" >> "${GITHUB_ENV}"
+          echo "STORE_PASSWORD=${STORE_PASS}" >> "${GITHUB_ENV}"
+          echo "KEY_PASSWORD=${KEY_PASS}" >> "${GITHUB_ENV}"
+
+      - name: Ensure .env file exists
+        run: |
+          if [ ! -f .env ]; then
+            cp .env.example .env
+          fi
+
+      - name: Run Unit Tests
+        run: gradle :app:testDebugUnitTest
+
+      - name: Build Signed Release APK & AAB
+        run: gradle :app:assembleRelease :app:bundleRelease
+
+      - name: Collect & Checksum Release Artifacts
+        id: artifacts
+        run: |
+          mkdir -p release-assets
+          RAW_TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
+          SAFE_TAG="${RAW_TAG#refs/tags/}"
+
+          APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          AAB_PATH=$(find app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+
+          cp "${APK_PATH}" "release-assets/BinCheck-${SAFE_TAG}-release.apk"
+          cp "${AAB_PATH}" "release-assets/BinCheck-${SAFE_TAG}-release.aab"
+
+          cd release-assets
+          sha256sum *.apk *.aab > SHA256SUMS.txt
+          echo "tag=${SAFE_TAG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload Build Artifacts to Workflow Run
+        uses: actions/upload-artifact@v4
+        with:
+          name: BinCheck-${{ steps.artifacts.outputs.tag }}-release
+          path: release-assets/*
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.artifacts.outputs.tag }}
+          name: ${{ github.event.inputs.release_name || format('BinCheck {0}', steps.artifacts.outputs.tag) }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          files: |
+            release-assets/*.apk
+            release-assets/*.aab
+            release-assets/SHA256SUMS.txt

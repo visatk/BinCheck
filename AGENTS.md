@@ -33,3 +33,6 @@
    - Uses `OkHttpClient` to send real HTTP requests (`POST` JSON or `GET` query) to a user-configured endpoint URL.
 4. **Persistence**:
    - Uses Jetpack `DataStore` (`preferences`) to persist validation settings, custom endpoint configuration, batch delay, and pattern templates.
+5. **CI/CD & GitHub Release Automation (`.github/workflows/release.yml`)**:
+   - Triggers automatically on version tags (`v*`) or manually via `workflow_dispatch`.
+   - Sets up JDK 21, Android SDK, and Gradle 9.3.1, prepares signing keystores (supporting repository secrets `KEYSTORE_BASE64`, `STORE_PASSWORD`, `KEY_PASSWORD` with automatic fallback generation), runs unit tests, builds signed release APK & AAB artifacts with `SHA256SUMS.txt`, and publishes directly to GitHub Releases.
