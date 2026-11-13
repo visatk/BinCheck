@@ -6,13 +6,18 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.AppThemeMode
+import com.example.ui.BinCheckSplashOverlay
 import com.example.ui.ValidatorScreen
 import com.example.ui.ValidatorViewModel
 import com.example.ui.theme.MyApplicationTheme
@@ -24,6 +29,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val validatorViewModel: ValidatorViewModel = viewModel(factory = ValidatorViewModel.Factory)
             val uiState by validatorViewModel.uiState.collectAsStateWithLifecycle()
+            var showSplash by rememberSaveable { mutableStateOf(true) }
 
             val systemDark = isSystemInDarkTheme()
             val darkTheme = when (uiState.settings.themeMode) {
@@ -58,10 +64,18 @@ class MainActivity : ComponentActivity() {
                 darkTheme = darkTheme,
                 dynamicColor = uiState.settings.useDynamicColor
             ) {
-                ValidatorScreen(
-                    viewModel = validatorViewModel,
-                    modifier = Modifier.fillMaxSize()
-                )
+                Box(modifier = Modifier.fillMaxSize()) {
+                    ValidatorScreen(
+                        viewModel = validatorViewModel,
+                        requestStartupPermissions = !showSplash,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    BinCheckSplashOverlay(
+                        visible = showSplash,
+                        onFinished = { showSplash = false }
+                    )
+                }
             }
         }
     }

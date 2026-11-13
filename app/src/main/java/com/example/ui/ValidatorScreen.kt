@@ -4,6 +4,8 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -58,6 +60,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.domain.BinLookupService
@@ -68,15 +73,62 @@ import kotlinx.coroutines.launch
 @Composable
 fun ValidatorScreen(
     viewModel: ValidatorViewModel,
+    requestStartupPermissions: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     var activeCompactPane by rememberSaveable { mutableStateOf(CompactWorkspacePane.SPLIT) }
     val colorScheme = MaterialTheme.colorScheme
+    var permissionSnapshot by remember(context) {
+        mutableStateOf(AppPermissionHelper.inspectSnapshot(context))
+    }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                permissionSnapshot = AppPermissionHelper.inspectSnapshot(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val manualPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        permissionSnapshot = AppPermissionHelper.inspectSnapshot(context)
+        val granted = grants.values.all { it }
+        scope.launch {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(
+                if (granted) {
+                    "Batch alerts are turned on."
+                } else {
+                    "Alerts stay off — you can enable them anytime in Settings."
+                }
+            )
+        }
+    }
+
+    StartupPermissionsPromptEffect(
+        enabled = requestStartupPermissions,
+        onResult = { granted ->
+            permissionSnapshot = AppPermissionHelper.inspectSnapshot(context)
+            if (!granted) {
+                scope.launch {
+                    snackbarHostState.currentSnackbarData?.dismiss()
+                    snackbarHostState.showSnackbar(
+                        "Batch alerts are off — turn them on anytime under Studio → System."
+                    )
+                }
+            }
+        }
+    )
 
     val channelUrl = stringResource(R.string.developer_channel_url)
 
@@ -96,7 +148,7 @@ fun ValidatorScreen(
         clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
         scope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
-            snackbarHostState.showSnackbar("Copied $label to clipboard")
+            snackbarHostState.showSnackbar("Copied $label")
         }
     }
 
@@ -121,6 +173,7 @@ fun ValidatorScreen(
             settings = uiState.settings,
             networkStats = uiState.networkStats,
             deviceNetworkStatus = uiState.deviceNetworkStatus,
+            permissionSnapshot = permissionSnapshot,
             isTestingEndpoint = uiState.isTestingEndpoint,
             httpProbeResult = uiState.httpProbeResult,
             isTestingTelegram = uiState.isTestingTelegram,
@@ -130,6 +183,17 @@ fun ValidatorScreen(
             onDetectTelegramChat = viewModel::detectTelegramBotAndChat,
             onTestTelegramWebhook = viewModel::sendTelegramTestWebhook,
             onClearCaches = viewModel::clearNetworkAndBinCaches,
+            onRequestPermissions = {
+                val missing = AppPermissionHelper.missingRuntimePermissions(context)
+                if (missing.isNotEmpty()) {
+                    manualPermissionLauncher.launch(missing.toTypedArray())
+                } else {
+                    AppPermissionHelper.openNotificationOrAppSettings(context)
+                }
+            },
+            onOpenPermissionSettings = {
+                AppPermissionHelper.openNotificationOrAppSettings(context)
+            },
             onSaveSettings = viewModel::saveSettings,
             onGenerateBatchToConsole = viewModel::generateBatchIntoConsole,
             onClearAllBuckets = viewModel::clearAllResults

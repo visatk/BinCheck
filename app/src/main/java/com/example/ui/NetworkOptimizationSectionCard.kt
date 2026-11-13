@@ -143,8 +143,8 @@ fun NetworkOptimizationSectionCard(
             Spacer(modifier = Modifier.height(10.dp))
 
             OptimizerSwitchRow(
-                title = "Deduplicate & Cache Requests",
-                subtitle = "Coalesces concurrent calls, skips duplicate batch lines & serves TTL cache",
+                title = "Skip Duplicate Requests",
+                subtitle = "Reuses fresh cache hits and merges identical lookups in flight",
                 icon = AppIcons.SyncAlt,
                 checked = deduplicateBatchInputs,
                 onCheckedChange = onToggleDedupCache,
@@ -154,8 +154,8 @@ fun NetworkOptimizationSectionCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             OptimizerSwitchRow(
-                title = "Wi-Fi Only for Remote Batches",
-                subtitle = "Defers remote API & webhook WorkManager runs until unmetered Wi-Fi is active",
+                title = "Wait for Wi-Fi on Remote Runs",
+                subtitle = "Holds remote API and webhook batches until you're on Wi-Fi",
                 icon = AppIcons.Public,
                 checked = wifiOnlyBatch,
                 onCheckedChange = onToggleWifiOnly,
@@ -165,8 +165,8 @@ fun NetworkOptimizationSectionCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             OptimizerSwitchRow(
-                title = "Battery & Data Saver Pacing",
-                subtitle = "Caps worker concurrency to 2x, avoids low-battery runs & pauses metered BIN sync",
+                title = "Gentle Battery & Data Mode",
+                subtitle = "Caps workers to 2x, pauses low-battery runs, and skips metered BIN sync",
                 icon = AppIcons.BatterySaver,
                 checked = batterySaverMode,
                 onCheckedChange = onToggleBatterySaver,
@@ -190,7 +190,7 @@ fun NetworkOptimizationSectionCard(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Clear Disk/BIN Caches & Reset Breakers",
+                    text = "Clear Cached Data & Reset Breakers",
                     style = MaterialTheme.typography.labelMedium
                 )
             }

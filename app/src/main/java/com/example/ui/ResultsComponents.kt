@@ -165,13 +165,13 @@ fun ResultsCard(
                 }
                 val emptyHeadline = when (uiState.selectedTab) {
                     ResultBucket.LIVE -> "No Live records yet"
-                    ResultBucket.DIE -> "No Declined records"
-                    ResultBucket.UNKNOWN -> "No Unknown formats"
+                    ResultBucket.DIE -> "Nothing declined yet"
+                    ResultBucket.UNKNOWN -> "No unresolved lines"
                 }
                 val emptySubtitle = when (uiState.selectedTab) {
-                    ResultBucket.LIVE -> "Enter cards or import a file, then tap Validate"
-                    ResultBucket.DIE -> "Failed checksum, expiry, or API checks appear here"
-                    ResultBucket.UNKNOWN -> "Malformed lines or timed-out probes appear here"
+                    ResultBucket.LIVE -> "Paste cards or import a file above, then tap Validate"
+                    ResultBucket.DIE -> "Cards that fail Luhn, expiry, or gateway checks show up here"
+                    ResultBucket.UNKNOWN -> "Broken lines or timed-out responses will wait here"
                 }
 
                 if (fillRemainingHeight) {

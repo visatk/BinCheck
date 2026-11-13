@@ -1,9 +1,21 @@
 package com.example.worker
 
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.example.MainActivity
+import com.example.R
 import com.example.data.local.AppDatabase
 import com.example.data.local.ValidationHistoryRepository
 import com.example.domain.BinLookupService
@@ -343,10 +355,23 @@ class BatchValidationWorker(
 
             runCatching { repository.trimExcessHistory() }
 
+            val processedTotal = processedCounter.get()
+            if (processedTotal > 0) {
+                runCatching {
+                    postCompletionNotification(
+                        processed = processedTotal,
+                        total = total,
+                        live = liveCounter.get(),
+                        die = dieCounter.get(),
+                        unknown = unknownCounter.get()
+                    )
+                }
+            }
+
             Result.success(
                 workDataOf(
                     KEY_BATCH_ID to batchId,
-                    KEY_PROCESSED to processedCounter.get(),
+                    KEY_PROCESSED to processedTotal,
                     KEY_TOTAL to total,
                     KEY_LIVE to liveCounter.get(),
                     KEY_DIE to dieCounter.get(),
@@ -358,8 +383,69 @@ class BatchValidationWorker(
         }
     }
 
+    private fun postCompletionNotification(
+        processed: Int,
+        total: Int,
+        live: Int,
+        die: Int,
+        unknown: Int
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                applicationContext,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) return
+        }
+
+        val manager = NotificationManagerCompat.from(applicationContext)
+        if (!manager.areNotificationsEnabled()) return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID_BATCH_RESULTS,
+                applicationContext.getString(R.string.batch_notification_channel_name),
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = applicationContext.getString(R.string.batch_notification_channel_desc)
+            }
+            val sysManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            sysManager?.createNotificationChannel(channel)
+        }
+
+        val launchIntent = Intent(applicationContext, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            applicationContext,
+            1001,
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val title = if (live > 0) {
+            "Check finished • $live live found"
+        } else {
+            "Check finished • $processed of $total checked"
+        }
+        val body = "$live Live • $die Die • $unknown Unknown"
+
+        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID_BATCH_RESULTS)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+
+        manager.notify(NOTIFICATION_ID_BATCH_DONE, notification)
+    }
+
     companion object {
         const val UNIQUE_BATCH_WORK_NAME = "bincheck_concurrent_batch_validation"
+        private const val CHANNEL_ID_BATCH_RESULTS = "bincheck_batch_results"
+        private const val NOTIFICATION_ID_BATCH_DONE = 2048
         private const val PROGRESS_ITEM_STRIDE = 4
         private const val PROGRESS_MIN_INTERVAL_MS = 250L
         private const val DB_BATCH_FLUSH_SIZE = 15

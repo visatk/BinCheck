@@ -193,7 +193,7 @@ fun FileImportBottomSheet(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Text(
-                        text = if (isImporting) "Reading & extracting records..." else stringResource(R.string.select_file_button),
+                        text = if (isImporting) "Reading your file..." else stringResource(R.string.select_file_button),
                         style = MaterialTheme.typography.titleSmallEmphasized,
                         color = colorScheme.onSurface
                     )
@@ -248,7 +248,7 @@ fun FileImportBottomSheet(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (preview == null) "Choose File from Device" else "Pick Another File",
+                            text = if (preview == null) "Browse Files" else "Pick a Different File",
                             style = MaterialTheme.typography.labelLarge
                         )
                     }
@@ -358,16 +358,16 @@ fun FileImportBottomSheet(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Extract Pipe/Delimited Records Only",
+                                text = "Keep Card Lines Only",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium,
                                 color = colorScheme.onSurface
                             )
                             Text(
                                 text = if (preview.delimitedRecordLines.isNotEmpty()) {
-                                    "Filters ${preview.delimitedRecordLines.size} PAN|MM|YYYY|CVV line(s) from ${preview.fileType.label}"
+                                    "Pulls ${preview.delimitedRecordLines.size} card line(s) and skips extra text"
                                 } else {
-                                    "No delimited records detected; will load all ${preview.allNonEmptyLines.size} text line(s)"
+                                    "No formatted cards spotted — will import all ${preview.allNonEmptyLines.size} line(s)"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = colorScheme.onSurfaceVariant
@@ -400,13 +400,13 @@ fun FileImportBottomSheet(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Append to Current Console",
+                                    text = "Add Below Existing Lines",
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.Medium,
                                     color = colorScheme.onSurface
                                 )
                                 Text(
-                                    text = "Keep existing lines and append imported file below",
+                                    text = "Keep what's in the console and append this file underneath",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = colorScheme.onSurfaceVariant
                                 )

@@ -144,9 +144,9 @@ fun TelegramWebhookSectionCard(
             ) {
                 Text(
                     text = if (tokenConfigured) {
-                        "@SandBoxAutoBot • Secret Active (BuildConfig)"
+                        "@SandBoxAutoBot • Bot token ready"
                     } else {
-                        "@SandBoxAutoBot • Set TELEGRAM_BOT_TOKEN in AI Studio Secrets"
+                        "@SandBoxAutoBot • Add TELEGRAM_BOT_TOKEN in Secrets"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
@@ -174,13 +174,13 @@ fun TelegramWebhookSectionCard(
             Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = "Webhook Alert Filter",
+                text = "Which results to send",
                 style = MaterialTheme.typography.labelMedium,
                 color = colorScheme.onSurfaceVariant
             )
             Spacer(modifier = Modifier.height(6.dp))
 
-            val alertOptions = listOf(true to "Live Hits Only", false to "All Checked")
+            val alertOptions = listOf(true to "Live Only", false to "Every Check")
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                 alertOptions.forEachIndexed { index, (liveOnly, label) ->
                     SegmentedButton(

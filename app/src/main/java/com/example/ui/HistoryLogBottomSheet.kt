@@ -246,7 +246,7 @@ fun HistoryLogBottomSheet(
                     .testTag("history_search_input"),
                 placeholder = {
                     Text(
-                        text = "Search by record, scheme, source file, or status...",
+                        text = "Filter by card, scheme, file name, or status...",
                         style = MaterialTheme.typography.bodySmall
                     )
                 },
@@ -308,10 +308,10 @@ fun HistoryLogBottomSheet(
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
                                 text = when {
-                                    searchQuery.isNotBlank() -> "No matches found"
-                                    activeFilter == HistoryFilter.SUCCESS -> "No successful runs yet"
-                                    activeFilter == HistoryFilter.FAILURE -> "No failed runs yet"
-                                    else -> "History log is empty"
+                                    searchQuery.isNotBlank() -> "Nothing matched"
+                                    activeFilter == HistoryFilter.SUCCESS -> "No Live checks saved yet"
+                                    activeFilter == HistoryFilter.FAILURE -> "No failed checks saved yet"
+                                    else -> "No checks recorded yet"
                                 },
                                 style = MaterialTheme.typography.titleSmallEmphasized,
                                 color = colorScheme.onSurface
@@ -319,10 +319,10 @@ fun HistoryLogBottomSheet(
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = when {
-                                    searchQuery.isNotBlank() -> "No history entries match \"$searchQuery\""
-                                    activeFilter == HistoryFilter.SUCCESS -> "No successful validation records saved yet"
-                                    activeFilter == HistoryFilter.FAILURE -> "No failed validation records saved yet"
-                                    else -> "Run any batch in Luhn, Multi-API, or Webhook mode to audit results here."
+                                    searchQuery.isNotBlank() -> "Nothing in your history matched \"$searchQuery\"."
+                                    activeFilter == HistoryFilter.SUCCESS -> "Live results from future batches will be logged here."
+                                    activeFilter == HistoryFilter.FAILURE -> "Declined or unresolved items will appear here."
+                                    else -> "Run any batch to build a searchable log right on your device."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = colorScheme.onSurfaceVariant

@@ -92,6 +92,11 @@ fun SettingsBottomSheet(
     settings: ValidatorSettings,
     networkStats: NetworkTelemetrySnapshot,
     deviceNetworkStatus: DeviceNetworkStatus,
+    permissionSnapshot: AppPermissionSnapshot = AppPermissionSnapshot(
+        notificationsGranted = true,
+        networkAccessGranted = true,
+        requiresRuntimeNotificationPrompt = false
+    ),
     isTestingEndpoint: Boolean,
     httpProbeResult: HttpProbeResult?,
     isTestingTelegram: Boolean,
@@ -101,6 +106,8 @@ fun SettingsBottomSheet(
     onDetectTelegramChat: () -> Unit,
     onTestTelegramWebhook: (String) -> Unit,
     onClearCaches: () -> Unit,
+    onRequestPermissions: () -> Unit = {},
+    onOpenPermissionSettings: () -> Unit = {},
     onSaveSettings: (
         validationMode: ValidationMode,
         httpConfig: CustomHttpConfig,
@@ -166,8 +173,8 @@ fun SettingsBottomSheet(
                             color = colorScheme.onSurface
                         )
                         val modeSubtitle = selectedMode.fixedDelayMs?.let {
-                            "${selectedMode.badgeLabel} • ${it / 1000L}s paced"
-                        } ?: "${selectedMode.badgeLabel} • ${concurrency}x parallel"
+                            "${selectedMode.badgeLabel} • ${it / 1000L}s pace"
+                        } ?: "${selectedMode.badgeLabel} • ${concurrency}x speed"
                         Text(
                             text = modeSubtitle,
                             style = MaterialTheme.typography.labelSmall,
@@ -313,14 +320,14 @@ fun SettingsBottomSheet(
                                 }
 
                                 Text(
-                                    text = "Validation Engine Mode",
+                                    text = "How Checks Run",
                                     style = MaterialTheme.typography.titleSmallEmphasized,
                                     color = colorScheme.onSurface
                                 )
 
                                 ModeOptionCard(
                                     title = stringResource(R.string.mode_local_luhn),
-                                    subtitle = "Local ISO Luhn Mod-10, BIN brand length, expiry & CVV (custom delay).",
+                                    subtitle = "Fast offline Mod-10, brand length, expiry & CVV checks (you pick the pace).",
                                     icon = AppIcons.Memory,
                                     selected = selectedMode == ValidationMode.LOCAL_DETERMINISTIC,
                                     onClick = { selectedMode = ValidationMode.LOCAL_DETERMINISTIC },
@@ -329,7 +336,7 @@ fun SettingsBottomSheet(
 
                                 ModeOptionCard(
                                     title = stringResource(R.string.mode_multi_api),
-                                    subtitle = "Chkr.cc JSON first with automatic Payate failover (5s paced).",
+                                    subtitle = "Tries Chkr.cc first and automatically switches to Payate if busy (5s pace).",
                                     icon = AppIcons.SyncAlt,
                                     selected = selectedMode == ValidationMode.MULTI_API_AUTO,
                                     onClick = { selectedMode = ValidationMode.MULTI_API_AUTO },
@@ -338,7 +345,7 @@ fun SettingsBottomSheet(
 
                                 ModeOptionCard(
                                     title = stringResource(R.string.mode_chkr_cc),
-                                    subtitle = "api.chkr.cc JSON POST (Live/Die + bank & country BIN, 10s paced).",
+                                    subtitle = "Checks via api.chkr.cc with built-in bank & country details (10s pace).",
                                     icon = AppIcons.Public,
                                     selected = selectedMode == ValidationMode.CHKR_CC,
                                     onClick = { selectedMode = ValidationMode.CHKR_CC },
@@ -347,7 +354,7 @@ fun SettingsBottomSheet(
 
                                 ModeOptionCard(
                                     title = stringResource(R.string.mode_payate_mock),
-                                    subtitle = "mock.payate.com Form POST returning Live/Die/Unknown (3s paced).",
+                                    subtitle = "Checks via mock.payate.com and sorts Live, Die, and Unknown (3s pace).",
                                     icon = AppIcons.Api,
                                     selected = selectedMode == ValidationMode.PAYATE_MOCK,
                                     onClick = { selectedMode = ValidationMode.PAYATE_MOCK },
@@ -356,7 +363,7 @@ fun SettingsBottomSheet(
 
                                 ModeOptionCard(
                                     title = stringResource(R.string.mode_remote_webhook),
-                                    subtitle = "Local pre-check + HTTP GET/POST to custom endpoint (configured in Gateway).",
+                                    subtitle = "Runs a quick format check, then hits your own URL configured in Gateway.",
                                     icon = AppIcons.CloudSync,
                                     selected = selectedMode == ValidationMode.REMOTE_WEBHOOK,
                                     onClick = { selectedMode = ValidationMode.REMOTE_WEBHOOK },
@@ -364,8 +371,8 @@ fun SettingsBottomSheet(
                                 )
 
                                 SettingsSwitchCard(
-                                    title = "Auto-Solve 'x' Wildcards on Play",
-                                    subtitle = "Resolves 'x' digits to Luhn-valid numbers when running",
+                                    title = "Fill 'x' Wildcards Automatically",
+                                    subtitle = "Turns 'x' masks into Luhn-valid digits right when you press Validate",
                                     checked = autoResolveWildcards,
                                     onCheckedChange = { autoResolveWildcards = it },
                                     testTag = "auto_resolve_wildcards_switch"
@@ -403,7 +410,7 @@ fun SettingsBottomSheet(
                                         ) {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 Text(
-                                                    text = "Batch Stream Delay",
+                                                    text = "Delay Between Cards",
                                                     style = MaterialTheme.typography.bodyMedium,
                                                     fontWeight = FontWeight.Medium,
                                                     color = colorScheme.onSurface
@@ -433,7 +440,7 @@ fun SettingsBottomSheet(
                                         if (fixedDelayForMode != null) {
                                             Spacer(modifier = Modifier.height(6.dp))
                                             Text(
-                                                text = "Fixed rate-limit delay for ${selectedMode.badgeLabel}.",
+                                                text = "Paced automatically at ${fixedDelayForMode / 1000L}s for ${selectedMode.badgeLabel} so requests don't get rate-limited.",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.testTag("fixed_delay_notice")
@@ -492,13 +499,13 @@ fun SettingsBottomSheet(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(
-                                                text = "Worker Concurrency",
+                                                text = "Parallel Workers",
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 fontWeight = FontWeight.Medium,
                                                 color = colorScheme.onSurface
                                             )
                                             Text(
-                                                text = if (fixedDelayForMode != null) "1x paced" else "${concurrency}x parallel",
+                                                text = if (fixedDelayForMode != null) "1 at a time (paced)" else "${concurrency} at a time",
                                                 style = MaterialTheme.typography.labelMedium,
                                                 color = colorScheme.secondary
                                             )
@@ -580,6 +587,12 @@ fun SettingsBottomSheet(
 
                         SettingsStudioTab.SYSTEM -> {
                             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                PermissionsAccessSectionCard(
+                                    snapshot = permissionSnapshot,
+                                    onRequestPermissions = onRequestPermissions,
+                                    onOpenSystemSettings = onOpenPermissionSettings
+                                )
+
                                 NetworkOptimizationSectionCard(
                                     networkStats = networkStats,
                                     deviceNetworkStatus = deviceNetworkStatus,

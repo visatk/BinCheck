@@ -239,7 +239,7 @@ fun BinLookupBottomSheet(
                             )
                             Spacer(modifier = Modifier.height(10.dp))
                             Text(
-                                text = "Querying Live IIN / BIN registry...",
+                                text = "Looking up BIN details...",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = colorScheme.onSurfaceVariant
                             )
@@ -297,13 +297,13 @@ fun BinLookupBottomSheet(
                         }
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Inspect any 6-digit BIN/IIN",
+                            text = "Check any 6-digit BIN",
                             style = MaterialTheme.typography.titleSmallEmphasized,
                             color = colorScheme.onSurface
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Enter any 6-digit BIN from a Live card to view issuer bank, card tier, type, country, and currency.",
+                            text = "Type the first 6 digits of any card to see its issuing bank, tier, country, and currency.",
                             style = MaterialTheme.typography.bodySmall,
                             color = colorScheme.onSurfaceVariant
                         )
@@ -417,7 +417,7 @@ private fun BinDetailsCard(
                         color = colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = info.bankName.ifBlank { "Not reported by registry" },
+                        text = info.bankName.ifBlank { "Bank not listed in registry" },
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = colorScheme.onSurface

@@ -242,7 +242,7 @@ class ValidatorViewModel(
             _localState.update {
                 it.copy(
                     networkStats = NetworkClientProvider.telemetry.snapshot(),
-                    statusBannerMessage = "Network, BIN, and circuit caches cleared"
+                    statusBannerMessage = "Cleared network, BIN, and circuit caches."
                 )
             }
         }
@@ -367,9 +367,9 @@ class ValidatorViewModel(
 
     fun applyToolkitOutput(outputText: String, result: ToolkitTransformResult) {
         val banner = if (result.totalRemoved > 0) {
-            "Toolkit: ${result.outputCount} kept (${result.totalRemoved} removed)"
+            "Kept ${result.outputCount} clean line(s) (${result.totalRemoved} removed)."
         } else {
-            "Toolkit applied ${result.outputCount} formatted record(s)"
+            "Applied ${result.outputCount} formatted line(s) to console."
         }
         _localState.update {
             it.copy(
@@ -422,7 +422,7 @@ class ValidatorViewModel(
         val bin6 = BinLookupService.extractBin6(panOrBin)
         if (bin6.length < 6) {
             _localState.update {
-                it.copy(statusBannerMessage = "Enter at least 6 digits to lookup BIN/IIN")
+                it.copy(statusBannerMessage = "Enter at least 6 digits to check a BIN.")
             }
             return
         }
@@ -501,7 +501,7 @@ class ValidatorViewModel(
     fun clearAllHistory() {
         viewModelScope.launch {
             historyRepository.clearAllHistory()
-            _localState.update { it.copy(statusBannerMessage = "History log cleared") }
+            _localState.update { it.copy(statusBannerMessage = "History cleared.") }
         }
     }
 
@@ -613,7 +613,7 @@ class ValidatorViewModel(
         _localState.update {
             it.copy(
                 isRunning = false,
-                statusBannerMessage = "Batch stopped (${it.processedCount}/${it.totalBatchCount} processed)"
+                statusBannerMessage = "Paused at ${it.processedCount} of ${it.totalBatchCount}."
             )
         }
     }
@@ -628,7 +628,7 @@ class ValidatorViewModel(
         if (lines.isEmpty()) {
             _localState.update {
                 it.copy(
-                    statusBannerMessage = "Console is empty. Import a .txt/.html file, paste records, or tap ⚙."
+                    statusBannerMessage = "Your console is empty — paste cards, import a file, or generate a quick batch."
                 )
             }
             return
@@ -702,13 +702,13 @@ class ValidatorViewModel(
 
             val runningStatus = when {
                 isNetworkEngine && settings.wifiOnlyBatch && deviceStatus.isMetered ->
-                    "Queued for Wi-Fi (Wi-Fi Only mode active)..."
+                    "Waiting for Wi-Fi before running remote checks..."
                 settings.validationMode.hasFixedDelay ->
-                    "Worker running (${settings.validationMode.badgeLabel} • ${effectiveDelayMs / 1000L}s delay)..."
+                    "Running ${settings.validationMode.badgeLabel} (${effectiveDelayMs / 1000L}s pace)..."
                 settings.batterySaverMode || deviceStatus.shouldThrottleForBatteryOrData ->
-                    "Eco Worker (${effectiveConcurrency}x • ${effectiveDelayMs}ms delay)..."
+                    "Eco run active (${effectiveConcurrency}x • ${effectiveDelayMs}ms pace)..."
                 else ->
-                    "Worker running (${effectiveConcurrency}x concurrent • ${effectiveDelayMs}ms delay)..."
+                    "Checking ${lines.size} item(s) (${effectiveConcurrency}x • ${effectiveDelayMs}ms pace)..."
             }
 
             _localState.update {
@@ -862,7 +862,7 @@ class ValidatorViewModel(
                                 rawInputText = "",
                                 loadedFileName = null,
                                 networkStats = NetworkClientProvider.telemetry.snapshot(),
-                                statusBannerMessage = "Worker completed $finalCount item(s) • Saved to History"
+                                statusBannerMessage = "All done! Checked $finalCount item(s) and saved to History."
                             )
                         }
                         batchResultsObserverJob?.cancel()
@@ -875,7 +875,7 @@ class ValidatorViewModel(
                             prev.copy(
                                 isRunning = false,
                                 networkStats = NetworkClientProvider.telemetry.snapshot(),
-                                statusBannerMessage = "Batch worker cancelled (${prev.processedCount}/${prev.totalBatchCount})"
+                                statusBannerMessage = "Stopped at ${prev.processedCount} of ${prev.totalBatchCount}."
                             )
                         }
                         batchResultsObserverJob?.cancel()
@@ -888,7 +888,7 @@ class ValidatorViewModel(
                             prev.copy(
                                 isRunning = false,
                                 networkStats = NetworkClientProvider.telemetry.snapshot(),
-                                statusBannerMessage = "Batch worker encountered an error"
+                                statusBannerMessage = "Couldn't finish this batch — check your connection or endpoint."
                             )
                         }
                         batchResultsObserverJob?.cancel()
@@ -916,7 +916,7 @@ class ValidatorViewModel(
             prev.copy(
                 rawInputText = combined,
                 isSettingsOpen = false,
-                statusBannerMessage = "Generated ${expanded.size} Luhn-valid records into console"
+                statusBannerMessage = "Added ${expanded.size} Luhn-valid card(s) to console."
             )
         }
     }
@@ -929,7 +929,7 @@ class ValidatorViewModel(
             _localState.update {
                 it.copy(
                     rawInputText = batch.joinToString("\n"),
-                    statusBannerMessage = "Generated ${batch.size} Luhn-valid lines from template"
+                    statusBannerMessage = "Created ${batch.size} Luhn-valid card(s) from your pattern."
                 )
             }
             return
@@ -951,7 +951,7 @@ class ValidatorViewModel(
         _localState.update {
             it.copy(
                 rawInputText = expandedLines.joinToString("\n"),
-                statusBannerMessage = "Expanded ${expandedLines.size} Luhn-valid record(s)"
+                statusBannerMessage = "Solved wildcards for ${expandedLines.size} record(s)."
             )
         }
     }
@@ -1001,9 +1001,9 @@ class ValidatorViewModel(
             )
             val effectiveDelay = validationMode.resolveDelayMs(batchDelayMs)
             val savedMsg = if (validationMode.hasFixedDelay) {
-                "Configuration saved (${validationMode.badgeLabel} • ${effectiveDelay / 1000L}s delay)"
+                "Settings saved (${validationMode.badgeLabel} • ${effectiveDelay / 1000L}s pace)."
             } else {
-                "Configuration saved (${concurrency}x concurrency • ${effectiveDelay}ms delay)"
+                "Settings saved (${concurrency}x • ${effectiveDelay}ms pace)."
             }
             _localState.update {
                 it.copy(
@@ -1046,8 +1046,8 @@ class ValidatorViewModel(
                 batterySaverMode = s.batterySaverMode
             )
             val switchMsg = mode.fixedDelayMs?.let { fixedMs ->
-                "Engine switched to ${mode.badgeLabel} (${fixedMs / 1000L}s delay)"
-            } ?: "Engine switched to ${mode.badgeLabel} (${s.batchDelayMs}ms delay)"
+                "Switched to ${mode.badgeLabel} (${fixedMs / 1000L}s pace)."
+            } ?: "Switched to ${mode.badgeLabel} (${s.batchDelayMs}ms pace)."
             _localState.update {
                 it.copy(statusBannerMessage = switchMsg)
             }
@@ -1134,7 +1134,7 @@ class ValidatorViewModel(
                 liveRecords = emptyList(),
                 dieRecords = emptyList(),
                 unknownRecords = emptyList(),
-                statusBannerMessage = "Cleared current session buckets"
+                statusBannerMessage = "Cleared current session results."
             )
         }
     }

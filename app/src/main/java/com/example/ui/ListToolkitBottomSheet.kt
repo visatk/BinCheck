@@ -374,7 +374,7 @@ fun ListToolkitBottomSheet(
                         val previewText = remember(transformResult.outputText) {
                             val lines = transformResult.outputText.lines().filter { it.isNotBlank() }
                             when {
-                                lines.isEmpty() -> "No matching lines. Paste or load records to clean & format."
+                                lines.isEmpty() -> "Nothing left after filtering — paste cards or tweak the rules above."
                                 lines.size <= 5 -> lines.joinToString("\n")
                                 else -> lines.take(5).joinToString("\n") + "\n... (+${lines.size - 5} more)"
                             }
