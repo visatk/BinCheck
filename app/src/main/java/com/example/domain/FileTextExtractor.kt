@@ -152,6 +152,8 @@ object FileTextExtractor {
      */
     fun stripHtmlToText(html: String): String {
         var text = html
+            .replace(Regex("(?is)<!--.*?-->"), "\n")
+            .replace(Regex("(?is)<head[^>]*>.*?</head>"), "\n")
             .replace(Regex("(?is)<script[^>]*>.*?</script>"), "\n")
             .replace(Regex("(?is)<style[^>]*>.*?</style>"), "\n")
             .replace(Regex("(?i)<(br|p|div|li|tr|h[1-6]|pre|code|td|th)[^>]*>"), "\n")
@@ -166,7 +168,7 @@ object FileTextExtractor {
     }
 
     private fun decodeHtmlEntities(input: String): String {
-        return input
+        var decoded = input
             .replace("&nbsp;", " ")
             .replace("&amp;", "&")
             .replace("&lt;", "<")
@@ -178,6 +180,25 @@ object FileTextExtractor {
             .replace("&#x7C;", "|", ignoreCase = true)
             .replace("&#47;", "/")
             .replace("&#58;", ":")
+
+        decoded = Regex("&#(\\d+);").replace(decoded) { match ->
+            val code = match.groupValues[1].toIntOrNull()
+            if (code != null && code in 32..0x10FFFF) {
+                String(Character.toChars(code))
+            } else {
+                match.value
+            }
+        }
+
+        decoded = Regex("&#x([0-9a-fA-F]+);").replace(decoded) { match ->
+            val code = match.groupValues[1].toIntOrNull(16)
+            if (code != null && code in 32..0x10FFFF) {
+                String(Character.toChars(code))
+            } else {
+                match.value
+            }
+        }
+        return decoded
     }
 
     fun formatFileSize(bytes: Long): String {

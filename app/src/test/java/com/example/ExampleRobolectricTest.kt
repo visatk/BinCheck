@@ -1,6 +1,10 @@
 package com.example
 
 import android.content.Context
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.unit.dp
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.ListenableWorker
@@ -14,6 +18,9 @@ import com.example.data.local.ValidationHistoryRepository
 import com.example.domain.CardValidatorEngine
 import com.example.domain.ResultBucket
 import com.example.domain.ValidationMode
+import com.example.ui.ConsoleInputCard
+import com.example.ui.ValidatorUiState
+import com.example.ui.theme.MyApplicationTheme
 import com.example.worker.BatchValidationWorker
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -21,6 +28,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -29,6 +37,9 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class ExampleRobolectricTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
 
     private lateinit var context: Context
     private lateinit var inMemoryDb: AppDatabase
@@ -146,5 +157,33 @@ class ExampleRobolectricTest {
         assertEquals(AppThemeMode.LIGHT, stored.themeMode)
         assertEquals(false, stored.useDynamicColor)
         assertEquals(6, stored.concurrency)
+    }
+
+    @Test
+    fun `consoleInputCard renders multi line batch cleanly`() {
+        val sampleLines = (1..30).joinToString("\n") { idx ->
+            "453225005536${idx.toString().padStart(3, '0')}3|08|2028|113"
+        }
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                ConsoleInputCard(
+                    uiState = ValidatorUiState(rawInputText = sampleLines),
+                    consoleHeight = 250.dp,
+                    cardPadding = 16.dp,
+                    onInputChanged = {},
+                    onToggleRun = {},
+                    onOpenSettings = {},
+                    onOpenFileImport = {},
+                    onQuickGen10x = {},
+                    onExpandWildcards = {},
+                    onPasteOrFill = {},
+                    onClearInput = {},
+                    onClearBanner = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("card_batch_input").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("play_validation_button").assertIsDisplayed()
     }
 }

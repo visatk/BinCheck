@@ -84,11 +84,12 @@ class ExampleUnitTest {
 
         val htmlSample = """
             <html>
-              <head><style>.hidden{display:none}</style><script>console.log('skip');</script></head>
+              <head><title>Export 4532250055360000|01|2029|111</title><!-- 4532250055369999|02|2029|999 --><style>.hidden{display:none}</style><script>console.log('skip');</script></head>
               <body>
                 <h1>Exported Batch</h1>
+                <!-- ignored comment 5412750012340000|03|2029|000 -->
                 <div>453225005536xxx3&#124;08&#124;2028&#124;113</div>
-                <p>Entry: 5412750012345678|11|2029|321 &amp; verified</p>
+                <p>Entry: 5412750012345678&#x7c;11&#x7c;2029&#x7c;321 &amp; verified</p>
               </body>
             </html>
         """.trimIndent()
@@ -96,10 +97,34 @@ class ExampleUnitTest {
         val extractedLines = FileTextExtractor.extractLines(htmlSample, SupportedFileType.HTML)
         assertTrue(extractedLines.any { it.contains("453225005536xxx3|08|2028|113") })
         assertFalse(extractedLines.any { it.contains("console.log") })
+        assertFalse(extractedLines.any { it.contains("4532250055360000") })
+        assertFalse(extractedLines.any { it.contains("5412750012340000") })
 
         val delimited = FileTextExtractor.extractDelimitedLines(extractedLines)
         assertEquals(2, delimited.size)
         assertEquals("453225005536xxx3|08|2028|113", delimited[0])
         assertEquals("5412750012345678|11|2029|321", delimited[1])
+    }
+
+    @Test
+    fun expandPatternBatch_defaultsToSchemeCvvLengthAndPadsMonth() = runTest {
+        val amexBatch = CardValidatorEngine.expandPatternBatch("378282246310xxx", 5)
+        assertEquals(5, amexBatch.size)
+        amexBatch.forEach { line ->
+            val parts = line.split('|')
+            assertEquals(4, parts.size)
+            assertTrue(CardValidatorEngine.verifyLuhn(parts[0]))
+            assertEquals(CardScheme.AMEX, CardValidatorEngine.detectScheme(parts[0]))
+            assertEquals(4, parts[3].length)
+        }
+
+        val paddedRecord = CardValidatorEngine.validateLine(
+            rawLine = "453225005536xxx3|8|2028|113",
+            mode = ValidationMode.LOCAL_DETERMINISTIC,
+            webhookUrl = "",
+            autoResolveWildcards = true
+        )
+        assertEquals("08", paddedRecord.month)
+        assertTrue(paddedRecord.normalizedLine.contains("|08|2028|113"))
     }
 }

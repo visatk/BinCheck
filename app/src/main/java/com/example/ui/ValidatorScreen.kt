@@ -4,7 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
+import androidx.core.net.toUri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -82,13 +82,14 @@ fun ValidatorScreen(
 
     fun pasteFromClipboard(): String? {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-        val item = clipboard?.primaryClip?.getItemAt(0)
+        val clip = clipboard?.primaryClip
+        val item = if (clip != null && clip.itemCount > 0) clip.getItemAt(0) else null
         return item?.coerceToText(context)?.toString()
     }
 
     fun openDeveloperChannel() {
         runCatching {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(channelUrl)).apply {
+            val intent = Intent(Intent.ACTION_VIEW, channelUrl.toUri()).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)

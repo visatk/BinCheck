@@ -1,7 +1,7 @@
 package com.example.ui
 
 import android.content.Intent
-import android.net.Uri
+import androidx.core.net.toUri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -154,7 +154,7 @@ fun SettingsBottomSheet(
             Surface(
                 onClick = {
                     runCatching {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(channelUrl)).apply {
+                        val intent = Intent(Intent.ACTION_VIEW, channelUrl.toUri()).apply {
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         context.startActivity(intent)

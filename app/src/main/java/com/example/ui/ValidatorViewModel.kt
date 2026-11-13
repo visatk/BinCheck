@@ -95,6 +95,10 @@ class ValidatorViewModel(
     private var workerObserverJob: Job? = null
     private var batchResultsObserverJob: Job? = null
 
+    init {
+        reconnectOngoingBatchWork()
+    }
+
     private val filteredHistoryFlow = _historyFilter
         .flatMapLatest { filter -> historyRepository.observeHistory(filter) }
         .combine(_historyQuery) { entries, query ->
@@ -364,6 +368,7 @@ class ValidatorViewModel(
 
             val workRequest = OneTimeWorkRequestBuilder<BatchValidationWorker>()
                 .setInputData(inputData)
+                .addTag("batch:$batchId")
                 .build()
 
             activeWorkId = workRequest.id
@@ -377,116 +382,175 @@ class ValidatorViewModel(
                 )
             }
 
-            // Stream completed records from Room for this batchId into Live / Die / Unknown tabs
-            batchResultsObserverJob = viewModelScope.launch {
-                val baseLive = _localState.value.liveRecords
-                val baseDie = _localState.value.dieRecords
-                val baseUnknown = _localState.value.unknownRecords
-
-                historyRepository.observeBatchResults(batchId).collect { batchEntities ->
-                    val batchLive = mutableListOf<ValidationRecord>()
-                    val batchDie = mutableListOf<ValidationRecord>()
-                    val batchUnknown = mutableListOf<ValidationRecord>()
-
-                    for (entity in batchEntities.asReversed()) {
-                        val bucket = runCatching { ResultBucket.valueOf(entity.status) }
-                            .getOrDefault(ResultBucket.UNKNOWN)
-                        val scheme = runCatching { CardScheme.valueOf(entity.scheme) }
-                            .getOrDefault(CardScheme.UNKNOWN)
-                        val record = ValidationRecord(
-                            id = "hist_${entity.id}",
-                            rawLine = entity.rawLine,
-                            normalizedLine = entity.normalizedLine,
-                            pan = entity.pan,
-                            month = entity.month,
-                            year = entity.year,
-                            cvv = entity.cvv,
-                            scheme = scheme,
-                            bucket = bucket,
-                            message = entity.message,
-                            latencyMs = entity.latencyMs
-                        )
-                        when (bucket) {
-                            ResultBucket.LIVE -> batchLive.add(record)
-                            ResultBucket.DIE -> batchDie.add(record)
-                            ResultBucket.UNKNOWN -> batchUnknown.add(record)
-                        }
-                    }
-
-                    _localState.update { prev ->
-                        prev.copy(
-                            liveRecords = batchLive + baseLive,
-                            dieRecords = batchDie + baseDie,
-                            unknownRecords = batchUnknown + baseUnknown
-                        )
-                    }
-                }
-            }
+            observeBatchResultsAndWork(
+                workId = workRequest.id,
+                batchId = batchId,
+                fallbackTotal = lines.size
+            )
 
             workManager.enqueueUniqueWork(
                 BatchValidationWorker.UNIQUE_BATCH_WORK_NAME,
                 ExistingWorkPolicy.REPLACE,
                 workRequest
             )
+        }
+    }
 
-            workerObserverJob = viewModelScope.launch {
-                workManager.getWorkInfoByIdFlow(workRequest.id).collect { workInfo ->
-                    if (workInfo == null) return@collect
-                    val processedFromProgress = workInfo.progress.getInt(BatchValidationWorker.KEY_PROCESSED, -1)
-                    val processedFromOutput = workInfo.outputData.getInt(BatchValidationWorker.KEY_PROCESSED, -1)
+    private fun reconnectOngoingBatchWork() {
+        viewModelScope.launch {
+            val workInfos = runCatching {
+                workManager.getWorkInfosForUniqueWorkFlow(BatchValidationWorker.UNIQUE_BATCH_WORK_NAME)
+            }.getOrNull() ?: return@launch
 
-                    when (workInfo.state) {
-                        WorkInfo.State.ENQUEUED,
-                        WorkInfo.State.RUNNING -> {
-                            if (processedFromProgress >= 0) {
-                                _localState.update { prev ->
-                                    prev.copy(
-                                        isRunning = true,
-                                        processedCount = processedFromProgress.coerceAtMost(prev.totalBatchCount)
-                                    )
-                                }
-                            }
-                        }
+            workInfos.collect { infos ->
+                val runningInfo = infos.firstOrNull {
+                    it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED
+                } ?: return@collect
 
-                        WorkInfo.State.SUCCEEDED -> {
-                            val finalCount = if (processedFromOutput >= 0) processedFromOutput else lines.size
-                            _localState.update { prev ->
-                                prev.copy(
-                                    isRunning = false,
-                                    processedCount = finalCount,
-                                    rawInputText = "",
-                                    loadedFileName = null,
-                                    statusBannerMessage = "Worker completed $finalCount item(s) • Saved to History"
-                                )
-                            }
-                            batchResultsObserverJob?.cancel()
-                            workerObserverJob?.cancel()
-                        }
+                if (activeWorkId == runningInfo.id) return@collect
+                val resumedBatchId = runningInfo.progress.getString(BatchValidationWorker.KEY_BATCH_ID)
+                    ?: runningInfo.tags.firstOrNull { it.startsWith("batch:") }?.removePrefix("batch:")
+                    ?: return@collect
+                val total = runningInfo.progress.getInt(BatchValidationWorker.KEY_TOTAL, 0)
+                val processed = runningInfo.progress.getInt(BatchValidationWorker.KEY_PROCESSED, 0)
 
-                        WorkInfo.State.CANCELLED -> {
-                            _localState.update { prev ->
-                                prev.copy(
-                                    isRunning = false,
-                                    statusBannerMessage = "Batch worker cancelled (${prev.processedCount}/${prev.totalBatchCount})"
-                                )
-                            }
-                            batchResultsObserverJob?.cancel()
-                            workerObserverJob?.cancel()
-                        }
+                activeWorkId = runningInfo.id
+                _localState.update {
+                    it.copy(
+                        isRunning = true,
+                        processedCount = processed,
+                        totalBatchCount = total,
+                        statusBannerMessage = "Reconnected to background worker ($processed/$total)..."
+                    )
+                }
+                observeBatchResultsAndWork(
+                    workId = runningInfo.id,
+                    batchId = resumedBatchId,
+                    fallbackTotal = total
+                )
+            }
+        }
+    }
 
-                        WorkInfo.State.FAILED -> {
-                            _localState.update { prev ->
-                                prev.copy(
-                                    isRunning = false,
-                                    statusBannerMessage = "Batch worker encountered an error"
-                                )
-                            }
-                            batchResultsObserverJob?.cancel()
-                            workerObserverJob?.cancel()
-                        }
+    private fun observeBatchResultsAndWork(
+        workId: UUID,
+        batchId: String,
+        fallbackTotal: Int
+    ) {
+        workerObserverJob?.cancel()
+        batchResultsObserverJob?.cancel()
 
-                        WorkInfo.State.BLOCKED -> Unit
+        // Delta-stream completed records from Room without overwriting user removals
+        batchResultsObserverJob = viewModelScope.launch {
+            val seenIds = HashSet<String>()
+            historyRepository.observeBatchResults(batchId).collect { batchEntities ->
+                val newLive = mutableListOf<ValidationRecord>()
+                val newDie = mutableListOf<ValidationRecord>()
+                val newUnknown = mutableListOf<ValidationRecord>()
+
+                for (entity in batchEntities) {
+                    val recordId = "hist_${entity.id}"
+                    if (!seenIds.add(recordId)) continue
+
+                    val bucket = runCatching { ResultBucket.valueOf(entity.status) }
+                        .getOrDefault(ResultBucket.UNKNOWN)
+                    val scheme = runCatching { CardScheme.valueOf(entity.scheme) }
+                        .getOrDefault(CardScheme.UNKNOWN)
+                    val record = ValidationRecord(
+                        id = recordId,
+                        rawLine = entity.rawLine,
+                        normalizedLine = entity.normalizedLine,
+                        pan = entity.pan,
+                        month = entity.month,
+                        year = entity.year,
+                        cvv = entity.cvv,
+                        scheme = scheme,
+                        bucket = bucket,
+                        message = entity.message,
+                        latencyMs = entity.latencyMs
+                    )
+                    when (bucket) {
+                        ResultBucket.LIVE -> newLive.add(0, record)
+                        ResultBucket.DIE -> newDie.add(0, record)
+                        ResultBucket.UNKNOWN -> newUnknown.add(0, record)
                     }
+                }
+
+                if (newLive.isNotEmpty() || newDie.isNotEmpty() || newUnknown.isNotEmpty()) {
+                    _localState.update { prev ->
+                        prev.copy(
+                            liveRecords = newLive + prev.liveRecords,
+                            dieRecords = newDie + prev.dieRecords,
+                            unknownRecords = newUnknown + prev.unknownRecords
+                        )
+                    }
+                }
+            }
+        }
+
+        workerObserverJob = viewModelScope.launch {
+            workManager.getWorkInfoByIdFlow(workId).collect { workInfo ->
+                if (workInfo == null) return@collect
+                val processedFromProgress = workInfo.progress.getInt(BatchValidationWorker.KEY_PROCESSED, -1)
+                val totalFromProgress = workInfo.progress.getInt(BatchValidationWorker.KEY_TOTAL, -1)
+                val processedFromOutput = workInfo.outputData.getInt(BatchValidationWorker.KEY_PROCESSED, -1)
+
+                when (workInfo.state) {
+                    WorkInfo.State.ENQUEUED,
+                    WorkInfo.State.RUNNING -> {
+                        if (processedFromProgress >= 0) {
+                            _localState.update { prev ->
+                                val resolvedTotal = if (totalFromProgress > 0) totalFromProgress else prev.totalBatchCount
+                                prev.copy(
+                                    isRunning = true,
+                                    totalBatchCount = resolvedTotal,
+                                    processedCount = processedFromProgress.coerceAtMost(resolvedTotal.coerceAtLeast(processedFromProgress))
+                                )
+                            }
+                        }
+                    }
+
+                    WorkInfo.State.SUCCEEDED -> {
+                        val finalCount = if (processedFromOutput >= 0) processedFromOutput else fallbackTotal
+                        activeWorkId = null
+                        _localState.update { prev ->
+                            prev.copy(
+                                isRunning = false,
+                                processedCount = finalCount,
+                                rawInputText = "",
+                                loadedFileName = null,
+                                statusBannerMessage = "Worker completed $finalCount item(s) • Saved to History"
+                            )
+                        }
+                        batchResultsObserverJob?.cancel()
+                        workerObserverJob?.cancel()
+                    }
+
+                    WorkInfo.State.CANCELLED -> {
+                        activeWorkId = null
+                        _localState.update { prev ->
+                            prev.copy(
+                                isRunning = false,
+                                statusBannerMessage = "Batch worker cancelled (${prev.processedCount}/${prev.totalBatchCount})"
+                            )
+                        }
+                        batchResultsObserverJob?.cancel()
+                        workerObserverJob?.cancel()
+                    }
+
+                    WorkInfo.State.FAILED -> {
+                        activeWorkId = null
+                        _localState.update { prev ->
+                            prev.copy(
+                                isRunning = false,
+                                statusBannerMessage = "Batch worker encountered an error"
+                            )
+                        }
+                        batchResultsObserverJob?.cancel()
+                        workerObserverJob?.cancel()
+                    }
+
+                    WorkInfo.State.BLOCKED -> Unit
                 }
             }
         }

@@ -9,8 +9,6 @@
     <string name="tab_unknown">Unknown</string>
     <string name="copy_all">Copy All</string>
     <string name="clear_tab">Clear</string>
-    <string name="expand_wildcards">Expand x Wildcards</string>
-    <string name="clear_input">Clear Input</string>
     <string name="paste_clipboard">Paste</string>
     <string name="settings_title">Validator &amp; Pattern Studio</string>
     <string name="mode_local_luhn">Deterministic Luhn + BIN + Expiry + CVV</string>
@@ -29,7 +27,6 @@
     <string name="load_into_console">Load into Console</string>
     <string name="load_and_process">Load &amp; Process</string>
     <string name="import_file_chip">File</string>
-    <string name="unsupported_file_error">Please select a valid .txt or .html file.</string>
     <string name="history_log_title">Validation History Log</string>
     <string name="history_log_subtitle">Local Room SQLite audit trail of processed batch checks.</string>
     <string name="history_chip">History</string>

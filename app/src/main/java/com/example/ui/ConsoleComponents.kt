@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -30,7 +31,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.Bolt
@@ -154,72 +157,81 @@ fun ConsoleInputCard(
                 tonalElevation = 0.dp
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    Row(
+                    val editorScrollState = rememberScrollState()
+                    Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
                     ) {
-                        val displayLineCount = remember(uiState.rawInputText) {
-                            uiState.rawInputText.lines().size.coerceIn(1, 14)
-                        }
-                        Column(
+                        Row(
                             modifier = Modifier
-                                .fillMaxHeight()
-                                .background(colorScheme.surfaceContainer)
-                                .padding(horizontal = 9.dp, vertical = 12.dp),
-                            horizontalAlignment = Alignment.End
+                                .fillMaxWidth()
+                                .heightIn(min = 120.dp)
+                                .height(IntrinsicSize.Min)
+                                .verticalScroll(editorScrollState)
                         ) {
-                            for (lineNum in 1..displayLineCount) {
-                                Text(
-                                    text = lineNum.toString().padStart(2, '0'),
-                                    fontFamily = JetBrainsMonoFamily,
-                                    fontSize = 11.sp,
-                                    lineHeight = 20.sp,
-                                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                                )
+                            val displayLineCount = remember(uiState.rawInputText) {
+                                uiState.rawInputText.lines().size.coerceIn(1, 500)
                             }
-                        }
-
-                        VerticalDivider(
-                            thickness = 1.dp,
-                            color = colorScheme.outlineVariant.copy(alpha = 0.65f)
-                        )
-
-                        BasicTextField(
-                            value = uiState.rawInputText,
-                            onValueChange = onInputChanged,
-                            interactionSource = inputInteractionSource,
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .padding(horizontal = 12.dp, vertical = 12.dp)
-                                .testTag("card_batch_input"),
-                            textStyle = TextStyle(
-                                fontFamily = JetBrainsMonoFamily,
-                                fontWeight = FontWeight.Normal,
-                                fontSize = 13.sp,
-                                lineHeight = 20.sp,
-                                letterSpacing = 0.4.sp,
-                                color = colorScheme.onSurface
-                            ),
-                            cursorBrush = SolidColor(colorScheme.primary),
-                            decorationBox = { innerTextField ->
-                                Box(modifier = Modifier.fillMaxSize()) {
-                                    if (uiState.rawInputText.isEmpty()) {
-                                        Text(
-                                            text = stringResource(R.string.input_placeholder),
-                                            fontFamily = JetBrainsMonoFamily,
-                                            fontWeight = FontWeight.Normal,
-                                            fontSize = 13.sp,
-                                            lineHeight = 20.sp,
-                                            letterSpacing = 0.5.sp,
-                                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                                        )
-                                    }
-                                    innerTextField()
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .background(colorScheme.surfaceContainer)
+                                    .padding(horizontal = 9.dp, vertical = 12.dp),
+                                horizontalAlignment = Alignment.End
+                            ) {
+                                for (lineNum in 1..displayLineCount) {
+                                    Text(
+                                        text = lineNum.toString().padStart(2, '0'),
+                                        fontFamily = JetBrainsMonoFamily,
+                                        fontSize = 11.sp,
+                                        lineHeight = 20.sp,
+                                        color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                    )
                                 }
                             }
-                        )
+
+                            VerticalDivider(
+                                thickness = 1.dp,
+                                color = colorScheme.outlineVariant.copy(alpha = 0.65f)
+                            )
+
+                            BasicTextField(
+                                value = uiState.rawInputText,
+                                onValueChange = onInputChanged,
+                                interactionSource = inputInteractionSource,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .padding(horizontal = 12.dp, vertical = 12.dp)
+                                    .testTag("card_batch_input"),
+                                textStyle = TextStyle(
+                                    fontFamily = JetBrainsMonoFamily,
+                                    fontWeight = FontWeight.Normal,
+                                    fontSize = 13.sp,
+                                    lineHeight = 20.sp,
+                                    letterSpacing = 0.4.sp,
+                                    color = colorScheme.onSurface
+                                ),
+                                cursorBrush = SolidColor(colorScheme.primary),
+                                decorationBox = { innerTextField ->
+                                    Box(modifier = Modifier.fillMaxSize()) {
+                                        if (uiState.rawInputText.isEmpty()) {
+                                            Text(
+                                                text = stringResource(R.string.input_placeholder),
+                                                fontFamily = JetBrainsMonoFamily,
+                                                fontWeight = FontWeight.Normal,
+                                                fontSize = 13.sp,
+                                                lineHeight = 20.sp,
+                                                letterSpacing = 0.5.sp,
+                                                color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                            )
+                                        }
+                                        innerTextField()
+                                    }
+                                }
+                            )
+                        }
                     }
 
                     HorizontalDivider(
@@ -281,7 +293,7 @@ fun ConsoleInputCard(
 
                             if (uiState.rawInputText.isEmpty()) {
                                 ConsoleMiniActionPill(
-                                    label = "Paste",
+                                    label = stringResource(R.string.paste_clipboard),
                                     icon = Icons.Outlined.ContentPaste,
                                     containerColor = colorScheme.surfaceContainerHigh,
                                     contentColor = colorScheme.onSurfaceVariant,
