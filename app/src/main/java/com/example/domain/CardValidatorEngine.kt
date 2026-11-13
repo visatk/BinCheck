@@ -1,20 +1,7 @@
 package com.example.domain
 
-import kotlinx.coroutines.suspendCancellableCoroutine
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
-import org.json.JSONObject
-import java.io.IOException
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlin.random.Random
 
 enum class ResultBucket {
@@ -23,9 +10,25 @@ enum class ResultBucket {
     UNKNOWN
 }
 
-enum class ValidationMode {
-    LOCAL_DETERMINISTIC,
-    REMOTE_WEBHOOK
+enum class ValidationMode(
+    val badgeLabel: String,
+    val fixedDelayMs: Long? = null
+) {
+    LOCAL_DETERMINISTIC("LUHN", fixedDelayMs = null),
+    CHKR_CC("CHKR.CC", fixedDelayMs = 10_000L),
+    PAYATE_MOCK("PAYATE", fixedDelayMs = 3_000L),
+    MULTI_API_AUTO("MULTI API", fixedDelayMs = 5_000L),
+    REMOTE_WEBHOOK("CUSTOM HTTP", fixedDelayMs = null);
+
+    val hasFixedDelay: Boolean
+        get() = fixedDelayMs != null
+
+    fun resolveDelayMs(userConfiguredDelayMs: Long): Long =
+        fixedDelayMs ?: userConfiguredDelayMs.coerceIn(0L, MAX_CUSTOM_DELAY_MS)
+
+    companion object {
+        const val MAX_CUSTOM_DELAY_MS = 30_000L
+    }
 }
 
 enum class CardScheme(
@@ -59,19 +62,6 @@ data class ValidationRecord(
 )
 
 object CardValidatorEngine {
-
-    private val okHttpClient: OkHttpClient by lazy {
-        val dispatcher = okhttp3.Dispatcher().apply {
-            maxRequests = 64
-            maxRequestsPerHost = 16
-        }
-        OkHttpClient.Builder()
-            .dispatcher(dispatcher)
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
-            .writeTimeout(10, TimeUnit.SECONDS)
-            .build()
-    }
 
     /**
      * Detects card brand/scheme from IIN/BIN prefix according to ISO/IEC 7812 rules.
@@ -235,7 +225,8 @@ object CardValidatorEngine {
         rawLine: String,
         mode: ValidationMode,
         webhookUrl: String,
-        autoResolveWildcards: Boolean
+        autoResolveWildcards: Boolean,
+        customHttpConfig: CustomHttpConfig? = null
     ): ValidationRecord {
         val startNanos = System.nanoTime()
         val trimmed = rawLine.trim()
@@ -400,13 +391,85 @@ object CardValidatorEngine {
             )
         }
 
-        // Step 6: If Remote Webhook mode is selected, call custom endpoint
+        // Step 6: Dispatch to selected Validation API Engine or return Local Luhn Live
         val paddedMm = mm.padStart(2, '0')
         val canonicalLine = "$pan|$paddedMm|$yyyy|$cvv"
-        if (mode == ValidationMode.REMOTE_WEBHOOK) {
-            if (webhookUrl.isBlank()) {
-                val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
-                return ValidationRecord(
+        val timeoutSec = customHttpConfig?.timeoutSeconds ?: 15
+
+        return when (mode) {
+            ValidationMode.CHKR_CC -> ValidationApiProviders.executeChkr(
+                rawLine = trimmed,
+                normalizedLine = canonicalLine,
+                pan = pan,
+                mm = paddedMm,
+                yyyy = yyyy,
+                cvv = cvv,
+                scheme = scheme,
+                timeoutSeconds = timeoutSec,
+                startNanos = startNanos
+            )
+
+            ValidationMode.PAYATE_MOCK -> ValidationApiProviders.executePayate(
+                rawLine = trimmed,
+                normalizedLine = canonicalLine,
+                pan = pan,
+                mm = paddedMm,
+                yyyy = yyyy,
+                cvv = cvv,
+                scheme = scheme,
+                timeoutSeconds = timeoutSec,
+                startNanos = startNanos
+            )
+
+            ValidationMode.MULTI_API_AUTO -> ValidationApiProviders.executeMultiApiFailover(
+                rawLine = trimmed,
+                normalizedLine = canonicalLine,
+                pan = pan,
+                mm = paddedMm,
+                yyyy = yyyy,
+                cvv = cvv,
+                scheme = scheme,
+                timeoutSeconds = timeoutSec,
+                startNanos = startNanos
+            )
+
+            ValidationMode.REMOTE_WEBHOOK -> {
+                val resolvedConfig = (customHttpConfig ?: CustomHttpConfig(url = webhookUrl)).let { cfg ->
+                    if (cfg.url.isBlank() && webhookUrl.isNotBlank()) cfg.copy(url = webhookUrl) else cfg
+                }
+                if (resolvedConfig.url.isBlank()) {
+                    val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
+                    ValidationRecord(
+                        id = "${System.nanoTime()}_${canonicalLine.hashCode()}",
+                        rawLine = trimmed,
+                        normalizedLine = canonicalLine,
+                        pan = pan,
+                        month = paddedMm,
+                        year = yyyy,
+                        cvv = cvv,
+                        scheme = scheme,
+                        bucket = ResultBucket.UNKNOWN,
+                        message = "HTTP endpoint URL not configured in Settings",
+                        latencyMs = elapsed
+                    )
+                } else {
+                    CustomHttpClient.executeValidation(
+                        rawLine = trimmed,
+                        normalizedLine = canonicalLine,
+                        pan = pan,
+                        mm = paddedMm,
+                        yyyy = yyyy,
+                        cvv = cvv,
+                        scheme = scheme,
+                        config = resolvedConfig,
+                        startNanos = startNanos
+                    )
+                }
+            }
+
+            ValidationMode.LOCAL_DETERMINISTIC -> {
+                val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos).coerceAtLeast(1L)
+                ValidationRecord(
                     id = "${System.nanoTime()}_${canonicalLine.hashCode()}",
                     rawLine = trimmed,
                     normalizedLine = canonicalLine,
@@ -415,224 +478,11 @@ object CardValidatorEngine {
                     year = yyyy,
                     cvv = cvv,
                     scheme = scheme,
-                    bucket = ResultBucket.UNKNOWN,
-                    message = "Webhook URL not configured in Settings",
+                    bucket = ResultBucket.LIVE,
+                    message = "${scheme.displayName} • Luhn Valid • Exp $paddedMm/$yyyy",
                     latencyMs = elapsed
                 )
             }
-            return executeWebhookValidation(
-                rawLine = trimmed,
-                normalizedLine = canonicalLine,
-                pan = pan,
-                mm = paddedMm,
-                yyyy = yyyy,
-                cvv = cvv,
-                scheme = scheme,
-                webhookUrl = webhookUrl.trim(),
-                startNanos = startNanos
-            )
         }
-
-        val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos).coerceAtLeast(1L)
-        return ValidationRecord(
-            id = "${System.nanoTime()}_${canonicalLine.hashCode()}",
-            rawLine = trimmed,
-            normalizedLine = canonicalLine,
-            pan = pan,
-            month = paddedMm,
-            year = yyyy,
-            cvv = cvv,
-            scheme = scheme,
-            bucket = ResultBucket.LIVE,
-            message = "${scheme.displayName} • Luhn Valid • Exp $paddedMm/$yyyy",
-            latencyMs = elapsed
-        )
-    }
-
-    private suspend fun executeWebhookValidation(
-        rawLine: String,
-        normalizedLine: String,
-        pan: String,
-        mm: String,
-        yyyy: String,
-        cvv: String,
-        scheme: CardScheme,
-        webhookUrl: String,
-        startNanos: Long
-    ): ValidationRecord {
-        try {
-            val hasPlaceholders = listOf("{lista}", "{card}", "{mm}", "{yyyy}", "{cvv}")
-                .any { webhookUrl.contains(it) }
-
-            val request = if (hasPlaceholders) {
-                val enc = { value: String -> java.net.URLEncoder.encode(value, "UTF-8") }
-                val resolvedUrl = webhookUrl
-                    .replace("{lista}", enc(normalizedLine))
-                    .replace("{card}", enc(pan))
-                    .replace("{mm}", enc(mm))
-                    .replace("{yyyy}", enc(yyyy))
-                    .replace("{cvv}", enc(cvv))
-                val httpUrl = resolvedUrl.toHttpUrlOrNull()
-                    ?: return unknownWebhookRecord(
-                        rawLine, normalizedLine, pan, mm, yyyy, cvv, scheme,
-                        "Invalid Webhook URL (must start with http:// or https://)", startNanos
-                    )
-                Request.Builder()
-                    .url(httpUrl)
-                    .get()
-                    .build()
-            } else {
-                val httpUrl = webhookUrl.toHttpUrlOrNull()
-                    ?: return unknownWebhookRecord(
-                        rawLine, normalizedLine, pan, mm, yyyy, cvv, scheme,
-                        "Invalid Webhook URL (must start with http:// or https://)", startNanos
-                    )
-                val payload = JSONObject().apply {
-                    put("raw", normalizedLine)
-                    put("number", pan)
-                    put("month", mm)
-                    put("year", yyyy)
-                    put("cvv", cvv)
-                    put("scheme", scheme.displayName)
-                }
-                Request.Builder()
-                    .url(httpUrl)
-                    .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-                    .build()
-            }
-
-            return awaitCall(request) { response ->
-                val bodyStr = response.body?.string().orEmpty()
-                val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
-                val bucket = classifyWebhookResponse(response.code, bodyStr)
-
-                val summary = when (bucket) {
-                    ResultBucket.LIVE -> "HTTP ${response.code} • Live (${scheme.displayName})"
-                    ResultBucket.DIE -> "HTTP ${response.code} • Declined"
-                    ResultBucket.UNKNOWN -> "HTTP ${response.code} • Unknown response"
-                }
-
-                ValidationRecord(
-                    id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
-                    rawLine = rawLine,
-                    normalizedLine = normalizedLine,
-                    pan = pan,
-                    month = mm,
-                    year = yyyy,
-                    cvv = cvv,
-                    scheme = scheme,
-                    bucket = bucket,
-                    message = summary,
-                    latencyMs = elapsed
-                )
-            }
-        } catch (e: Exception) {
-            val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
-            return ValidationRecord(
-                id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
-                rawLine = rawLine,
-                normalizedLine = normalizedLine,
-                pan = pan,
-                month = mm,
-                year = yyyy,
-                cvv = cvv,
-                scheme = scheme,
-                bucket = ResultBucket.UNKNOWN,
-                message = "Webhook error: ${e.localizedMessage ?: e.javaClass.simpleName}",
-                latencyMs = elapsed
-            )
-        }
-    }
-
-    private fun unknownWebhookRecord(
-        rawLine: String,
-        normalizedLine: String,
-        pan: String,
-        mm: String,
-        yyyy: String,
-        cvv: String,
-        scheme: CardScheme,
-        message: String,
-        startNanos: Long
-    ): ValidationRecord {
-        return ValidationRecord(
-            id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
-            rawLine = rawLine,
-            normalizedLine = normalizedLine,
-            pan = pan,
-            month = mm,
-            year = yyyy,
-            cvv = cvv,
-            scheme = scheme,
-            bucket = ResultBucket.UNKNOWN,
-            message = message,
-            latencyMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
-        )
-    }
-
-    private fun classifyWebhookResponse(statusCode: Int, bodyStr: String): ResultBucket {
-        val trimmed = bodyStr.trim()
-        if (trimmed.startsWith("{")) {
-            runCatching {
-                val json = JSONObject(trimmed)
-                val statusVal = listOf("status", "result", "state")
-                    .firstNotNullOfOrNull { key -> json.optString(key, "").takeIf { it.isNotBlank() } }
-                    ?.lowercase()
-                if (statusVal != null) {
-                    return when {
-                        statusVal in setOf("live", "approved", "valid", "ok", "success") -> ResultBucket.LIVE
-                        statusVal in setOf("die", "dead", "declined", "invalid", "fail", "failed", "error") -> ResultBucket.DIE
-                        else -> ResultBucket.UNKNOWN
-                    }
-                }
-                if (json.has("valid")) {
-                    return if (json.optBoolean("valid", false)) ResultBucket.LIVE else ResultBucket.DIE
-                }
-                if (json.has("approved")) {
-                    return if (json.optBoolean("approved", false)) ResultBucket.LIVE else ResultBucket.DIE
-                }
-            }
-        }
-
-        val lower = trimmed.lowercase()
-        val negativeMarkers = listOf("not live", "declined", "dead", "invalid", "\"status\":\"die\"")
-        if (negativeMarkers.any { lower.contains(it) }) {
-            return ResultBucket.DIE
-        }
-        if (lower.contains("\"status\":\"live\"") || lower.contains("approved") || Regex("\\blive\\b").containsMatchIn(lower)) {
-            return ResultBucket.LIVE
-        }
-        return when {
-            statusCode == 200 -> ResultBucket.LIVE
-            statusCode in 400..499 -> ResultBucket.DIE
-            else -> ResultBucket.UNKNOWN
-        }
-    }
-
-    private suspend inline fun <T> awaitCall(
-        request: Request,
-        crossinline mapper: (Response) -> T
-    ): T = suspendCancellableCoroutine { continuation ->
-        val call = okHttpClient.newCall(request)
-        continuation.invokeOnCancellation { call.cancel() }
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                if (continuation.isActive) {
-                    continuation.resumeWithException(e)
-                }
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                response.use { res ->
-                    if (continuation.isActive) {
-                        try {
-                            continuation.resume(mapper(res))
-                        } catch (t: Throwable) {
-                            continuation.resumeWithException(t)
-                        }
-                    }
-                }
-            }
-        })
     }
 }

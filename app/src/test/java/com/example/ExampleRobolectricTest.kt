@@ -1,9 +1,14 @@
 package com.example
 
 import android.content.Context
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -15,10 +20,26 @@ import com.example.data.ValidatorPreferencesRepository
 import com.example.data.local.AppDatabase
 import com.example.data.local.HistoryFilter
 import com.example.data.local.ValidationHistoryRepository
+import androidx.compose.ui.test.onNodeWithText
+import com.example.domain.BinInfo
+import com.example.domain.BinLookupService
+import com.example.domain.CardScheme
 import com.example.domain.CardValidatorEngine
+import com.example.domain.CustomHttpConfig
+import com.example.domain.HttpRequestMethod
 import com.example.domain.ResultBucket
+import com.example.domain.TelegramWebhookClient
+import com.example.domain.TelegramWebhookConfig
+import com.example.domain.ValidationApiProviders
 import com.example.domain.ValidationMode
+import com.example.domain.ValidationRecord
+import okio.Buffer
+import com.example.ui.BinCheckTopBar
 import com.example.ui.ConsoleInputCard
+import com.example.ui.CustomHttpSectionCard
+import com.example.ui.ResultsCard
+import com.example.ui.TelegramWebhookSectionCard
+import com.example.ui.TopTelemetryStrip
 import com.example.ui.ValidatorUiState
 import com.example.ui.theme.MyApplicationTheme
 import com.example.worker.BatchValidationWorker
@@ -142,8 +163,15 @@ class ExampleRobolectricTest {
     fun `preferences repository persists theme mode and dynamic color`() = runTest {
         val prefsRepo = ValidatorPreferencesRepository(context)
         prefsRepo.updateSettings(
-            validationMode = ValidationMode.LOCAL_DETERMINISTIC,
-            webhookUrl = "",
+            validationMode = ValidationMode.REMOTE_WEBHOOK,
+            webhookUrl = "https://api.example.com/check?lista={lista}",
+            httpMethod = HttpRequestMethod.POST_JSON,
+            httpHeaders = "Authorization: Bearer abc",
+            httpBodyTemplate = """{"lista":"{lista}"}""",
+            httpTimeoutSeconds = 20,
+            httpMaxRetries = 2,
+            httpLiveKeywords = "live,charged",
+            httpDieKeywords = "die,declined",
             autoResolveWildcards = true,
             batchDelayMs = 40L,
             concurrency = 6,
@@ -157,6 +185,10 @@ class ExampleRobolectricTest {
         assertEquals(AppThemeMode.LIGHT, stored.themeMode)
         assertEquals(false, stored.useDynamicColor)
         assertEquals(6, stored.concurrency)
+        assertEquals(HttpRequestMethod.POST_JSON, stored.httpMethod)
+        assertEquals(20, stored.httpTimeoutSeconds)
+        assertEquals(2, stored.httpMaxRetries)
+        assertEquals("live,charged", stored.httpLiveKeywords)
     }
 
     @Test
@@ -185,5 +217,459 @@ class ExampleRobolectricTest {
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("card_batch_input").assertIsDisplayed()
         composeTestRule.onNodeWithTag("play_validation_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun `customHttpSectionCard renders HTTP controls and test button`() {
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                Box(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    CustomHttpSectionCard(
+                        config = CustomHttpConfig(
+                            url = "https://api.example.com/verify",
+                            method = HttpRequestMethod.POST_JSON,
+                            headersText = "Authorization: Bearer test",
+                            bodyTemplate = """{"lista":"{lista}"}"""
+                        ),
+                        isTestingEndpoint = false,
+                        probeResult = null,
+                        onConfigChange = {},
+                        onTestEndpoint = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("webhook_url_input").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("http_headers_input").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("test_http_endpoint_button").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun `binLookupService parses binlist and handyapi payloads accurately`() {
+        val binlistSample = """
+            {
+              "scheme": "visa",
+              "type": "credit",
+              "brand": "Platinum",
+              "prepaid": false,
+              "country": {
+                "alpha2": "US",
+                "name": "United States of America",
+                "emoji": "🇺🇸",
+                "currency": "USD"
+              },
+              "bank": {
+                "name": "JPMORGAN CHASE BANK N.A.",
+                "url": "www.chase.com",
+                "phone": "1-800-432-3117"
+              }
+            }
+        """.trimIndent()
+        val parsedBinlist = BinLookupService.parseBinlistJson("453225", binlistSample)!!
+        assertEquals("453225", parsedBinlist.bin)
+        assertEquals("VISA", parsedBinlist.scheme)
+        assertEquals("CREDIT", parsedBinlist.type)
+        assertEquals("PLATINUM", parsedBinlist.brand)
+        assertEquals("JPMORGAN CHASE BANK N.A.", parsedBinlist.bankName)
+        assertEquals("US", parsedBinlist.countryCode)
+        assertEquals("USD", parsedBinlist.currency)
+        assertTrue(parsedBinlist.compactSummary().contains("JPMORGAN CHASE BANK N.A."))
+
+        val handySample = """
+            {
+              "Status": "SUCCESS",
+              "Scheme": "MASTERCARD",
+              "Type": "DEBIT",
+              "Issuer": "BARCLAYS BANK UK PLC",
+              "CardTier": "WORLD",
+              "Country": { "A2": "GB", "Name": "UNITED KINGDOM" }
+            }
+        """.trimIndent()
+        val parsedHandy = BinLookupService.parseHandyApiJson("541275", handySample)!!
+        assertEquals("MASTERCARD", parsedHandy.scheme)
+        assertEquals("DEBIT", parsedHandy.type)
+        assertEquals("BARCLAYS BANK UK PLC", parsedHandy.bankName)
+        assertEquals("GB", parsedHandy.countryCode)
+        assertEquals("🇬🇧", parsedHandy.countryEmoji)
+    }
+
+    @Test
+    fun `resultsCard displays BIN lookup badge for Live records`() {
+        val liveRecord = ValidationRecord(
+            id = "live_1",
+            rawLine = "4532250055360003|08|2028|113",
+            normalizedLine = "4532250055360003|08|2028|113",
+            pan = "4532250055360003",
+            month = "08",
+            year = "2028",
+            cvv = "113",
+            scheme = CardScheme.VISA,
+            bucket = ResultBucket.LIVE,
+            message = "VISA • Luhn Valid • Exp 08/2028",
+            latencyMs = 4
+        )
+        val binInfo = BinInfo(
+            bin = "453225",
+            scheme = "VISA",
+            type = "CREDIT",
+            brand = "CLASSIC",
+            bankName = "CHASE BANK",
+            countryCode = "US",
+            countryEmoji = "🇺🇸"
+        )
+
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                ResultsCard(
+                    uiState = ValidatorUiState(
+                        selectedTab = ResultBucket.LIVE,
+                        liveRecords = listOf(liveRecord),
+                        binLookupMap = mapOf("453225" to binInfo)
+                    ),
+                    fillRemainingHeight = false,
+                    onSelectTab = {},
+                    onCopyAll = { _, _ -> },
+                    onClearTab = {},
+                    onCopyRecord = {},
+                    onRemoveRecord = {},
+                    onInspectBin = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("open_bin_lookup_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("live_bin_badge_4532250055360003").assertIsDisplayed()
+        composeTestRule.onNodeWithText("🇺🇸 US | CREDIT • CLASSIC | CHASE BANK").assertIsDisplayed()
+    }
+
+    @Test
+    fun `validationApiProviders builds and parses Payate and Chkr responses`() {
+        val payateReq = ValidationApiProviders.buildPayateRequest("5154620021111602|10|2031|564")
+        assertEquals("POST", payateReq.method)
+        assertEquals(ValidationApiProviders.PAYATE_URL, payateReq.url.toString())
+        val payateBuf = Buffer()
+        payateReq.body!!.writeTo(payateBuf)
+        assertEquals("data=5154620021111602%7C10%7C2031%7C564", payateBuf.readUtf8())
+
+        val payateLive = ValidationApiProviders.parsePayateResponse(
+            200,
+            """{"error":1,"msg":"<div><b style='color:#008000'>Live<\/b> | 5154620021111602 | 10\/2031 | [BIN: 515462] $2.06 Checked - Shinji<\/div>"}"""
+        )
+        assertEquals(ResultBucket.LIVE, payateLive.bucket)
+        assertTrue(payateLive.detailMessage.contains("515462"))
+
+        val payateDie = ValidationApiProviders.parsePayateResponse(
+            200,
+            """{"error":2,"msg":"<div><b style='color:#FF0000'>Die<\/b> | 5154620021124407 | 02\/2028 | [BIN: 515462] $0.30 Checked - Shinji<\/div>"}"""
+        )
+        assertEquals(ResultBucket.DIE, payateDie.bucket)
+
+        val payateUnknown = ValidationApiProviders.parsePayateResponse(
+            200,
+            """{"error":3,"msg":"<div><b style='color:#FF8C00'>Unknown<\/b> | 5154620021142854 | 11\/2029 | [BIN: 515462] $2.07 Checked - Shinji<\/div>"}"""
+        )
+        assertEquals(ResultBucket.UNKNOWN, payateUnknown.bucket)
+
+        val chkrReq = ValidationApiProviders.buildChkrRequest("379363037471377|07|2034|3204")
+        assertEquals("POST", chkrReq.method)
+        assertEquals(ValidationApiProviders.CHKR_URL, chkrReq.url.toString())
+        val chkrBuf = Buffer()
+        chkrReq.body!!.writeTo(chkrBuf)
+        assertEquals("""{"data":"379363037471377|07|2034|3204","charge":false}""", chkrBuf.readUtf8())
+
+        val chkrLive = ValidationApiProviders.parseChkrResponse(
+            pan = "379363037471377",
+            statusCode = 200,
+            bodyStr = """{"code":1,"status":"Live","message":"Charge OK. [GATE_01@chkr.cc]","card":{"card":"379363037471377|07|2034|3204","bank":"AMERICAN EXPRESS US","type":"american express","category":"credit","brand":"AMERICAN EXPRESS","country":{"name":"US","code":"XX","emoji":"🇺🇸","currency":"USD"}}}"""
+        )
+        assertEquals(ResultBucket.LIVE, chkrLive.bucket)
+        assertEquals("Charge OK. [GATE_01@chkr.cc]", chkrLive.detailMessage)
+        assertEquals("AMERICAN EXPRESS US", chkrLive.embeddedBinInfo?.bankName)
+        assertEquals("US", chkrLive.embeddedBinInfo?.countryCode)
+        assertEquals("🇺🇸", chkrLive.embeddedBinInfo?.countryEmoji)
+
+        val chkrDie = ValidationApiProviders.parseChkrResponse(
+            pan = "379363037459380",
+            statusCode = 200,
+            bodyStr = """{"code":0,"status":"Die","message":"Unable to authenticate"}"""
+        )
+        assertEquals(ResultBucket.DIE, chkrDie.bucket)
+        assertEquals("Unable to authenticate", chkrDie.detailMessage)
+    }
+
+    @Test
+    fun `consoleInputCard renders SplitButton and LinearWavyProgressIndicator when running`() {
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                ConsoleInputCard(
+                    uiState = ValidatorUiState(
+                        rawInputText = "4532250055360003|08|2028|113",
+                        isRunning = true,
+                        processedCount = 4,
+                        totalBatchCount = 10
+                    ),
+                    consoleHeight = 200.dp,
+                    cardPadding = 14.dp,
+                    onInputChanged = {},
+                    onToggleRun = {},
+                    onOpenSettings = {},
+                    onOpenFileImport = {},
+                    onQuickGen10x = {},
+                    onExpandWildcards = {},
+                    onPasteOrFill = {},
+                    onClearInput = {},
+                    onClearBanner = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("play_validation_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("engine_split_dropdown_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("batch_wavy_progress_indicator").assertIsDisplayed()
+    }
+
+    @Test
+    fun `navigation drawer shell renders permanent drawer on expanded width`() {
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                val drawerState = androidx.compose.material3.rememberDrawerState(
+                    androidx.compose.material3.DrawerValue.Closed
+                )
+                com.example.ui.BinCheckNavigationShell(
+                    isExpandedWidth = true,
+                    drawerState = drawerState,
+                    uiState = ValidatorUiState(rawInputText = "4532250055360003|08|2028|113"),
+                    activePane = com.example.ui.CompactWorkspacePane.SPLIT,
+                    channelUrl = "https://t.me/drkingbd",
+                    onSelectPane = {},
+                    onOpenBinLookup = {},
+                    onOpenFileImport = {},
+                    onOpenHistory = {},
+                    onOpenSettings = {},
+                    onSelectThemeMode = {},
+                    onToggleDynamicColor = {},
+                    onOpenDeveloperChannel = {},
+                    onCloseDrawer = {}
+                ) {
+                    Box {}
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("permanent_navigation_drawer").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("drawer_item_workspace").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("drawer_item_bin_lookup").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("drawer_item_history").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("drawer_item_settings").assertIsDisplayed()
+    }
+
+    @Test
+    fun `topBar and telemetryStrip display stream metrics and quick actions`() {
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                androidx.compose.foundation.layout.Column {
+                    BinCheckTopBar(
+                        showMenuButton = true,
+                        isRunning = true,
+                        isLookingUpBin = false,
+                        processedCount = 3,
+                        totalBatchCount = 10,
+                        validationMode = ValidationMode.MULTI_API_AUTO,
+                        httpMethod = HttpRequestMethod.POST_JSON,
+                        concurrency = 4,
+                        historyCount = 12,
+                        onOpenDrawer = {},
+                        onOpenBinLookup = {},
+                        onOpenHistory = {},
+                        onOpenSettings = {}
+                    )
+                    TopTelemetryStrip(
+                        binDigits = "453225",
+                        detectedScheme = CardScheme.VISA,
+                        loadedFileName = "cards.txt",
+                        onOpenBinLookup = {},
+                        onOpenDeveloperChannel = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("open_navigation_drawer_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("topbar_loading_indicator").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("topbar_bin_lookup_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("telemetry_bin_pill").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("header_developer_channel_button").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Validating 3 / 10").assertIsDisplayed()
+        composeTestRule.onNodeWithText("BIN 453225 • VISA").assertIsDisplayed()
+    }
+
+    @Test
+    fun `resultsCard renders expressive empty state and BIN CTA when empty`() {
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = false, dynamicColor = false) {
+                ResultsCard(
+                    uiState = ValidatorUiState(selectedTab = ResultBucket.LIVE),
+                    fillRemainingHeight = true,
+                    onSelectTab = {},
+                    onCopyAll = { _, _ -> },
+                    onClearTab = {},
+                    onCopyRecord = {},
+                    onRemoveRecord = {},
+                    onInspectBin = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("No Live records yet").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("open_bin_lookup_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun `topBar displays fixed 10s delay summary when idle in Chkr mode`() {
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                BinCheckTopBar(
+                    showMenuButton = true,
+                    isRunning = false,
+                    isLookingUpBin = false,
+                    processedCount = 0,
+                    totalBatchCount = 0,
+                    validationMode = ValidationMode.CHKR_CC,
+                    httpMethod = HttpRequestMethod.AUTO,
+                    concurrency = 4,
+                    historyCount = 0,
+                    onOpenDrawer = {},
+                    onOpenBinLookup = {},
+                    onOpenHistory = {},
+                    onOpenSettings = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("CHKR.CC • 10s delay").assertIsDisplayed()
+    }
+
+    @Test
+    fun `preferences repository persists custom batch delay above 2 seconds`() = runTest {
+        val prefsRepo = ValidatorPreferencesRepository(context)
+        prefsRepo.updateSettings(
+            validationMode = ValidationMode.REMOTE_WEBHOOK,
+            webhookUrl = "https://api.example.com/check",
+            autoResolveWildcards = true,
+            batchDelayMs = 4_500L,
+            concurrency = 2,
+            patternTemplate = "453225005536xxx3|08|2028|113",
+            generateQuantity = 10,
+            themeMode = AppThemeMode.DARK,
+            useDynamicColor = false
+        )
+
+        val stored = prefsRepo.settingsFlow.first()
+        assertEquals(4_500L, stored.batchDelayMs)
+        assertEquals(4_500L, stored.effectiveDelayMs)
+    }
+
+    @Test
+    fun `preferences repository persists telegram webhook configuration`() = runTest {
+        val prefsRepo = ValidatorPreferencesRepository(context)
+        prefsRepo.updateSettings(
+            validationMode = ValidationMode.LOCAL_DETERMINISTIC,
+            webhookUrl = "",
+            autoResolveWildcards = true,
+            batchDelayMs = 55L,
+            concurrency = 4,
+            patternTemplate = "453225005536xxx3|08|2028|113",
+            generateQuantity = 10,
+            themeMode = AppThemeMode.SYSTEM,
+            useDynamicColor = true,
+            telegramWebhookEnabled = true,
+            telegramChatId = "-1001234567890",
+            telegramNotifyLiveOnly = false
+        )
+
+        val stored = prefsRepo.settingsFlow.first()
+        assertTrue(stored.telegramWebhookEnabled)
+        assertEquals("-1001234567890", stored.telegramChatId)
+        assertEquals(false, stored.telegramNotifyLiveOnly)
+    }
+
+    @Test
+    fun `customHttpSectionCard renders payload editor and presets in AUTO mode`() {
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                Box(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    CustomHttpSectionCard(
+                        config = CustomHttpConfig(
+                            url = "https://api.example.com/verify",
+                            method = HttpRequestMethod.AUTO
+                        ),
+                        isTestingEndpoint = false,
+                        probeResult = null,
+                        onConfigChange = {},
+                        onTestEndpoint = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("payload_preset_json_card").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("http_body_template_input").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("payload_token_bin").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun `telegramWebhookSectionCard renders chat id and detect controls`() {
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                Box(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    TelegramWebhookSectionCard(
+                        config = TelegramWebhookConfig(
+                            enabled = true,
+                            chatId = "123456789",
+                            notifyLiveOnly = true
+                        ),
+                        isTestingTelegram = false,
+                        probeResult = null,
+                        onConfigChange = {},
+                        onDetectChat = {},
+                        onTestWebhook = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("telegram_webhook_switch").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("telegram_chat_id_input").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("telegram_detect_chat_button").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("telegram_test_button").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun `telegramWebhookClient builds sendMessage request and parses bot updates`() {
+        val req = TelegramWebhookClient.buildSendMessageRequest(
+            botToken = "12345:TEST_TOKEN",
+            chatId = "-10099887766",
+            htmlText = "<b>BinCheck Live</b>"
+        )
+        assertEquals("POST", req.method)
+        assertEquals("https://api.telegram.org/bot12345:TEST_TOKEN/sendMessage", req.url.toString())
+        val buf = Buffer()
+        req.body!!.writeTo(buf)
+        val jsonBody = buf.readUtf8()
+        assertTrue(jsonBody.contains("-10099887766"))
+        assertTrue(jsonBody.contains("HTML"))
+
+        assertEquals(
+            "SandBoxAutoBot",
+            TelegramWebhookClient.parseBotUsername("""{"ok":true,"result":{"username":"SandBoxAutoBot"}}""")
+        )
+        assertEquals(
+            "987654321",
+            TelegramWebhookClient.parseLatestChatId(
+                """{"ok":true,"result":[{"update_id":1,"message":{"chat":{"id":111}}},{"update_id":2,"message":{"chat":{"id":987654321}}}]}"""
+            )
+        )
     }
 }

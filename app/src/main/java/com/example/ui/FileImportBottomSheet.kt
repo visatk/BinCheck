@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -28,12 +27,15 @@ import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -41,6 +43,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,7 +63,11 @@ import com.example.domain.ImportedFilePreview
 import com.example.domain.SupportedFileType
 import com.example.ui.theme.LocalConsoleColors
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    ExperimentalLayoutApi::class,
+    ExperimentalMaterial3ExpressiveApi::class
+)
 @Composable
 fun FileImportBottomSheet(
     isImporting: Boolean,
@@ -124,7 +131,7 @@ fun FileImportBottomSheet(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = stringResource(R.string.import_file_title),
-                        style = MaterialTheme.typography.titleLarge,
+                        style = MaterialTheme.typography.titleLargeEmphasized,
                         color = colorScheme.onSurface
                     )
                     Text(
@@ -165,24 +172,24 @@ fun FileImportBottomSheet(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Surface(
-                        shape = CircleShape,
+                        shape = MaterialShapes.Clover4Leaf.toShape(),
                         color = colorScheme.secondaryContainer,
                         border = BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.45f)),
-                        modifier = Modifier.size(46.dp)
+                        modifier = Modifier.size(54.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             if (isImporting) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(22.dp),
-                                    color = colorScheme.secondary,
-                                    strokeWidth = 2.dp
+                                ContainedLoadingIndicator(
+                                    modifier = Modifier.size(40.dp),
+                                    containerColor = colorScheme.secondaryContainer,
+                                    indicatorColor = colorScheme.onSecondaryContainer
                                 )
                             } else {
                                 Icon(
                                     imageVector = Icons.Outlined.UploadFile,
                                     contentDescription = null,
                                     tint = colorScheme.onSecondaryContainer,
-                                    modifier = Modifier.size(22.dp)
+                                    modifier = Modifier.size(24.dp)
                                 )
                             }
                         }
@@ -191,10 +198,19 @@ fun FileImportBottomSheet(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Text(
-                        text = if (isImporting) "Reading file from storage..." else stringResource(R.string.select_file_button),
-                        style = MaterialTheme.typography.titleSmall,
+                        text = if (isImporting) "Reading & extracting records..." else stringResource(R.string.select_file_button),
+                        style = MaterialTheme.typography.titleSmallEmphasized,
                         color = colorScheme.onSurface
                     )
+
+                    if (isImporting) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        LinearWavyProgressIndicator(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = colorScheme.secondary,
+                            trackColor = colorScheme.surfaceContainerHighest
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(8.dp))
 
@@ -498,7 +514,7 @@ fun FileImportBottomSheet(
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = stringResource(R.string.load_and_process),
-                            style = MaterialTheme.typography.labelLarge,
+                            style = MaterialTheme.typography.labelLargeEmphasized,
                             maxLines = 1
                         )
                     }

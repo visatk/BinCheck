@@ -12,6 +12,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import androidx.compose.runtime.Immutable
 import com.example.data.AppThemeMode
 import com.example.data.ValidatorPreferencesRepository
 import com.example.data.ValidatorSettings
@@ -19,11 +20,19 @@ import com.example.data.local.AppDatabase
 import com.example.data.local.HistoryFilter
 import com.example.data.local.ValidationHistoryEntity
 import com.example.data.local.ValidationHistoryRepository
+import com.example.domain.BinInfo
+import com.example.domain.BinLookupService
 import com.example.domain.CardScheme
 import com.example.domain.CardValidatorEngine
+import com.example.domain.CustomHttpClient
+import com.example.domain.CustomHttpConfig
 import com.example.domain.FileTextExtractor
+import com.example.domain.HttpProbeResult
 import com.example.domain.ImportedFilePreview
 import com.example.domain.ResultBucket
+import com.example.domain.TelegramProbeResult
+import com.example.domain.TelegramWebhookClient
+import com.example.domain.TelegramWebhookConfig
 import com.example.domain.ValidationMode
 import com.example.domain.ValidationRecord
 import com.example.worker.BatchValidationWorker
@@ -39,12 +48,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
 
+@Immutable
 data class HistoryUiSummary(
     val totalCount: Int = 0,
     val successCount: Int = 0,
     val failureCount: Int = 0
 )
 
+@Immutable
 data class ValidatorUiState(
     val rawInputText: String = "",
     val isRunning: Boolean = false,
@@ -66,6 +77,16 @@ data class ValidatorUiState(
     val importedFilePreview: ImportedFilePreview? = null,
     val loadedFileName: String? = null,
     val settings: ValidatorSettings = ValidatorSettings(),
+    val isTestingEndpoint: Boolean = false,
+    val httpProbeResult: HttpProbeResult? = null,
+    val isTestingTelegram: Boolean = false,
+    val telegramProbeResult: TelegramProbeResult? = null,
+    val binLookupMap: Map<String, BinInfo> = emptyMap(),
+    val loadingBins: Set<String> = emptySet(),
+    val isBinSheetOpen: Boolean = false,
+    val inspectedBinInput: String = "",
+    val inspectedBinInfo: BinInfo? = null,
+    val isInspectingBin: Boolean = false,
     val statusBannerMessage: String? = null
 ) {
     val activeTabRecords: List<ValidationRecord>
@@ -158,11 +179,70 @@ class ValidatorViewModel(
     }
 
     fun openSettings() {
-        _localState.update { it.copy(isSettingsOpen = true, statusBannerMessage = null) }
+        _localState.update {
+            it.copy(
+                isSettingsOpen = true,
+                httpProbeResult = null,
+                telegramProbeResult = null,
+                statusBannerMessage = null
+            )
+        }
     }
 
     fun closeSettings() {
-        _localState.update { it.copy(isSettingsOpen = false) }
+        _localState.update {
+            it.copy(
+                isSettingsOpen = false,
+                httpProbeResult = null,
+                telegramProbeResult = null
+            )
+        }
+    }
+
+    fun clearHttpProbeResult() {
+        _localState.update { it.copy(httpProbeResult = null) }
+    }
+
+    fun testHttpEndpoint(config: CustomHttpConfig) {
+        if (_localState.value.isTestingEndpoint) return
+        _localState.update { it.copy(isTestingEndpoint = true, httpProbeResult = null) }
+        viewModelScope.launch {
+            val probe = CustomHttpClient.testEndpoint(config)
+            _localState.update {
+                it.copy(
+                    isTestingEndpoint = false,
+                    httpProbeResult = probe
+                )
+            }
+        }
+    }
+
+    fun detectTelegramBotAndChat() {
+        if (_localState.value.isTestingTelegram) return
+        _localState.update { it.copy(isTestingTelegram = true, telegramProbeResult = null) }
+        viewModelScope.launch {
+            val probe = TelegramWebhookClient.verifyAndDetectChat()
+            _localState.update {
+                it.copy(
+                    isTestingTelegram = false,
+                    telegramProbeResult = probe
+                )
+            }
+        }
+    }
+
+    fun sendTelegramTestWebhook(chatId: String) {
+        if (_localState.value.isTestingTelegram) return
+        _localState.update { it.copy(isTestingTelegram = true, telegramProbeResult = null) }
+        viewModelScope.launch {
+            val probe = TelegramWebhookClient.sendTestMessage(chatId)
+            _localState.update {
+                it.copy(
+                    isTestingTelegram = false,
+                    telegramProbeResult = probe
+                )
+            }
+        }
     }
 
     fun openFileImport() {
@@ -190,6 +270,91 @@ class ValidatorViewModel(
 
     fun closeHistory() {
         _localState.update { it.copy(isHistoryOpen = false) }
+    }
+
+    fun openBinInspector(initialPanOrBin: String = "") {
+        val binDigits = BinLookupService.extractBin6(initialPanOrBin)
+        val cached = if (binDigits.length == 6) {
+            _localState.value.binLookupMap[binDigits] ?: BinLookupService.getCached(binDigits)
+        } else {
+            null
+        }
+        _localState.update {
+            it.copy(
+                isBinSheetOpen = true,
+                inspectedBinInput = binDigits,
+                inspectedBinInfo = cached,
+                isInspectingBin = false
+            )
+        }
+        if (binDigits.length == 6 && (cached == null || !cached.isNetworkVerified)) {
+            lookupInspectedBin(binDigits, forceRefresh = true)
+        }
+    }
+
+    fun closeBinInspector() {
+        _localState.update { it.copy(isBinSheetOpen = false, isInspectingBin = false) }
+    }
+
+    fun onInspectedBinInputChanged(newInput: String) {
+        val digitsOnly = newInput.filter { it.isDigit() }.take(8)
+        _localState.update { it.copy(inspectedBinInput = digitsOnly) }
+    }
+
+    fun lookupInspectedBin(panOrBin: String = _localState.value.inspectedBinInput, forceRefresh: Boolean = true) {
+        val bin6 = BinLookupService.extractBin6(panOrBin)
+        if (bin6.length < 6) {
+            _localState.update {
+                it.copy(statusBannerMessage = "Enter at least 6 digits to lookup BIN/IIN")
+            }
+            return
+        }
+        _localState.update {
+            it.copy(
+                inspectedBinInput = panOrBin.filter { ch -> ch.isDigit() }.take(8).ifEmpty { bin6 },
+                isInspectingBin = true,
+                loadingBins = it.loadingBins + bin6
+            )
+        }
+        viewModelScope.launch {
+            val info = BinLookupService.lookupBin(bin6, forceRefresh = forceRefresh)
+            _localState.update { prev ->
+                val updatedMap = if (info != null) prev.binLookupMap + (bin6 to info) else prev.binLookupMap
+                prev.copy(
+                    isInspectingBin = false,
+                    inspectedBinInfo = info,
+                    binLookupMap = updatedMap,
+                    loadingBins = prev.loadingBins - bin6
+                )
+            }
+        }
+    }
+
+    private fun enrichLiveRecords(liveRecords: List<ValidationRecord>) {
+        if (!uiState.value.settings.autoBinLookupForLive || liveRecords.isEmpty()) return
+        val distinctBins = liveRecords
+            .map { BinLookupService.extractBin6(it.pan) }
+            .filter { it.length == 6 }
+            .distinct()
+
+        for (bin6 in distinctBins) {
+            val state = _localState.value
+            val cached = state.binLookupMap[bin6]
+            if ((cached != null && cached.isNetworkVerified) || bin6 in state.loadingBins) {
+                continue
+            }
+            _localState.update { it.copy(loadingBins = it.loadingBins + bin6) }
+            viewModelScope.launch {
+                val info = BinLookupService.lookupBin(bin6, forceRefresh = false)
+                _localState.update { prev ->
+                    val nextMap = if (info != null) prev.binLookupMap + (bin6 to info) else prev.binLookupMap
+                    prev.copy(
+                        binLookupMap = nextMap,
+                        loadingBins = prev.loadingBins - bin6
+                    )
+                }
+            }
+        }
     }
 
     fun setHistoryFilter(filter: HistoryFilter) {
@@ -356,14 +521,25 @@ class ValidatorViewModel(
                 sourceName = sourceName
             )
 
+            val effectiveDelayMs = settings.effectiveDelayMs
             val inputData = workDataOf(
                 BatchValidationWorker.KEY_BATCH_ID to batchId,
                 BatchValidationWorker.KEY_VALIDATION_MODE to settings.validationMode.name,
                 BatchValidationWorker.KEY_WEBHOOK_URL to settings.webhookUrl,
+                BatchValidationWorker.KEY_HTTP_METHOD to settings.httpMethod.name,
+                BatchValidationWorker.KEY_HTTP_HEADERS to settings.httpHeaders,
+                BatchValidationWorker.KEY_HTTP_BODY_TEMPLATE to settings.httpBodyTemplate,
+                BatchValidationWorker.KEY_HTTP_TIMEOUT_SECONDS to settings.httpTimeoutSeconds,
+                BatchValidationWorker.KEY_HTTP_MAX_RETRIES to settings.httpMaxRetries,
+                BatchValidationWorker.KEY_HTTP_LIVE_KEYWORDS to settings.httpLiveKeywords,
+                BatchValidationWorker.KEY_HTTP_DIE_KEYWORDS to settings.httpDieKeywords,
                 BatchValidationWorker.KEY_AUTO_RESOLVE_WILDCARDS to settings.autoResolveWildcards,
                 BatchValidationWorker.KEY_CONCURRENCY to settings.concurrency,
-                BatchValidationWorker.KEY_BATCH_DELAY_MS to settings.batchDelayMs,
-                BatchValidationWorker.KEY_SOURCE_NAME to sourceName
+                BatchValidationWorker.KEY_BATCH_DELAY_MS to effectiveDelayMs,
+                BatchValidationWorker.KEY_SOURCE_NAME to sourceName,
+                BatchValidationWorker.KEY_TELEGRAM_ENABLED to settings.telegramWebhookEnabled,
+                BatchValidationWorker.KEY_TELEGRAM_CHAT_ID to settings.telegramChatId,
+                BatchValidationWorker.KEY_TELEGRAM_LIVE_ONLY to settings.telegramNotifyLiveOnly
             )
 
             val workRequest = OneTimeWorkRequestBuilder<BatchValidationWorker>()
@@ -373,12 +549,18 @@ class ValidatorViewModel(
 
             activeWorkId = workRequest.id
 
+            val runningStatus = if (settings.validationMode.hasFixedDelay) {
+                "Worker running (${settings.validationMode.badgeLabel} • ${effectiveDelayMs / 1000L}s delay)..."
+            } else {
+                "Worker running (${settings.concurrency}x concurrent • ${effectiveDelayMs}ms delay)..."
+            }
+
             _localState.update {
                 it.copy(
                     isRunning = true,
                     processedCount = 0,
                     totalBatchCount = lines.size,
-                    statusBannerMessage = "Worker running (${settings.concurrency}x concurrent)..."
+                    statusBannerMessage = runningStatus
                 )
             }
 
@@ -483,6 +665,9 @@ class ValidatorViewModel(
                             dieRecords = newDie + prev.dieRecords,
                             unknownRecords = newUnknown + prev.unknownRecords
                         )
+                    }
+                    if (newLive.isNotEmpty()) {
+                        enrichLiveRecords(newLive)
                     }
                 }
             }
@@ -613,8 +798,10 @@ class ValidatorViewModel(
 
     fun saveSettings(
         validationMode: ValidationMode,
-        webhookUrl: String,
+        httpConfig: CustomHttpConfig,
+        telegramConfig: TelegramWebhookConfig,
         autoResolveWildcards: Boolean,
+        autoBinLookupForLive: Boolean,
         batchDelayMs: Long,
         concurrency: Int,
         patternTemplate: String,
@@ -625,21 +812,130 @@ class ValidatorViewModel(
         viewModelScope.launch {
             preferencesRepository.updateSettings(
                 validationMode = validationMode,
-                webhookUrl = webhookUrl,
+                webhookUrl = httpConfig.url,
+                httpMethod = httpConfig.method,
+                httpHeaders = httpConfig.headersText,
+                httpBodyTemplate = httpConfig.bodyTemplate,
+                httpTimeoutSeconds = httpConfig.timeoutSeconds,
+                httpMaxRetries = httpConfig.maxRetries,
+                httpLiveKeywords = httpConfig.liveKeywords,
+                httpDieKeywords = httpConfig.dieKeywords,
                 autoResolveWildcards = autoResolveWildcards,
+                autoBinLookupForLive = autoBinLookupForLive,
                 batchDelayMs = batchDelayMs,
                 concurrency = concurrency,
                 patternTemplate = patternTemplate,
                 generateQuantity = generateQuantity,
                 themeMode = themeMode,
-                useDynamicColor = useDynamicColor
+                useDynamicColor = useDynamicColor,
+                telegramWebhookEnabled = telegramConfig.enabled,
+                telegramChatId = telegramConfig.chatId,
+                telegramNotifyLiveOnly = telegramConfig.notifyLiveOnly
             )
+            val effectiveDelay = validationMode.resolveDelayMs(batchDelayMs)
+            val savedMsg = if (validationMode.hasFixedDelay) {
+                "Configuration saved (${validationMode.badgeLabel} • ${effectiveDelay / 1000L}s delay)"
+            } else {
+                "Configuration saved (${concurrency}x concurrency • ${effectiveDelay}ms delay)"
+            }
             _localState.update {
                 it.copy(
                     isSettingsOpen = false,
-                    statusBannerMessage = "Configuration saved (${concurrency}x worker concurrency)"
+                    httpProbeResult = null,
+                    telegramProbeResult = null,
+                    statusBannerMessage = savedMsg
                 )
             }
+        }
+    }
+
+    fun setValidationModeQuick(mode: ValidationMode) {
+        val s = uiState.value.settings
+        viewModelScope.launch {
+            preferencesRepository.updateSettings(
+                validationMode = mode,
+                webhookUrl = s.webhookUrl,
+                httpMethod = s.httpMethod,
+                httpHeaders = s.httpHeaders,
+                httpBodyTemplate = s.httpBodyTemplate,
+                httpTimeoutSeconds = s.httpTimeoutSeconds,
+                httpMaxRetries = s.httpMaxRetries,
+                httpLiveKeywords = s.httpLiveKeywords,
+                httpDieKeywords = s.httpDieKeywords,
+                autoResolveWildcards = s.autoResolveWildcards,
+                autoBinLookupForLive = s.autoBinLookupForLive,
+                batchDelayMs = s.batchDelayMs,
+                concurrency = s.concurrency,
+                patternTemplate = s.patternTemplate,
+                generateQuantity = s.generateQuantity,
+                themeMode = s.themeMode,
+                useDynamicColor = s.useDynamicColor,
+                telegramWebhookEnabled = s.telegramWebhookEnabled,
+                telegramChatId = s.telegramChatId,
+                telegramNotifyLiveOnly = s.telegramNotifyLiveOnly
+            )
+            val switchMsg = mode.fixedDelayMs?.let { fixedMs ->
+                "Engine switched to ${mode.badgeLabel} (${fixedMs / 1000L}s delay)"
+            } ?: "Engine switched to ${mode.badgeLabel} (${s.batchDelayMs}ms delay)"
+            _localState.update {
+                it.copy(statusBannerMessage = switchMsg)
+            }
+        }
+    }
+
+    fun setThemeModeQuick(themeMode: AppThemeMode) {
+        val s = uiState.value.settings
+        viewModelScope.launch {
+            preferencesRepository.updateSettings(
+                validationMode = s.validationMode,
+                webhookUrl = s.webhookUrl,
+                httpMethod = s.httpMethod,
+                httpHeaders = s.httpHeaders,
+                httpBodyTemplate = s.httpBodyTemplate,
+                httpTimeoutSeconds = s.httpTimeoutSeconds,
+                httpMaxRetries = s.httpMaxRetries,
+                httpLiveKeywords = s.httpLiveKeywords,
+                httpDieKeywords = s.httpDieKeywords,
+                autoResolveWildcards = s.autoResolveWildcards,
+                autoBinLookupForLive = s.autoBinLookupForLive,
+                batchDelayMs = s.batchDelayMs,
+                concurrency = s.concurrency,
+                patternTemplate = s.patternTemplate,
+                generateQuantity = s.generateQuantity,
+                themeMode = themeMode,
+                useDynamicColor = s.useDynamicColor,
+                telegramWebhookEnabled = s.telegramWebhookEnabled,
+                telegramChatId = s.telegramChatId,
+                telegramNotifyLiveOnly = s.telegramNotifyLiveOnly
+            )
+        }
+    }
+
+    fun setDynamicColorQuick(enabled: Boolean) {
+        val s = uiState.value.settings
+        viewModelScope.launch {
+            preferencesRepository.updateSettings(
+                validationMode = s.validationMode,
+                webhookUrl = s.webhookUrl,
+                httpMethod = s.httpMethod,
+                httpHeaders = s.httpHeaders,
+                httpBodyTemplate = s.httpBodyTemplate,
+                httpTimeoutSeconds = s.httpTimeoutSeconds,
+                httpMaxRetries = s.httpMaxRetries,
+                httpLiveKeywords = s.httpLiveKeywords,
+                httpDieKeywords = s.httpDieKeywords,
+                autoResolveWildcards = s.autoResolveWildcards,
+                autoBinLookupForLive = s.autoBinLookupForLive,
+                batchDelayMs = s.batchDelayMs,
+                concurrency = s.concurrency,
+                patternTemplate = s.patternTemplate,
+                generateQuantity = s.generateQuantity,
+                themeMode = s.themeMode,
+                useDynamicColor = enabled,
+                telegramWebhookEnabled = s.telegramWebhookEnabled,
+                telegramChatId = s.telegramChatId,
+                telegramNotifyLiveOnly = s.telegramNotifyLiveOnly
+            )
         }
     }
 

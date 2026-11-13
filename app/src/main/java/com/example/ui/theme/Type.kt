@@ -1,5 +1,6 @@
 package com.example.ui.theme
 
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -21,6 +22,7 @@ val InterFontFamily = FontFamily(
     Font(R.font.inter, FontWeight.Bold)
 )
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 val Typography = Typography(
     displaySmall = TextStyle(
         fontFamily = InterFontFamily,
@@ -33,7 +35,8 @@ val Typography = Typography(
         fontFamily = InterFontFamily,
         fontWeight = FontWeight.Bold,
         fontSize = 24.sp,
-        lineHeight = 32.sp
+        lineHeight = 32.sp,
+        letterSpacing = (-0.2).sp
     ),
     headlineSmall = TextStyle(
         fontFamily = InterFontFamily,
@@ -41,11 +44,25 @@ val Typography = Typography(
         fontSize = 20.sp,
         lineHeight = 28.sp
     ),
-    titleLarge = TextStyle(
+    headlineSmallEmphasized = TextStyle(
         fontFamily = InterFontFamily,
         fontWeight = FontWeight.Bold,
+        fontSize = 22.sp,
+        lineHeight = 28.sp,
+        letterSpacing = (-0.3).sp
+    ),
+    titleLarge = TextStyle(
+        fontFamily = InterFontFamily,
+        fontWeight = FontWeight.SemiBold,
         fontSize = 18.sp,
         lineHeight = 24.sp
+    ),
+    titleLargeEmphasized = TextStyle(
+        fontFamily = InterFontFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 20.sp,
+        lineHeight = 26.sp,
+        letterSpacing = (-0.25).sp
     ),
     titleMedium = TextStyle(
         fontFamily = InterFontFamily,
@@ -54,6 +71,13 @@ val Typography = Typography(
         lineHeight = 22.sp,
         letterSpacing = 0.1.sp
     ),
+    titleMediumEmphasized = TextStyle(
+        fontFamily = InterFontFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 16.5.sp,
+        lineHeight = 22.sp,
+        letterSpacing = (-0.1).sp
+    ),
     titleSmall = TextStyle(
         fontFamily = InterFontFamily,
         fontWeight = FontWeight.SemiBold,
@@ -61,12 +85,26 @@ val Typography = Typography(
         lineHeight = 20.sp,
         letterSpacing = 0.1.sp
     ),
+    titleSmallEmphasized = TextStyle(
+        fontFamily = InterFontFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 14.5.sp,
+        lineHeight = 20.sp,
+        letterSpacing = 0.sp
+    ),
     bodyLarge = TextStyle(
         fontFamily = InterFontFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 15.sp,
         lineHeight = 22.sp,
         letterSpacing = 0.15.sp
+    ),
+    bodyLargeEmphasized = TextStyle(
+        fontFamily = InterFontFamily,
+        fontWeight = FontWeight.Medium,
+        fontSize = 15.sp,
+        lineHeight = 22.sp,
+        letterSpacing = 0.1.sp
     ),
     bodyMedium = TextStyle(
         fontFamily = InterFontFamily,
@@ -88,6 +126,13 @@ val Typography = Typography(
         fontSize = 13.sp,
         lineHeight = 18.sp,
         letterSpacing = 0.1.sp
+    ),
+    labelLargeEmphasized = TextStyle(
+        fontFamily = InterFontFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.5.sp,
+        lineHeight = 18.sp,
+        letterSpacing = 0.05.sp
     ),
     labelMedium = TextStyle(
         fontFamily = JetBrainsMonoFamily,

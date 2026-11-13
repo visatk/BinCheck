@@ -2,11 +2,15 @@ package com.example
 
 import com.example.domain.CardScheme
 import com.example.domain.CardValidatorEngine
+import com.example.domain.CustomHttpClient
+import com.example.domain.CustomHttpConfig
 import com.example.domain.FileTextExtractor
+import com.example.domain.HttpRequestMethod
 import com.example.domain.ResultBucket
 import com.example.domain.SupportedFileType
 import com.example.domain.ValidationMode
 import kotlinx.coroutines.test.runTest
+import okio.Buffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -126,5 +130,132 @@ class ExampleUnitTest {
         )
         assertEquals("08", paddedRecord.month)
         assertTrue(paddedRecord.normalizedLine.contains("|08|2028|113"))
+    }
+
+    @Test
+    fun customHttpClient_buildsGetJsonAndFormRequestsWithCustomHeaders() {
+        val getConfig = CustomHttpConfig(
+            url = "https://api.example.com/check?lista={lista}&yy={yy}",
+            method = HttpRequestMethod.GET,
+            headersText = "# auth header\nAuthorization: Bearer secret-123\nX-Scheme: {scheme}"
+        )
+        val getRequest = CustomHttpClient.buildRequest(
+            normalizedLine = "4532250055360003|08|2028|113",
+            pan = "4532250055360003",
+            mm = "08",
+            yyyy = "2028",
+            cvv = "113",
+            scheme = CardScheme.VISA,
+            config = getConfig
+        )
+        assertEquals("GET", getRequest?.method)
+        assertTrue(getRequest?.url.toString().contains("yy=28"))
+        assertTrue(getRequest?.url.toString().contains("4532250055360003%7C08%7C2028%7C113"))
+        assertEquals("Bearer secret-123", getRequest?.header("Authorization"))
+        assertEquals("VISA", getRequest?.header("X-Scheme"))
+
+        val jsonConfig = CustomHttpConfig(
+            url = "https://api.example.com/v2/verify",
+            method = HttpRequestMethod.POST_JSON,
+            bodyTemplate = """{"pan":"{card}","exp":"{mm}/{yy}","cvv":"{cvv}"}"""
+        )
+        val jsonRequest = CustomHttpClient.buildRequest(
+            normalizedLine = "4532250055360003|08|2028|113",
+            pan = "4532250055360003",
+            mm = "08",
+            yyyy = "2028",
+            cvv = "113",
+            scheme = CardScheme.VISA,
+            config = jsonConfig
+        )
+        val jsonBuffer = Buffer()
+        jsonRequest?.body?.writeTo(jsonBuffer)
+        assertEquals("""{"pan":"4532250055360003","exp":"08/28","cvv":"113"}""", jsonBuffer.readUtf8())
+
+        val formConfig = CustomHttpConfig(
+            url = "https://api.example.com/form",
+            method = HttpRequestMethod.POST_FORM
+        )
+        val formRequest = CustomHttpClient.buildRequest(
+            normalizedLine = "4532250055360003|08|2028|113",
+            pan = "4532250055360003",
+            mm = "08",
+            yyyy = "2028",
+            cvv = "113",
+            scheme = CardScheme.VISA,
+            config = formConfig
+        )
+        val formBuffer = Buffer()
+        formRequest?.body?.writeTo(formBuffer)
+        assertTrue(formBuffer.readUtf8().contains("number=4532250055360003"))
+    }
+
+    @Test
+    fun customHttpClient_classifiesCustomKeywordsAndNegatedStatusSafely() {
+        val config = CustomHttpConfig(
+            liveKeywords = "approved,charged,custom_ok",
+            dieKeywords = "declined,insufficient,custom_fail"
+        )
+
+        assertEquals(
+            ResultBucket.LIVE,
+            CustomHttpClient.classifyResponse(200, """{"status":"custom_ok"}""", config).first
+        )
+        assertEquals(
+            ResultBucket.DIE,
+            CustomHttpClient.classifyResponse(200, """{"status":"not approved"}""", config).first
+        )
+        assertEquals(
+            ResultBucket.DIE,
+            CustomHttpClient.classifyResponse(200, "Card is NOT approved due to insufficient funds", config).first
+        )
+        assertEquals(
+            ResultBucket.UNKNOWN,
+            CustomHttpClient.classifyResponse(503, "Service Unavailable", config).first
+        )
+    }
+
+    @Test
+    fun validationMode_enforcesFixedDelaysAndAllowsCustomDelaysForOthers() {
+        assertTrue(ValidationMode.CHKR_CC.hasFixedDelay)
+        assertTrue(ValidationMode.PAYATE_MOCK.hasFixedDelay)
+        assertTrue(ValidationMode.MULTI_API_AUTO.hasFixedDelay)
+        assertFalse(ValidationMode.LOCAL_DETERMINISTIC.hasFixedDelay)
+        assertFalse(ValidationMode.REMOTE_WEBHOOK.hasFixedDelay)
+
+        assertEquals(10_000L, ValidationMode.CHKR_CC.resolveDelayMs(0L))
+        assertEquals(10_000L, ValidationMode.CHKR_CC.resolveDelayMs(250L))
+        assertEquals(3_000L, ValidationMode.PAYATE_MOCK.resolveDelayMs(55L))
+        assertEquals(5_000L, ValidationMode.MULTI_API_AUTO.resolveDelayMs(1_500L))
+
+        assertEquals(750L, ValidationMode.LOCAL_DETERMINISTIC.resolveDelayMs(750L))
+        assertEquals(8_000L, ValidationMode.REMOTE_WEBHOOK.resolveDelayMs(8_000L))
+        assertEquals(ValidationMode.MAX_CUSTOM_DELAY_MS, ValidationMode.REMOTE_WEBHOOK.resolveDelayMs(99_000L))
+    }
+
+    @Test
+    fun customHttpClient_supportsPayloadAutoPostAndBinToken() {
+        val autoPayloadConfig = CustomHttpConfig(
+            url = "https://api.example.com/verify?bin={bin}",
+            method = HttpRequestMethod.AUTO,
+            bodyTemplate = CustomHttpConfig.DEFAULT_JSON_PAYLOAD
+        )
+        val req = CustomHttpClient.buildRequest(
+            normalizedLine = "4532250055360003|08|2028|113",
+            pan = "4532250055360003",
+            mm = "08",
+            yyyy = "2028",
+            cvv = "113",
+            scheme = CardScheme.VISA,
+            config = autoPayloadConfig
+        )
+        assertEquals("POST", req?.method)
+        assertTrue(req?.url.toString().contains("bin=453225"))
+        val buf = Buffer()
+        req?.body?.writeTo(buf)
+        val bodyStr = buf.readUtf8()
+        assertTrue(bodyStr.contains("\"bin\":\"453225\""))
+        assertTrue(bodyStr.contains("\"lista\":\"4532250055360003|08|2028|113\""))
+        assertTrue(bodyStr.contains("\"scheme\":\"VISA\""))
     }
 }

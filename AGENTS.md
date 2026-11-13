@@ -34,13 +34,16 @@
    - **Live**: Passes Luhn Mod-10 checksum, valid network IIN/BIN prefix & length (Visa, Mastercard, Amex, Discover, JCB, Diners, UnionPay, Maestro), non-expired `MM|YYYY` date against current system clock, and network-accurate CVV length.
    - **Die**: Fails Luhn checksum, invalid PAN length for network, expired `MM|YYYY`, or invalid CVV digits.
    - **Unknown**: Incomplete format, unexpanded wildcard in strict mode, or HTTP timeout/unreachable in Webhook mode.
-3. **Optional Custom HTTP Endpoint Mode**:
-   - Uses `OkHttpClient` to send real HTTP requests (`POST` JSON or `GET` query) to a user-configured endpoint URL.
-4. **Concurrent Batch Worker (`BatchValidationWorker`)**:
-   - Uses `WorkManager` (`CoroutineWorker`) with bounded `Semaphore` concurrency (`1x`–`8x`, configurable in Settings) and `async`/`awaitAll` to validate uploaded `.txt`/`.html` or console entries simultaneously against the configured HTTP Webhook/API endpoint or local engine, streaming progress via `setProgress`.
-5. **Local Persistence (`DataStore` + `Room` SQLite)**:
-   - Uses Jetpack `DataStore` (`preferences`) to persist validation settings, concurrency, custom endpoint configuration, batch delay, and pattern templates.
+3. **Multiple Validation APIs & Custom HTTP Payload Builder**:
+   - **External APIs with Enforced Rate-Limit Delays**: `Chkr.cc` (`10s` fixed delay), `Payate` (`3s` fixed delay), and `Multi-API Failover` (`5s` fixed delay) run sequentially (`1x`) to respect endpoint rate limits; `LUHN` and `Custom HTTP` support user-configurable delays (`0ms`–`10s` UI slider/presets) and `1x`–`8x` concurrency.
+   - **Custom HTTP Payload Templates**: Supports one-tap `JSON Card`, `Lista JSON`, and `Form Body` presets plus `{lista}`, `{card}`, `{mm}`, `{yy}`, `{yyyy}`, `{cvv}`, `{scheme}`, and `{bin}` substitution in URL, headers, and request body (`HttpRequestMethod.AUTO` automatically selects `POST_JSON` when a payload template is present).
+4. **Telegram Bot Webhook (`TelegramWebhookClient` + `TelegramWebhookSectionCard`)**:
+   - Sends Live-only or All-checked validation alerts via the Telegram Bot API (`/sendMessage`) using `BuildConfig.TELEGRAM_BOT_TOKEN` injected from AI Studio **Secrets** (never hardcoded), with `/getMe` + `/getUpdates` Chat ID auto-detection and one-tap test alert verification.
+5. **Concurrent Batch Worker (`BatchValidationWorker`)**:
+   - Uses `WorkManager` (`CoroutineWorker`) with bounded `Semaphore` concurrency (`1x`–`8x`, configurable in Settings) and `async`/`awaitAll` to validate uploaded `.txt`/`.html` or console entries simultaneously against the configured API/engine and dispatch Telegram webhook alerts, streaming progress via `setProgress`.
+6. **Local Persistence (`DataStore` + `Room` SQLite)**:
+   - Uses Jetpack `DataStore` (`preferences`) to persist validation settings, concurrency, custom HTTP payload configuration, Telegram webhook Chat ID & filters, batch delay, and pattern templates.
    - Uses `Room` (`AppDatabase`, `ValidationHistoryDao`, `ValidationHistoryRepository`) to queue large batches safely and persist a local **Validation History Log** viewable and filterable by `All`, `Success`, and `Failure` status (`HistoryLogBottomSheet.kt`).
-6. **CI/CD & GitHub Release Automation (`.github/workflows/release.yml`)**:
+7. **CI/CD & GitHub Release Automation (`.github/workflows/release.yml`)**:
    - Triggers automatically on version tags (`v*`) or manually via `workflow_dispatch`.
    - Sets up JDK 21, Android SDK, and Gradle 9.3.1, prepares signing keystores (supporting repository secrets `KEYSTORE_BASE64`, `STORE_PASSWORD`, `KEY_PASSWORD` with automatic fallback generation), runs unit tests, builds signed release APK & AAB artifacts with `SHA256SUMS.txt`, and publishes directly to GitHub Releases.

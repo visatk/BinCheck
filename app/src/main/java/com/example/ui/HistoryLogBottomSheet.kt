@@ -33,11 +33,13 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -45,6 +47,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -64,7 +67,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    ExperimentalLayoutApi::class,
+    ExperimentalMaterial3ExpressiveApi::class
+)
 @Composable
 fun HistoryLogBottomSheet(
     entries: List<ValidationHistoryEntity>,
@@ -107,25 +114,25 @@ fun HistoryLogBottomSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Surface(
-                        shape = MaterialTheme.shapes.small,
+                        shape = MaterialShapes.Cookie7Sided.toShape(),
                         color = colorScheme.secondaryContainer,
                         border = BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.35f)),
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(40.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Outlined.History,
                                 contentDescription = null,
                                 tint = colorScheme.onSecondaryContainer,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(19.dp)
                             )
                         }
                     }
-                    Spacer(modifier = Modifier.width(10.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
                             text = stringResource(R.string.history_log_title),
-                            style = MaterialTheme.typography.titleLarge,
+                            style = MaterialTheme.typography.titleLargeEmphasized,
                             color = colorScheme.onSurface
                         )
                         Text(
@@ -257,31 +264,50 @@ fun HistoryLogBottomSheet(
 
             if (entries.isEmpty()) {
                 Surface(
-                    shape = MaterialTheme.shapes.medium,
+                    shape = MaterialTheme.shapes.large,
                     color = colorScheme.surfaceContainerLowest,
                     border = BorderStroke(1.dp, colorScheme.outlineVariant),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(160.dp)
+                        .heightIn(min = 188.dp)
                 ) {
                     Box(
-                        modifier = Modifier.padding(16.dp),
+                        modifier = Modifier.padding(20.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                imageVector = Icons.Outlined.History,
-                                contentDescription = null,
-                                tint = colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
-                                modifier = Modifier.size(28.dp)
+                            Surface(
+                                shape = MaterialShapes.Clover4Leaf.toShape(),
+                                color = colorScheme.secondaryContainer.copy(alpha = 0.8f),
+                                modifier = Modifier.size(54.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.History,
+                                        contentDescription = null,
+                                        tint = colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.size(26.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = when {
+                                    searchQuery.isNotBlank() -> "No matches found"
+                                    activeFilter == HistoryFilter.SUCCESS -> "No successful runs yet"
+                                    activeFilter == HistoryFilter.FAILURE -> "No failed runs yet"
+                                    else -> "History log is empty"
+                                },
+                                style = MaterialTheme.typography.titleSmallEmphasized,
+                                color = colorScheme.onSurface
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = when {
                                     searchQuery.isNotBlank() -> "No history entries match \"$searchQuery\""
                                     activeFilter == HistoryFilter.SUCCESS -> "No successful validation records saved yet"
                                     activeFilter == HistoryFilter.FAILURE -> "No failed validation records saved yet"
-                                    else -> "No validation history logged yet — run a batch to record results"
+                                    else -> "Run any batch in Luhn, Multi-API, or Webhook mode to audit results here."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = colorScheme.onSurfaceVariant
@@ -298,7 +324,8 @@ fun HistoryLogBottomSheet(
                 ) {
                     items(
                         items = entries,
-                        key = { it.id }
+                        key = { it.id },
+                        contentType = { it.status }
                     ) { entry ->
                         HistoryEntryRow(
                             entry = entry,

@@ -5,25 +5,23 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -31,59 +29,70 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.UploadFile
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularWavyProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SplitButtonDefaults
+import androidx.compose.material3.SplitButtonLayout
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.VerticalDivider
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.domain.ValidationMode
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalConsoleColors
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun ConsoleInputCard(
     uiState: ValidatorUiState,
@@ -98,22 +107,35 @@ fun ConsoleInputCard(
     onPasteOrFill: () -> Unit,
     onClearInput: () -> Unit,
     onClearBanner: () -> Unit,
+    onQuickSwitchMode: (ValidationMode) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val consoleColors = LocalConsoleColors.current
+    val haptics = LocalHapticFeedback.current
+    var engineMenuExpanded by remember { mutableStateOf(false) }
+
+    val cardBorderColor by animateColorAsState(
+        targetValue = if (uiState.isRunning) {
+            consoleColors.liveAccent.copy(alpha = 0.7f)
+        } else {
+            colorScheme.outlineVariant.copy(alpha = 0.8f)
+        },
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "console_card_border"
+    )
 
     ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
             .border(
-                width = 1.dp,
-                color = colorScheme.outlineVariant.copy(alpha = 0.85f),
-                shape = MaterialTheme.shapes.medium
+                width = if (uiState.isRunning) 1.5.dp else 1.dp,
+                color = cardBorderColor,
+                shape = MaterialTheme.shapes.large
             ),
-        shape = MaterialTheme.shapes.medium,
+        shape = MaterialTheme.shapes.large,
         colors = CardDefaults.elevatedCardColors(
-            containerColor = colorScheme.surfaceContainerLow
+            containerColor = colorScheme.surfaceContainer
         ),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 4.dp)
     ) {
@@ -126,7 +148,7 @@ fun ConsoleInputCard(
             val isInputFocused by inputInteractionSource.collectIsFocusedAsState()
             val outerBorderColor by animateColorAsState(
                 targetValue = if (isInputFocused) {
-                    colorScheme.primary.copy(alpha = 0.78f)
+                    colorScheme.primary.copy(alpha = 0.85f)
                 } else {
                     colorScheme.outlineVariant
                 },
@@ -142,13 +164,13 @@ fun ConsoleInputCard(
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .heightIn(min = 150.dp)
+                    .heightIn(min = 140.dp)
             }
 
-            // Recessed IDE Console Editor using M3 surfaceContainerLowest
+            // High-Performance Recessed IDE Console Editor (single gutter Text node, zero IntrinsicSize double-pass)
             Surface(
                 modifier = consoleBoxModifier,
-                shape = MaterialTheme.shapes.small,
+                shape = MaterialTheme.shapes.medium,
                 color = colorScheme.surfaceContainerLowest,
                 border = BorderStroke(
                     width = if (isInputFocused) 1.5.dp else 1.dp,
@@ -158,43 +180,46 @@ fun ConsoleInputCard(
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     val editorScrollState = rememberScrollState()
+                    val displayLineCount = remember(uiState.rawInputText) {
+                        uiState.rawInputText.count { it == '\n' }.plus(1).coerceIn(1, 500)
+                    }
+                    val lineNumbersText = remember(displayLineCount) {
+                        buildString(displayLineCount * 4) {
+                            for (i in 1..displayLineCount) {
+                                if (i > 1) append('\n')
+                                if (i < 10) append('0')
+                                append(i)
+                            }
+                        }
+                    }
+
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
+                            .verticalScroll(editorScrollState)
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 120.dp)
-                                .height(IntrinsicSize.Min)
-                                .verticalScroll(editorScrollState)
                         ) {
-                            val displayLineCount = remember(uiState.rawInputText) {
-                                uiState.rawInputText.lines().size.coerceIn(1, 500)
-                            }
-                            Column(
+                            Box(
                                 modifier = Modifier
-                                    .fillMaxHeight()
+                                    .widthIn(min = 34.dp)
                                     .background(colorScheme.surfaceContainer)
-                                    .padding(horizontal = 9.dp, vertical = 12.dp),
-                                horizontalAlignment = Alignment.End
+                                    .padding(horizontal = 8.dp, vertical = 12.dp),
+                                contentAlignment = Alignment.TopEnd
                             ) {
-                                for (lineNum in 1..displayLineCount) {
-                                    Text(
-                                        text = lineNum.toString().padStart(2, '0'),
-                                        fontFamily = JetBrainsMonoFamily,
-                                        fontSize = 11.sp,
-                                        lineHeight = 20.sp,
-                                        color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                                    )
-                                }
+                                Text(
+                                    text = lineNumbersText,
+                                    fontFamily = JetBrainsMonoFamily,
+                                    fontSize = 11.sp,
+                                    lineHeight = 20.sp,
+                                    textAlign = TextAlign.End,
+                                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.58f)
+                                )
                             }
-
-                            VerticalDivider(
-                                thickness = 1.dp,
-                                color = colorScheme.outlineVariant.copy(alpha = 0.65f)
-                            )
 
                             BasicTextField(
                                 value = uiState.rawInputText,
@@ -202,7 +227,7 @@ fun ConsoleInputCard(
                                 interactionSource = inputInteractionSource,
                                 modifier = Modifier
                                     .weight(1f)
-                                    .fillMaxHeight()
+                                    .heightIn(min = 120.dp)
                                     .padding(horizontal = 12.dp, vertical = 12.dp)
                                     .testTag("card_batch_input"),
                                 textStyle = TextStyle(
@@ -215,7 +240,7 @@ fun ConsoleInputCard(
                                 ),
                                 cursorBrush = SolidColor(colorScheme.primary),
                                 decorationBox = { innerTextField ->
-                                    Box(modifier = Modifier.fillMaxSize()) {
+                                    Box(modifier = Modifier.fillMaxWidth()) {
                                         if (uiState.rawInputText.isEmpty()) {
                                             Text(
                                                 text = stringResource(R.string.input_placeholder),
@@ -224,7 +249,7 @@ fun ConsoleInputCard(
                                                 fontSize = 13.sp,
                                                 lineHeight = 20.sp,
                                                 letterSpacing = 0.5.sp,
-                                                color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                                color = colorScheme.onSurfaceVariant.copy(alpha = 0.58f)
                                             )
                                         }
                                         innerTextField()
@@ -236,13 +261,13 @@ fun ConsoleInputCard(
 
                     HorizontalDivider(
                         thickness = 1.dp,
-                        color = colorScheme.outlineVariant.copy(alpha = 0.7f)
+                        color = colorScheme.outlineVariant.copy(alpha = 0.65f)
                     )
 
                     FlowRow(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(colorScheme.surfaceContainer.copy(alpha = 0.85f))
+                            .background(colorScheme.surfaceContainer.copy(alpha = 0.9f))
                             .padding(horizontal = 10.dp, vertical = 7.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -304,7 +329,7 @@ fun ConsoleInputCard(
                                 ConsoleMiniActionPill(
                                     label = "Clear",
                                     icon = Icons.Outlined.DeleteOutline,
-                                    containerColor = colorScheme.errorContainer.copy(alpha = 0.7f),
+                                    containerColor = colorScheme.errorContainer.copy(alpha = 0.78f),
                                     contentColor = colorScheme.onErrorContainer,
                                     onClick = onClearInput,
                                     testTag = "clear_console_button"
@@ -315,162 +340,244 @@ fun ConsoleInputCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Stacked Dual M3 Action Bars (Play/Stop & Settings)
-            Surface(
+            // Material 3 Expressive SplitButton + Settings Studio Trigger
+            val playDescription = if (uiState.isRunning) {
+                stringResource(R.string.action_stop_validation)
+            } else {
+                stringResource(R.string.action_start_validation)
+            }
+            val splitLeadingColors = if (uiState.isRunning) {
+                ButtonDefaults.buttonColors(
+                    containerColor = colorScheme.errorContainer,
+                    contentColor = colorScheme.onErrorContainer
+                )
+            } else {
+                ButtonDefaults.buttonColors(
+                    containerColor = colorScheme.primary,
+                    contentColor = colorScheme.onPrimary
+                )
+            }
+            val chevronRotation by animateFloatAsState(
+                targetValue = if (engineMenuExpanded) 180f else 0f,
+                animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                label = "split_chevron_rotation"
+            )
+
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                shape = MaterialTheme.shapes.small,
-                color = colorScheme.surfaceContainerHigh,
-                border = BorderStroke(1.dp, colorScheme.outlineVariant),
-                shadowElevation = 2.dp
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    val playInteraction = remember { MutableInteractionSource() }
-                    val isPlayPressed by playInteraction.collectIsPressedAsState()
-                    val playScale by animateFloatAsState(
-                        targetValue = if (isPlayPressed) 0.97f else 1f,
-                        animationSpec = spring(stiffness = Spring.StiffnessMedium),
-                        label = "play_scale"
-                    )
-                    val playDescription = if (uiState.isRunning) {
-                        stringResource(R.string.action_stop_validation)
-                    } else {
-                        stringResource(R.string.action_start_validation)
-                    }
-                    val playAccent = if (uiState.isRunning) consoleColors.liveAccent else colorScheme.primary
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .minimumInteractiveComponentSize()
-                            .background(
-                                if (uiState.isRunning) {
-                                    colorScheme.primaryContainer.copy(alpha = 0.45f)
-                                } else {
-                                    Color.Transparent
-                                }
-                            )
-                            .clickable(
-                                interactionSource = playInteraction,
-                                indication = androidx.compose.material3.ripple(color = playAccent),
-                                onClick = onToggleRun
-                            )
-                            .semantics { contentDescription = playDescription }
-                            .testTag("play_validation_button"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(
-                            modifier = Modifier.scale(playScale),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    SplitButtonLayout(
+                        leadingButton = {
+                            SplitButtonDefaults.LeadingButton(
+                                onClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onToggleRun()
+                                },
+                                colors = splitLeadingColors,
+                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
                                 modifier = Modifier
-                                    .size(30.dp)
-                                    .drawBehind {
-                                        drawCircle(
-                                            color = playAccent.copy(alpha = 0.16f),
-                                            radius = size.minDimension * 0.52f
-                                        )
-                                    }
+                                    .height(50.dp)
+                                    .widthIn(min = 190.dp)
+                                    .semantics { contentDescription = playDescription }
+                                    .testTag("play_validation_button")
                             ) {
-                                OutlinedPlayOrStopGlyph(
-                                    isRunning = uiState.isRunning,
-                                    color = playAccent,
-                                    modifier = Modifier.size(17.dp)
-                                )
-                            }
-                            if (uiState.isRunning && uiState.totalBatchCount > 0) {
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "${uiState.processedCount}/${uiState.totalBatchCount}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = playAccent
-                                )
-                            }
-                        }
-
-                        if (uiState.isRunning && uiState.totalBatchCount > 0) {
-                            val progress = (uiState.processedCount.toFloat() / uiState.totalBatchCount.toFloat())
-                                .coerceIn(0f, 1f)
-                            LinearProgressIndicator(
-                                progress = { progress },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(2.5.dp)
-                                    .align(Alignment.BottomCenter),
-                                color = playAccent,
-                                trackColor = colorScheme.surfaceVariant
-                            )
-                        }
-                    }
-
-                    HorizontalDivider(
-                        thickness = 1.dp,
-                        color = colorScheme.outlineVariant.copy(alpha = 0.85f)
-                    )
-
-                    val gearInteraction = remember { MutableInteractionSource() }
-                    val isGearPressed by gearInteraction.collectIsPressedAsState()
-                    val gearScale by animateFloatAsState(
-                        targetValue = if (isGearPressed) 0.97f else 1f,
-                        animationSpec = spring(stiffness = Spring.StiffnessMedium),
-                        label = "gear_scale"
-                    )
-                    val settingsDescription = stringResource(R.string.action_open_settings)
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .minimumInteractiveComponentSize()
-                            .clickable(
-                                interactionSource = gearInteraction,
-                                indication = androidx.compose.material3.ripple(color = colorScheme.secondary),
-                                onClick = onOpenSettings
-                            )
-                            .semantics { contentDescription = settingsDescription }
-                            .testTag("settings_button"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .scale(gearScale)
-                                .size(30.dp)
-                                .drawBehind {
-                                    drawCircle(
-                                        color = colorScheme.secondary.copy(alpha = 0.16f),
-                                        radius = size.minDimension * 0.52f
+                                if (uiState.isRunning) {
+                                    CircularWavyProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        color = colorScheme.onErrorContainer
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Icon(
+                                        imageVector = Icons.Outlined.Stop,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (uiState.totalBatchCount > 0) {
+                                            "Stop (${uiState.processedCount}/${uiState.totalBatchCount})"
+                                        } else {
+                                            "Stop Batch"
+                                        },
+                                        style = MaterialTheme.typography.labelLargeEmphasized,
+                                        maxLines = 1
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Outlined.PlayArrow,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(21.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (uiState.inputLineCount > 0) {
+                                            "Validate (${uiState.inputLineCount}) • ${uiState.settings.validationMode.badgeLabel}"
+                                        } else {
+                                            "Validate • ${uiState.settings.validationMode.badgeLabel}"
+                                        },
+                                        style = MaterialTheme.typography.labelLargeEmphasized,
+                                        maxLines = 1
                                     )
                                 }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Settings,
-                                contentDescription = null,
-                                tint = colorScheme.secondary,
-                                modifier = Modifier.size(19.dp)
+                            }
+                        },
+                        trailingButton = {
+                            SplitButtonDefaults.TrailingButton(
+                                checked = engineMenuExpanded,
+                                onCheckedChange = { engineMenuExpanded = it },
+                                colors = splitLeadingColors,
+                                modifier = Modifier
+                                    .height(50.dp)
+                                    .testTag("engine_split_dropdown_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.KeyboardArrowDown,
+                                    contentDescription = "Switch validation engine",
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .graphicsLayer { rotationZ = chevronRotation }
+                                )
+                            }
+                        }
+                    )
+
+                    DropdownMenu(
+                        expanded = engineMenuExpanded,
+                        onDismissRequest = { engineMenuExpanded = false }
+                    ) {
+                        ValidationMode.entries.forEach { mode ->
+                            val isSelected = uiState.settings.validationMode == mode
+                            val delayBadge = mode.fixedDelayMs?.let { "${it / 1000L}s delay" } ?: "Custom"
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = mode.badgeLabel,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                },
+                                leadingIcon = {
+                                    if (isSelected) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Check,
+                                            contentDescription = null,
+                                            tint = colorScheme.primary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                },
+                                trailingIcon = {
+                                    Text(
+                                        text = delayBadge,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isSelected) colorScheme.primary else colorScheme.onSurfaceVariant
+                                    )
+                                },
+                                onClick = {
+                                    engineMenuExpanded = false
+                                    onQuickSwitchMode(mode)
+                                }
                             )
                         }
+                    }
+                }
+
+                val settingsDescription = stringResource(R.string.action_open_settings)
+                FilledTonalIconButton(
+                    onClick = onOpenSettings,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = colorScheme.secondaryContainer,
+                        contentColor = colorScheme.onSecondaryContainer
+                    ),
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .semantics { contentDescription = settingsDescription }
+                        .testTag("settings_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Settings,
+                        contentDescription = settingsDescription,
+                        modifier = Modifier.size(21.dp)
+                    )
+                }
+            }
+
+            // Expressive Wavy Determinate / Indeterminate Batch Progress Bar
+            AnimatedVisibility(
+                visible = uiState.isRunning,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Column(modifier = Modifier.padding(top = 12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val workerPacingLabel = uiState.settings.validationMode.fixedDelayMs?.let { fixedMs ->
+                            "${uiState.settings.validationMode.badgeLabel} Worker (${fixedMs / 1000L}s delay)"
+                        } ?: "${uiState.settings.validationMode.badgeLabel} Worker (${uiState.settings.concurrency}x)"
+                        Text(
+                            text = workerPacingLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = consoleColors.liveAccent
+                        )
+                        Text(
+                            text = if (uiState.totalBatchCount > 0) {
+                                val pct = ((uiState.processedCount * 100f) / uiState.totalBatchCount).toInt().coerceIn(0, 100)
+                                "${uiState.processedCount}/${uiState.totalBatchCount} ($pct%)"
+                            } else {
+                                "Preparing..."
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = JetBrainsMonoFamily,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    if (uiState.totalBatchCount > 0) {
+                        val progress = (uiState.processedCount.toFloat() / uiState.totalBatchCount.toFloat())
+                            .coerceIn(0f, 1f)
+                        LinearWavyProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("batch_wavy_progress_indicator"),
+                            color = consoleColors.liveAccent,
+                            trackColor = colorScheme.surfaceContainerHighest
+                        )
+                    } else {
+                        LinearWavyProgressIndicator(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("batch_wavy_progress_indicator"),
+                            color = consoleColors.liveAccent,
+                            trackColor = colorScheme.surfaceContainerHighest
+                        )
                     }
                 }
             }
 
             AnimatedVisibility(
                 visible = uiState.statusBannerMessage != null,
-                enter = fadeIn(),
-                exit = fadeOut()
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
             ) {
                 val msg = uiState.statusBannerMessage.orEmpty()
                 if (msg.isNotEmpty()) {
                     Surface(
                         onClick = onClearBanner,
                         shape = MaterialTheme.shapes.small,
-                        color = colorScheme.secondaryContainer.copy(alpha = 0.5f),
+                        color = colorScheme.secondaryContainer.copy(alpha = 0.55f),
                         border = BorderStroke(1.dp, colorScheme.outlineVariant),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -513,15 +620,15 @@ private fun ConsoleMiniActionPill(
 ) {
     Surface(
         onClick = onClick,
-        shape = MaterialTheme.shapes.extraSmall,
+        shape = CircleShape,
         color = containerColor,
         border = BorderStroke(1.dp, contentColor.copy(alpha = 0.25f)),
         modifier = Modifier
-            .clip(MaterialTheme.shapes.extraSmall)
+            .clip(CircleShape)
             .testTag(testTag)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
@@ -536,50 +643,6 @@ private fun ConsoleMiniActionPill(
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = contentColor
-            )
-        }
-    }
-}
-
-@Composable
-private fun OutlinedPlayOrStopGlyph(
-    isRunning: Boolean,
-    color: Color,
-    modifier: Modifier = Modifier
-) {
-    Canvas(modifier = modifier) {
-        val strokeWidth = 1.9.dp.toPx()
-        if (isRunning) {
-            val side = size.minDimension * 0.68f
-            val offset = (size.minDimension - side) / 2f
-            drawRoundRect(
-                color = color,
-                topLeft = Offset(offset, offset),
-                size = Size(side, side),
-                cornerRadius = CornerRadius(2.5.dp.toPx(), 2.5.dp.toPx()),
-                style = Stroke(width = strokeWidth)
-            )
-        } else {
-            val path = Path().apply {
-                val leftX = size.width * 0.22f
-                val rightX = size.width * 0.84f
-                val topY = size.height * 0.14f
-                val bottomY = size.height * 0.86f
-                val midY = size.height * 0.50f
-
-                moveTo(leftX, topY)
-                lineTo(rightX, midY)
-                lineTo(leftX, bottomY)
-                close()
-            }
-            drawPath(
-                path = path,
-                color = color,
-                style = Stroke(
-                    width = strokeWidth,
-                    cap = StrokeCap.Round,
-                    join = StrokeJoin.Round
-                )
             )
         }
     }
