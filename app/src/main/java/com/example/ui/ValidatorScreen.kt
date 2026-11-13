@@ -52,14 +52,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -211,36 +207,11 @@ fun ValidatorScreen(
                 scope.launch { drawerState.close() }
             }
         ) {
-            val topBg = colorScheme.background
-            val bottomBg = colorScheme.surfaceContainerLowest
-            val primaryGlow = colorScheme.primary.copy(alpha = 0.08f)
-            val secondaryGlow = colorScheme.tertiary.copy(alpha = 0.065f)
-
             Scaffold(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Brush.verticalGradient(colors = listOf(topBg, bottomBg)))
-                    .drawBehind {
-                        drawCircle(
-                            brush = Brush.radialGradient(
-                                colors = listOf(primaryGlow, Color.Transparent),
-                                center = Offset(size.width * 0.25f, size.height * 0.18f),
-                                radius = size.minDimension * 0.68f
-                            ),
-                            center = Offset(size.width * 0.25f, size.height * 0.18f),
-                            radius = size.minDimension * 0.68f
-                        )
-                        drawCircle(
-                            brush = Brush.radialGradient(
-                                colors = listOf(secondaryGlow, Color.Transparent),
-                                center = Offset(size.width * 0.78f, size.height * 0.58f),
-                                radius = size.minDimension * 0.68f
-                            ),
-                            center = Offset(size.width * 0.78f, size.height * 0.58f),
-                            radius = size.minDimension * 0.68f
-                        )
-                    },
-                containerColor = Color.Transparent,
+                    .background(colorScheme.background),
+                containerColor = colorScheme.background,
                 contentWindowInsets = WindowInsets.safeDrawing,
                 snackbarHost = {
                     SnackbarHost(hostState = snackbarHostState) { data ->
@@ -278,19 +249,64 @@ fun ValidatorScreen(
 
                     HorizontalDivider(
                         modifier = Modifier.fillMaxWidth(),
-                        thickness = 1.dp,
-                        color = colorScheme.outlineVariant.copy(alpha = 0.55f)
+                        thickness = 0.5.dp,
+                        color = colorScheme.outlineVariant.copy(alpha = 0.45f)
                     )
 
                     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                         val isTwoPaneLayout = maxWidth >= 700.dp && maxHeight >= 360.dp
                         val horizontalPadding = when {
                             maxWidth < 380.dp -> 12.dp
-                            maxWidth < 600.dp -> 18.dp
-                            else -> 24.dp
+                            maxWidth < 600.dp -> 16.dp
+                            else -> 22.dp
                         }
-                        val innerCardPadding = if (maxWidth < 380.dp) 14.dp else 18.dp
+                        val innerCardPadding = if (maxWidth < 380.dp) 12.dp else 16.dp
                         val (binDigits, scheme) = detectedPreviewInfo
+
+                        val renderConsole: @Composable (Dp?, Modifier) -> Unit = { height, cardModifier ->
+                            ConsoleInputCard(
+                                uiState = uiState,
+                                consoleHeight = height,
+                                cardPadding = innerCardPadding,
+                                onInputChanged = viewModel::onInputTextChanged,
+                                onToggleRun = viewModel::toggleValidationRun,
+                                onOpenSettings = viewModel::openSettings,
+                                onOpenFileImport = viewModel::openFileImport,
+                                onQuickGen10x = {
+                                    val patternToUse = uiState.rawInputText.lines()
+                                        .firstOrNull { it.isNotBlank() }
+                                        ?: uiState.settings.patternTemplate
+                                    viewModel.generateBatchIntoConsole(patternToUse, 10)
+                                },
+                                onExpandWildcards = viewModel::expandCurrentConsoleWildcards,
+                                onPasteOrFill = {
+                                    val pasted = pasteFromClipboard()
+                                    if (!pasted.isNullOrBlank()) {
+                                        viewModel.onInputTextChanged(pasted)
+                                    } else {
+                                        viewModel.expandCurrentConsoleWildcards()
+                                    }
+                                },
+                                onClearInput = { viewModel.onInputTextChanged("") },
+                                onClearBanner = viewModel::clearStatusBanner,
+                                onQuickSwitchMode = viewModel::setValidationModeQuick,
+                                modifier = cardModifier
+                            )
+                        }
+
+                        val renderResults: @Composable (Boolean, Modifier) -> Unit = { fillHeight, cardModifier ->
+                            ResultsCard(
+                                uiState = uiState,
+                                fillRemainingHeight = fillHeight,
+                                onSelectTab = viewModel::selectTab,
+                                onCopyAll = { title, joined -> copyToClipboard(title, joined) },
+                                onClearTab = viewModel::clearActiveTabRecords,
+                                onCopyRecord = { record -> copyToClipboard("Record", record.normalizedLine) },
+                                onRemoveRecord = { record -> viewModel.removeRecord(record.id, record.bucket) },
+                                onInspectBin = viewModel::openBinInspector,
+                                modifier = cardModifier
+                            )
+                        }
 
                         if (isTwoPaneLayout) {
                             Column(
@@ -312,60 +328,18 @@ fun ValidatorScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .weight(1f),
-                                    horizontalArrangement = Arrangement.spacedBy(18.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
                                 ) {
-                                    Column(
-                                        modifier = Modifier
+                                    renderConsole(
+                                        null,
+                                        Modifier
                                             .weight(0.47f)
-                                            .fillMaxHeight(),
-                                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                                    ) {
-                                        ConsoleInputCard(
-                                            uiState = uiState,
-                                            consoleHeight = null,
-                                            cardPadding = innerCardPadding,
-                                            onInputChanged = viewModel::onInputTextChanged,
-                                            onToggleRun = viewModel::toggleValidationRun,
-                                            onOpenSettings = viewModel::openSettings,
-                                            onOpenFileImport = viewModel::openFileImport,
-                                            onQuickGen10x = {
-                                                val patternToUse = uiState.rawInputText.lines()
-                                                    .firstOrNull { it.isNotBlank() }
-                                                    ?: uiState.settings.patternTemplate
-                                                viewModel.generateBatchIntoConsole(patternToUse, 10)
-                                            },
-                                            onExpandWildcards = viewModel::expandCurrentConsoleWildcards,
-                                            onPasteOrFill = {
-                                                val pasted = pasteFromClipboard()
-                                                if (!pasted.isNullOrBlank()) {
-                                                    viewModel.onInputTextChanged(pasted)
-                                                } else {
-                                                    viewModel.expandCurrentConsoleWildcards()
-                                                }
-                                            },
-                                            onClearInput = { viewModel.onInputTextChanged("") },
-                                            onClearBanner = viewModel::clearStatusBanner,
-                                            onQuickSwitchMode = viewModel::setValidationModeQuick,
-                                            modifier = Modifier.weight(1f)
-                                        )
+                                            .fillMaxHeight()
+                                    )
 
-                                        DeveloperChannelFooter(
-                                            channelUrl = channelUrl,
-                                            onOpenChannel = ::openDeveloperChannel,
-                                            onCopyChannelUrl = { copyToClipboard("Developer Channel", channelUrl) }
-                                        )
-                                    }
-
-                                    ResultsCard(
-                                        uiState = uiState,
-                                        fillRemainingHeight = true,
-                                        onSelectTab = viewModel::selectTab,
-                                        onCopyAll = { title, joined -> copyToClipboard(title, joined) },
-                                        onClearTab = viewModel::clearActiveTabRecords,
-                                        onCopyRecord = { record -> copyToClipboard("Record", record.normalizedLine) },
-                                        onRemoveRecord = { record -> viewModel.removeRecord(record.id, record.bucket) },
-                                        onInspectBin = viewModel::openBinInspector,
-                                        modifier = Modifier
+                                    renderResults(
+                                        true,
+                                        Modifier
                                             .weight(0.53f)
                                             .fillMaxHeight()
                                     )
@@ -407,7 +381,6 @@ fun ValidatorScreen(
 
                                     Spacer(modifier = Modifier.height(8.dp))
 
-                                    // Expressive Connected Pane Switcher (Split / Console / Results)
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)
@@ -441,7 +414,7 @@ fun ValidatorScreen(
                                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                                                 modifier = Modifier
                                                     .weight(1f)
-                                                    .height(44.dp)
+                                                    .height(42.dp)
                                                     .testTag("compact_pane_${pane.name.lowercase()}")
                                             ) {
                                                 Text(
@@ -476,103 +449,25 @@ fun ValidatorScreen(
                                         ) {
                                             when (pane) {
                                                 CompactWorkspacePane.SPLIT -> {
-                                                    ConsoleInputCard(
-                                                        uiState = uiState,
-                                                        consoleHeight = adaptiveConsoleHeight,
-                                                        cardPadding = innerCardPadding,
-                                                        onInputChanged = viewModel::onInputTextChanged,
-                                                        onToggleRun = viewModel::toggleValidationRun,
-                                                        onOpenSettings = viewModel::openSettings,
-                                                        onOpenFileImport = viewModel::openFileImport,
-                                                        onQuickGen10x = {
-                                                            val patternToUse = uiState.rawInputText.lines()
-                                                                .firstOrNull { it.isNotBlank() }
-                                                                ?: uiState.settings.patternTemplate
-                                                            viewModel.generateBatchIntoConsole(patternToUse, 10)
-                                                        },
-                                                        onExpandWildcards = viewModel::expandCurrentConsoleWildcards,
-                                                        onPasteOrFill = {
-                                                            val pasted = pasteFromClipboard()
-                                                            if (!pasted.isNullOrBlank()) {
-                                                                viewModel.onInputTextChanged(pasted)
-                                                            } else {
-                                                                viewModel.expandCurrentConsoleWildcards()
-                                                            }
-                                                        },
-                                                        onClearInput = { viewModel.onInputTextChanged("") },
-                                                        onClearBanner = viewModel::clearStatusBanner,
-                                                        onQuickSwitchMode = viewModel::setValidationModeQuick
-                                                    )
-
+                                                    renderConsole(adaptiveConsoleHeight, Modifier)
                                                     Spacer(modifier = Modifier.height(12.dp))
-
-                                                    ResultsCard(
-                                                        uiState = uiState,
-                                                        fillRemainingHeight = canPinSplitWithoutNestedScroll,
-                                                        onSelectTab = viewModel::selectTab,
-                                                        onCopyAll = { title, joined -> copyToClipboard(title, joined) },
-                                                        onClearTab = viewModel::clearActiveTabRecords,
-                                                        onCopyRecord = { record -> copyToClipboard("Record", record.normalizedLine) },
-                                                        onRemoveRecord = { record -> viewModel.removeRecord(record.id, record.bucket) },
-                                                        onInspectBin = viewModel::openBinInspector,
-                                                        modifier = if (canPinSplitWithoutNestedScroll) Modifier.weight(1f) else Modifier
+                                                    renderResults(
+                                                        canPinSplitWithoutNestedScroll,
+                                                        if (canPinSplitWithoutNestedScroll) Modifier.weight(1f) else Modifier
                                                     )
                                                 }
 
                                                 CompactWorkspacePane.CONSOLE -> {
-                                                    ConsoleInputCard(
-                                                        uiState = uiState,
-                                                        consoleHeight = if (canPinSplitWithoutNestedScroll) null else 260.dp,
-                                                        cardPadding = innerCardPadding,
-                                                        onInputChanged = viewModel::onInputTextChanged,
-                                                        onToggleRun = viewModel::toggleValidationRun,
-                                                        onOpenSettings = viewModel::openSettings,
-                                                        onOpenFileImport = viewModel::openFileImport,
-                                                        onQuickGen10x = {
-                                                            val patternToUse = uiState.rawInputText.lines()
-                                                                .firstOrNull { it.isNotBlank() }
-                                                                ?: uiState.settings.patternTemplate
-                                                            viewModel.generateBatchIntoConsole(patternToUse, 10)
-                                                        },
-                                                        onExpandWildcards = viewModel::expandCurrentConsoleWildcards,
-                                                        onPasteOrFill = {
-                                                            val pasted = pasteFromClipboard()
-                                                            if (!pasted.isNullOrBlank()) {
-                                                                viewModel.onInputTextChanged(pasted)
-                                                            } else {
-                                                                viewModel.expandCurrentConsoleWildcards()
-                                                            }
-                                                        },
-                                                        onClearInput = { viewModel.onInputTextChanged("") },
-                                                        onClearBanner = viewModel::clearStatusBanner,
-                                                        onQuickSwitchMode = viewModel::setValidationModeQuick,
-                                                        modifier = if (canPinSplitWithoutNestedScroll) Modifier.weight(1f) else Modifier
-                                                    )
-                                                    Spacer(modifier = Modifier.height(10.dp))
-                                                    DeveloperChannelFooter(
-                                                        channelUrl = channelUrl,
-                                                        onOpenChannel = ::openDeveloperChannel,
-                                                        onCopyChannelUrl = { copyToClipboard("Developer Channel", channelUrl) }
+                                                    renderConsole(
+                                                        if (canPinSplitWithoutNestedScroll) null else 260.dp,
+                                                        if (canPinSplitWithoutNestedScroll) Modifier.weight(1f) else Modifier
                                                     )
                                                 }
 
                                                 CompactWorkspacePane.RESULTS -> {
-                                                    ResultsCard(
-                                                        uiState = uiState,
-                                                        fillRemainingHeight = canPinSplitWithoutNestedScroll,
-                                                        onSelectTab = viewModel::selectTab,
-                                                        onCopyAll = { title, joined -> copyToClipboard(title, joined) },
-                                                        onClearTab = viewModel::clearActiveTabRecords,
-                                                        onCopyRecord = { record -> copyToClipboard("Record", record.normalizedLine) },
-                                                        onRemoveRecord = { record -> viewModel.removeRecord(record.id, record.bucket) },
-                                                        onInspectBin = viewModel::openBinInspector,
-                                                        modifier = if (canPinSplitWithoutNestedScroll) Modifier.weight(1f) else Modifier
-                                                    )
-                                                    Spacer(modifier = Modifier.height(10.dp))
-                                                    DeveloperChannelFooter(
-                                                        channelUrl = channelUrl,
-                                                        onOpenChannel = ::openDeveloperChannel,
-                                                        onCopyChannelUrl = { copyToClipboard("Developer Channel", channelUrl) }
+                                                    renderResults(
+                                                        canPinSplitWithoutNestedScroll,
+                                                        if (canPinSplitWithoutNestedScroll) Modifier.weight(1f) else Modifier
                                                     )
                                                 }
                                             }

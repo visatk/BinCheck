@@ -21,7 +21,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
-import androidx.compose.material.icons.outlined.Radar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
@@ -84,7 +83,7 @@ fun TelegramWebhookSectionCard(
         modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
         color = colorScheme.surfaceContainerLowest,
-        border = BorderStroke(1.dp, colorScheme.outlineVariant)
+        border = BorderStroke(0.75.dp, colorScheme.outlineVariant.copy(alpha = 0.55f))
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(
@@ -227,7 +226,7 @@ fun TelegramWebhookSectionCard(
                         )
                     } else {
                         Icon(
-                            imageVector = Icons.Outlined.Radar,
+                            imageVector = AppIcons.Radar,
                             contentDescription = null,
                             modifier = Modifier.size(17.dp)
                         )

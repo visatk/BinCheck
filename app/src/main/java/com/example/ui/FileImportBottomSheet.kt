@@ -19,13 +19,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.PlayArrow
-import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,7 +33,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearWavyProgressIndicator
-import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -43,7 +40,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -172,24 +168,23 @@ fun FileImportBottomSheet(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Surface(
-                        shape = MaterialShapes.Clover4Leaf.toShape(),
+                        shape = CircleShape,
                         color = colorScheme.secondaryContainer,
-                        border = BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.45f)),
-                        modifier = Modifier.size(54.dp)
+                        modifier = Modifier.size(48.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             if (isImporting) {
                                 ContainedLoadingIndicator(
-                                    modifier = Modifier.size(40.dp),
+                                    modifier = Modifier.size(36.dp),
                                     containerColor = colorScheme.secondaryContainer,
                                     indicatorColor = colorScheme.onSecondaryContainer
                                 )
                             } else {
                                 Icon(
-                                    imageVector = Icons.Outlined.UploadFile,
+                                    imageVector = AppIcons.UploadFile,
                                     contentDescription = null,
                                     tint = colorScheme.onSecondaryContainer,
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                         }
@@ -247,7 +242,7 @@ fun FileImportBottomSheet(
                         shape = MaterialTheme.shapes.small
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.FolderOpen,
+                            imageVector = AppIcons.FolderOpen,
                             contentDescription = null,
                             modifier = Modifier.size(18.dp)
                         )
@@ -302,7 +297,7 @@ fun FileImportBottomSheet(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                imageVector = Icons.Outlined.Description,
+                                imageVector = AppIcons.Description,
                                 contentDescription = null,
                                 tint = if (preview.fileType == SupportedFileType.HTML) {
                                     colorScheme.secondary

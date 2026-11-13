@@ -1,7 +1,6 @@
 package com.example.ui
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -18,17 +17,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.OpenInNew
-import androidx.compose.material.icons.outlined.AccountBalance
-import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalIconButton
@@ -36,13 +27,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LoadingIndicator
-import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,7 +65,7 @@ fun BinCheckTopBar(
     onOpenDrawer: () -> Unit,
     onOpenBinLookup: () -> Unit,
     onOpenHistory: () -> Unit,
-    onOpenSettings: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") onOpenSettings: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -110,9 +99,9 @@ fun BinCheckTopBar(
                     )
                 }
             } else {
-                Box(modifier = Modifier.padding(start = 12.dp, end = 4.dp)) {
+                Box(modifier = Modifier.padding(start = 14.dp, end = 6.dp)) {
                     Surface(
-                        shape = MaterialShapes.Cookie7Sided.toShape(),
+                        shape = MaterialTheme.shapes.small,
                         color = colorScheme.primaryContainer,
                         modifier = Modifier.size(32.dp)
                     ) {
@@ -120,6 +109,7 @@ fun BinCheckTopBar(
                             Text(
                                 text = "BC",
                                 style = MaterialTheme.typography.labelSmall,
+                                fontFamily = JetBrainsMonoFamily,
                                 fontWeight = FontWeight.Bold,
                                 color = colorScheme.onPrimaryContainer
                             )
@@ -167,7 +157,7 @@ fun BinCheckTopBar(
                 AnimatedVisibility(visible = isRunning || isLookingUpBin) {
                     LoadingIndicator(
                         modifier = Modifier
-                            .size(22.dp)
+                            .size(20.dp)
                             .testTag("topbar_loading_indicator"),
                         color = consoleColors.liveAccent
                     )
@@ -178,13 +168,13 @@ fun BinCheckTopBar(
             FilledTonalIconButton(
                 onClick = onOpenBinLookup,
                 colors = IconButtonDefaults.filledTonalIconButtonColors(
-                    containerColor = colorScheme.secondaryContainer,
-                    contentColor = colorScheme.onSecondaryContainer
+                    containerColor = colorScheme.surfaceContainerHigh,
+                    contentColor = colorScheme.onSurface
                 ),
                 modifier = Modifier.testTag("topbar_bin_lookup_button")
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.AccountBalance,
+                    imageVector = AppIcons.AccountBalance,
                     contentDescription = stringResource(R.string.bin_lookup_chip),
                     modifier = Modifier.size(18.dp)
                 )
@@ -210,22 +200,11 @@ fun BinCheckTopBar(
                     }
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.History,
+                        imageVector = AppIcons.History,
                         contentDescription = stringResource(R.string.history_chip),
                         tint = colorScheme.onSurface
                     )
                 }
-            }
-
-            IconButton(
-                onClick = onOpenSettings,
-                modifier = Modifier.testTag("topbar_settings_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Tune,
-                    contentDescription = stringResource(R.string.action_open_settings),
-                    tint = colorScheme.onSurface
-                )
             }
         }
     )
@@ -257,18 +236,10 @@ fun TopTelemetryStrip(
                 onClick = onOpenBinLookup,
                 shape = CircleShape,
                 color = if (detectedScheme != CardScheme.UNKNOWN) {
-                    colorScheme.primaryContainer.copy(alpha = 0.85f)
+                    colorScheme.primaryContainer.copy(alpha = 0.6f)
                 } else {
                     colorScheme.surfaceContainerHigh
                 },
-                border = BorderStroke(
-                    1.dp,
-                    if (detectedScheme != CardScheme.UNKNOWN) {
-                        colorScheme.primary.copy(alpha = 0.35f)
-                    } else {
-                        colorScheme.outlineVariant
-                    }
-                ),
                 modifier = Modifier.testTag("telemetry_bin_pill")
             ) {
                 Row(
@@ -276,7 +247,7 @@ fun TopTelemetryStrip(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.AccountBalance,
+                        imageVector = AppIcons.AccountBalance,
                         contentDescription = null,
                         tint = if (detectedScheme != CardScheme.UNKNOWN) {
                             colorScheme.onPrimaryContainer
@@ -294,7 +265,7 @@ fun TopTelemetryStrip(
                         },
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = JetBrainsMonoFamily,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Medium,
                         color = if (detectedScheme != CardScheme.UNKNOWN) {
                             colorScheme.onPrimaryContainer
                         } else {
@@ -307,24 +278,23 @@ fun TopTelemetryStrip(
             if (!loadedFileName.isNullOrBlank()) {
                 Surface(
                     shape = CircleShape,
-                    color = colorScheme.secondaryContainer.copy(alpha = 0.85f),
-                    border = BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.35f))
+                    color = colorScheme.surfaceContainerHigh
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.Description,
+                            imageVector = AppIcons.Description,
                             contentDescription = null,
-                            tint = colorScheme.onSecondaryContainer,
+                            tint = colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(12.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
                             text = loadedFileName,
                             style = MaterialTheme.typography.labelSmall,
-                            color = colorScheme.onSecondaryContainer,
+                            color = colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -336,8 +306,7 @@ fun TopTelemetryStrip(
         Surface(
             onClick = onOpenDeveloperChannel,
             shape = CircleShape,
-            color = consoleColors.telegramContainer,
-            border = BorderStroke(1.dp, consoleColors.telegramAccent.copy(alpha = 0.45f)),
+            color = colorScheme.surfaceContainerHigh.copy(alpha = 0.72f),
             modifier = Modifier.testTag("header_developer_channel_button")
         ) {
             Row(
@@ -346,98 +315,14 @@ fun TopTelemetryStrip(
             ) {
                 TelegramPaperPlaneIcon(
                     color = consoleColors.telegramAccent,
-                    modifier = Modifier.size(12.dp)
+                    modifier = Modifier.size(11.dp)
                 )
                 Spacer(modifier = Modifier.width(5.dp))
                 Text(
                     text = stringResource(R.string.developer_channel_handle),
                     style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = consoleColors.telegramAccent
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun DeveloperChannelFooter(
-    channelUrl: String,
-    onOpenChannel: () -> Unit,
-    onCopyChannelUrl: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val colorScheme = MaterialTheme.colorScheme
-    val consoleColors = LocalConsoleColors.current
-
-    ElevatedCard(
-        onClick = onOpenChannel,
-        modifier = modifier
-            .fillMaxWidth()
-            .testTag("footer_developer_channel_card"),
-        shape = MaterialTheme.shapes.large,
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = colorScheme.surfaceContainerLow
-        ),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Surface(
-                    shape = CircleShape,
-                    color = consoleColors.telegramContainer,
-                    border = BorderStroke(1.dp, consoleColors.telegramAccent.copy(alpha = 0.5f)),
-                    modifier = Modifier.size(34.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        TelegramPaperPlaneIcon(
-                            color = consoleColors.telegramAccent,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(
-                        text = "Developer Channel • @drkingbd",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = channelUrl,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = consoleColors.telegramAccent,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onCopyChannelUrl) {
-                    Icon(
-                        imageVector = Icons.Outlined.ContentCopy,
-                        contentDescription = "Copy channel URL",
-                        tint = colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-                Icon(
-                    imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
-                    contentDescription = "Open Telegram Channel",
-                    tint = consoleColors.telegramAccent,
-                    modifier = Modifier.size(18.dp)
+                    fontWeight = FontWeight.Medium,
+                    color = colorScheme.onSurfaceVariant
                 )
             }
         }

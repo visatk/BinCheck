@@ -14,10 +14,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.BatterySaver
-import androidx.compose.material.icons.outlined.CleaningServices
-import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -31,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -62,7 +59,7 @@ fun NetworkOptimizationSectionCard(
         modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
         color = colorScheme.surfaceContainerLowest,
-        border = BorderStroke(1.dp, colorScheme.outlineVariant)
+        border = BorderStroke(0.75.dp, colorScheme.outlineVariant.copy(alpha = 0.55f))
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(
@@ -75,7 +72,7 @@ fun NetworkOptimizationSectionCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.Speed,
+                        imageVector = AppIcons.Speed,
                         contentDescription = null,
                         tint = colorScheme.primary,
                         modifier = Modifier.size(20.dp)
@@ -98,7 +95,6 @@ fun NetworkOptimizationSectionCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Live Network, Cache & Circuit Telemetry Strip
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -143,12 +139,13 @@ fun NetworkOptimizationSectionCard(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
-            HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.6f))
+            HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.45f))
             Spacer(modifier = Modifier.height(10.dp))
 
             OptimizerSwitchRow(
                 title = "Deduplicate & Cache Requests",
                 subtitle = "Coalesces concurrent calls, skips duplicate batch lines & serves TTL cache",
+                icon = AppIcons.SyncAlt,
                 checked = deduplicateBatchInputs,
                 onCheckedChange = onToggleDedupCache,
                 testTag = "dedup_cache_switch"
@@ -159,6 +156,7 @@ fun NetworkOptimizationSectionCard(
             OptimizerSwitchRow(
                 title = "Wi-Fi Only for Remote Batches",
                 subtitle = "Defers remote API & webhook WorkManager runs until unmetered Wi-Fi is active",
+                icon = AppIcons.Public,
                 checked = wifiOnlyBatch,
                 onCheckedChange = onToggleWifiOnly,
                 testTag = "wifi_only_batch_switch"
@@ -169,6 +167,7 @@ fun NetworkOptimizationSectionCard(
             OptimizerSwitchRow(
                 title = "Battery & Data Saver Pacing",
                 subtitle = "Caps worker concurrency to 2x, avoids low-battery runs & pauses metered BIN sync",
+                icon = AppIcons.BatterySaver,
                 checked = batterySaverMode,
                 onCheckedChange = onToggleBatterySaver,
                 testTag = "battery_saver_switch"
@@ -185,7 +184,7 @@ fun NetworkOptimizationSectionCard(
                 shape = MaterialTheme.shapes.small
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.CleaningServices,
+                    imageVector = AppIcons.CleaningServices,
                     contentDescription = null,
                     modifier = Modifier.size(16.dp)
                 )
@@ -203,6 +202,7 @@ fun NetworkOptimizationSectionCard(
 private fun OptimizerSwitchRow(
     title: String,
     subtitle: String,
+    icon: ImageVector,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     testTag: String
@@ -216,7 +216,7 @@ private fun OptimizerSwitchRow(
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    imageVector = Icons.Outlined.BatterySaver,
+                    imageVector = icon,
                     contentDescription = null,
                     tint = colorScheme.secondary,
                     modifier = Modifier.size(15.dp)

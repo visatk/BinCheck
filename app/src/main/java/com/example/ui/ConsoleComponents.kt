@@ -11,7 +11,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -35,23 +34,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AutoFixHigh
-import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.ContentPaste
-import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.Stop
-import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
@@ -117,27 +108,22 @@ fun ConsoleInputCard(
 
     val cardBorderColor by animateColorAsState(
         targetValue = if (uiState.isRunning) {
-            consoleColors.liveAccent.copy(alpha = 0.7f)
+            consoleColors.liveAccent.copy(alpha = 0.55f)
         } else {
-            colorScheme.outlineVariant.copy(alpha = 0.8f)
+            colorScheme.outlineVariant.copy(alpha = 0.45f)
         },
         animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
         label = "console_card_border"
     )
 
-    ElevatedCard(
-        modifier = modifier
-            .fillMaxWidth()
-            .border(
-                width = if (uiState.isRunning) 1.5.dp else 1.dp,
-                color = cardBorderColor,
-                shape = MaterialTheme.shapes.large
-            ),
+    Surface(
+        modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = colorScheme.surfaceContainer
-        ),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 4.dp)
+        color = colorScheme.surfaceContainer,
+        border = BorderStroke(
+            width = if (uiState.isRunning) 1.dp else 0.75.dp,
+            color = cardBorderColor
+        )
     ) {
         Column(
             modifier = Modifier
@@ -148,9 +134,9 @@ fun ConsoleInputCard(
             val isInputFocused by inputInteractionSource.collectIsFocusedAsState()
             val outerBorderColor by animateColorAsState(
                 targetValue = if (isInputFocused) {
-                    colorScheme.primary.copy(alpha = 0.85f)
+                    colorScheme.primary.copy(alpha = 0.75f)
                 } else {
-                    colorScheme.outlineVariant
+                    colorScheme.outlineVariant.copy(alpha = 0.5f)
                 },
                 animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
                 label = "console_border"
@@ -167,16 +153,14 @@ fun ConsoleInputCard(
                     .heightIn(min = 140.dp)
             }
 
-            // High-Performance Recessed IDE Console Editor (single gutter Text node, zero IntrinsicSize double-pass)
             Surface(
                 modifier = consoleBoxModifier,
                 shape = MaterialTheme.shapes.medium,
                 color = colorScheme.surfaceContainerLowest,
                 border = BorderStroke(
-                    width = if (isInputFocused) 1.5.dp else 1.dp,
+                    width = if (isInputFocused) 1.dp else 0.5.dp,
                     color = outerBorderColor
-                ),
-                tonalElevation = 0.dp
+                )
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     val editorScrollState = rememberScrollState()
@@ -207,7 +191,7 @@ fun ConsoleInputCard(
                             Box(
                                 modifier = Modifier
                                     .widthIn(min = 34.dp)
-                                    .background(colorScheme.surfaceContainer)
+                                    .background(colorScheme.surfaceContainerLow)
                                     .padding(horizontal = 8.dp, vertical = 12.dp),
                                 contentAlignment = Alignment.TopEnd
                             ) {
@@ -217,7 +201,7 @@ fun ConsoleInputCard(
                                     fontSize = 11.sp,
                                     lineHeight = 20.sp,
                                     textAlign = TextAlign.End,
-                                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.58f)
+                                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                                 )
                             }
 
@@ -249,7 +233,7 @@ fun ConsoleInputCard(
                                                 fontSize = 13.sp,
                                                 lineHeight = 20.sp,
                                                 letterSpacing = 0.5.sp,
-                                                color = colorScheme.onSurfaceVariant.copy(alpha = 0.58f)
+                                                color = colorScheme.onSurfaceVariant.copy(alpha = 0.52f)
                                             )
                                         }
                                         innerTextField()
@@ -260,23 +244,23 @@ fun ConsoleInputCard(
                     }
 
                     HorizontalDivider(
-                        thickness = 1.dp,
-                        color = colorScheme.outlineVariant.copy(alpha = 0.65f)
+                        thickness = 0.5.dp,
+                        color = colorScheme.outlineVariant.copy(alpha = 0.45f)
                     )
 
                     FlowRow(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(colorScheme.surfaceContainer.copy(alpha = 0.9f))
+                            .background(colorScheme.surfaceContainerLow)
                             .padding(horizontal = 10.dp, vertical = 7.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
                             text = if (uiState.inputLineCount > 0) {
-                                "${uiState.inputLineCount} line(s) queued"
+                                "${uiState.inputLineCount} queued"
                             } else {
-                                "PAN|MM|YYYY|CVV or .txt/.html"
+                                "PAN|MM|YYYY|CVV"
                             },
                             style = MaterialTheme.typography.labelSmall,
                             color = colorScheme.onSurfaceVariant,
@@ -289,18 +273,18 @@ fun ConsoleInputCard(
                         ) {
                             ConsoleMiniActionPill(
                                 label = stringResource(R.string.import_file_chip),
-                                icon = Icons.Outlined.UploadFile,
-                                containerColor = colorScheme.secondaryContainer,
-                                contentColor = colorScheme.onSecondaryContainer,
+                                icon = AppIcons.UploadFile,
+                                containerColor = colorScheme.surfaceContainerHigh,
+                                contentColor = colorScheme.onSurface,
                                 onClick = onOpenFileImport,
                                 testTag = "open_file_picker_button"
                             )
 
                             ConsoleMiniActionPill(
                                 label = "Gen 10x",
-                                icon = Icons.Outlined.Bolt,
-                                containerColor = colorScheme.primaryContainer,
-                                contentColor = colorScheme.onPrimaryContainer,
+                                icon = AppIcons.Bolt,
+                                containerColor = colorScheme.surfaceContainerHigh,
+                                contentColor = colorScheme.primary,
                                 onClick = onQuickGen10x,
                                 testTag = "quick_gen_10x_button"
                             )
@@ -308,9 +292,9 @@ fun ConsoleInputCard(
                             if (uiState.rawInputText.any { it.equals('x', ignoreCase = true) }) {
                                 ConsoleMiniActionPill(
                                     label = "Solve x",
-                                    icon = Icons.Outlined.AutoFixHigh,
-                                    containerColor = colorScheme.tertiaryContainer,
-                                    contentColor = colorScheme.onTertiaryContainer,
+                                    icon = AppIcons.AutoFixHigh,
+                                    containerColor = colorScheme.primaryContainer.copy(alpha = 0.7f),
+                                    contentColor = colorScheme.onPrimaryContainer,
                                     onClick = onExpandWildcards,
                                     testTag = "quick_expand_wildcards_button"
                                 )
@@ -319,7 +303,7 @@ fun ConsoleInputCard(
                             if (uiState.rawInputText.isEmpty()) {
                                 ConsoleMiniActionPill(
                                     label = stringResource(R.string.paste_clipboard),
-                                    icon = Icons.Outlined.ContentPaste,
+                                    icon = AppIcons.ContentPaste,
                                     containerColor = colorScheme.surfaceContainerHigh,
                                     contentColor = colorScheme.onSurfaceVariant,
                                     onClick = onPasteOrFill,
@@ -328,9 +312,9 @@ fun ConsoleInputCard(
                             } else {
                                 ConsoleMiniActionPill(
                                     label = "Clear",
-                                    icon = Icons.Outlined.DeleteOutline,
-                                    containerColor = colorScheme.errorContainer.copy(alpha = 0.78f),
-                                    contentColor = colorScheme.onErrorContainer,
+                                    icon = AppIcons.DeleteOutline,
+                                    containerColor = colorScheme.surfaceContainerHigh,
+                                    contentColor = colorScheme.error,
                                     onClick = onClearInput,
                                     testTag = "clear_console_button"
                                 )
@@ -342,7 +326,6 @@ fun ConsoleInputCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Material 3 Expressive SplitButton + Settings Studio Trigger
             val playDescription = if (uiState.isRunning) {
                 stringResource(R.string.action_stop_validation)
             } else {
@@ -384,7 +367,7 @@ fun ConsoleInputCard(
                                 colors = splitLeadingColors,
                                 contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
                                 modifier = Modifier
-                                    .height(50.dp)
+                                    .height(48.dp)
                                     .widthIn(min = 190.dp)
                                     .semantics { contentDescription = playDescription }
                                     .testTag("play_validation_button")
@@ -396,7 +379,7 @@ fun ConsoleInputCard(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Icon(
-                                        imageVector = Icons.Outlined.Stop,
+                                        imageVector = AppIcons.Stop,
                                         contentDescription = null,
                                         modifier = Modifier.size(18.dp)
                                     )
@@ -414,7 +397,7 @@ fun ConsoleInputCard(
                                     Icon(
                                         imageVector = Icons.Outlined.PlayArrow,
                                         contentDescription = null,
-                                        modifier = Modifier.size(21.dp)
+                                        modifier = Modifier.size(20.dp)
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
@@ -435,7 +418,7 @@ fun ConsoleInputCard(
                                 onCheckedChange = { engineMenuExpanded = it },
                                 colors = splitLeadingColors,
                                 modifier = Modifier
-                                    .height(50.dp)
+                                    .height(48.dp)
                                     .testTag("engine_split_dropdown_button")
                             ) {
                                 Icon(
@@ -493,8 +476,8 @@ fun ConsoleInputCard(
                 FilledTonalIconButton(
                     onClick = onOpenSettings,
                     colors = IconButtonDefaults.filledTonalIconButtonColors(
-                        containerColor = colorScheme.secondaryContainer,
-                        contentColor = colorScheme.onSecondaryContainer
+                        containerColor = colorScheme.surfaceContainerHigh,
+                        contentColor = colorScheme.onSurface
                     ),
                     shape = MaterialTheme.shapes.medium,
                     modifier = Modifier
@@ -505,12 +488,11 @@ fun ConsoleInputCard(
                     Icon(
                         imageVector = Icons.Outlined.Settings,
                         contentDescription = settingsDescription,
-                        modifier = Modifier.size(21.dp)
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
 
-            // Expressive Wavy Determinate / Indeterminate Batch Progress Bar
             AnimatedVisibility(
                 visible = uiState.isRunning,
                 enter = fadeIn() + expandVertically(),
@@ -523,12 +505,12 @@ fun ConsoleInputCard(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         val workerPacingLabel = uiState.settings.validationMode.fixedDelayMs?.let { fixedMs ->
-                            "${uiState.settings.validationMode.badgeLabel} Worker (${fixedMs / 1000L}s delay)"
-                        } ?: "${uiState.settings.validationMode.badgeLabel} Worker (${uiState.settings.concurrency}x)"
+                            "${uiState.settings.validationMode.badgeLabel} (${fixedMs / 1000L}s delay)"
+                        } ?: "${uiState.settings.validationMode.badgeLabel} (${uiState.settings.concurrency}x)"
                         Text(
                             text = workerPacingLabel,
                             style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
+                            fontWeight = FontWeight.Medium,
                             color = consoleColors.liveAccent
                         )
                         Text(
@@ -577,8 +559,7 @@ fun ConsoleInputCard(
                     Surface(
                         onClick = onClearBanner,
                         shape = MaterialTheme.shapes.small,
-                        color = colorScheme.secondaryContainer.copy(alpha = 0.55f),
-                        border = BorderStroke(1.dp, colorScheme.outlineVariant),
+                        color = colorScheme.surfaceContainerHigh,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 10.dp)
@@ -591,14 +572,14 @@ fun ConsoleInputCard(
                             Text(
                                 text = msg,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = colorScheme.onSecondaryContainer,
+                                color = colorScheme.onSurface,
                                 modifier = Modifier.weight(1f)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Icon(
                                 imageVector = Icons.Outlined.Close,
                                 contentDescription = "Dismiss status",
-                                tint = colorScheme.onSecondaryContainer,
+                                tint = colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(14.dp)
                             )
                         }
@@ -622,13 +603,12 @@ private fun ConsoleMiniActionPill(
         onClick = onClick,
         shape = CircleShape,
         color = containerColor,
-        border = BorderStroke(1.dp, contentColor.copy(alpha = 0.25f)),
         modifier = Modifier
             .clip(CircleShape)
             .testTag(testTag)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
@@ -641,7 +621,7 @@ private fun ConsoleMiniActionPill(
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Medium,
                 color = contentColor
             )
         }

@@ -6,7 +6,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,32 +23,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.HelpOutline
-import androidx.compose.material.icons.outlined.AccountBalance
-import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ButtonGroupDefaults
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
-import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.ToggleButtonShapes
-import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -98,22 +86,13 @@ fun ResultsCard(
         }
     }
 
-    ElevatedCard(
-        modifier = modifier
-            .fillMaxWidth()
-            .border(
-                width = 1.dp,
-                color = colorScheme.outlineVariant.copy(alpha = 0.78f),
-                shape = MaterialTheme.shapes.large
-            ),
+    Surface(
+        modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = colorScheme.surfaceContainerLow
-        ),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 3.dp)
+        color = colorScheme.surfaceContainerLow,
+        border = BorderStroke(0.75.dp, colorScheme.outlineVariant.copy(alpha = 0.45f))
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // Expressive Connected Toggle Button Group Header
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -163,8 +142,8 @@ fun ResultsCard(
             }
 
             HorizontalDivider(
-                thickness = 1.dp,
-                color = colorScheme.outlineVariant.copy(alpha = 0.75f)
+                thickness = 0.5.dp,
+                color = colorScheme.outlineVariant.copy(alpha = 0.45f)
             )
 
             val activeList = uiState.activeTabRecords
@@ -179,15 +158,10 @@ fun ResultsCard(
                     ResultBucket.DIE -> consoleColors.dieContainer
                     ResultBucket.UNKNOWN -> consoleColors.unknownContainer
                 }
-                val emptyShape = when (uiState.selectedTab) {
-                    ResultBucket.LIVE -> MaterialShapes.Clover4Leaf.toShape()
-                    ResultBucket.DIE -> MaterialShapes.Cookie7Sided.toShape()
-                    ResultBucket.UNKNOWN -> MaterialShapes.Pill.toShape()
-                }
                 val emptyIcon = when (uiState.selectedTab) {
-                    ResultBucket.LIVE -> Icons.Outlined.CheckCircle
-                    ResultBucket.DIE -> Icons.Outlined.ErrorOutline
-                    ResultBucket.UNKNOWN -> Icons.AutoMirrored.Outlined.HelpOutline
+                    ResultBucket.LIVE -> AppIcons.CheckCircle
+                    ResultBucket.DIE -> AppIcons.ErrorOutline
+                    ResultBucket.UNKNOWN -> AppIcons.HelpOutline
                 }
                 val emptyHeadline = when (uiState.selectedTab) {
                     ResultBucket.LIVE -> "No Live records yet"
@@ -196,8 +170,8 @@ fun ResultsCard(
                 }
                 val emptySubtitle = when (uiState.selectedTab) {
                     ResultBucket.LIVE -> "Enter cards or import a file, then tap Validate"
-                    ResultBucket.DIE -> "Cards failing checksum, expiry, or API checks appear here"
-                    ResultBucket.UNKNOWN -> "Malformed lines or timed-out API probes appear here"
+                    ResultBucket.DIE -> "Failed checksum, expiry, or API checks appear here"
+                    ResultBucket.UNKNOWN -> "Malformed lines or timed-out probes appear here"
                 }
 
                 if (fillRemainingHeight) {
@@ -211,16 +185,16 @@ fun ResultsCard(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Surface(
-                            shape = emptyShape,
-                            color = emptyContainer,
-                            modifier = Modifier.size(52.dp)
+                            shape = CircleShape,
+                            color = emptyContainer.copy(alpha = 0.72f),
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = emptyIcon,
                                     contentDescription = null,
                                     tint = emptyAccent,
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                         }
@@ -244,22 +218,22 @@ fun ResultsCard(
                                 onClick = { onInspectBin("") },
                                 shape = CircleShape,
                                 colors = ButtonDefaults.filledTonalButtonColors(
-                                    containerColor = emptyContainer,
-                                    contentColor = emptyAccent
+                                    containerColor = colorScheme.surfaceContainerHigh,
+                                    contentColor = colorScheme.onSurface
                                 ),
                                 modifier = Modifier
-                                    .height(40.dp)
+                                    .height(38.dp)
                                     .testTag("open_bin_lookup_button")
                             ) {
                                 Icon(
-                                    imageVector = Icons.Outlined.AccountBalance,
+                                    imageVector = AppIcons.AccountBalance,
                                     contentDescription = stringResource(R.string.bin_lookup_chip),
-                                    modifier = Modifier.size(16.dp)
+                                    modifier = Modifier.size(15.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = stringResource(R.string.bin_lookup_chip),
-                                    style = MaterialTheme.typography.labelLarge
+                                    style = MaterialTheme.typography.labelMedium
                                 )
                             }
                         }
@@ -268,7 +242,7 @@ fun ResultsCard(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(min = 76.dp)
+                            .heightIn(min = 74.dp)
                             .background(colorScheme.surfaceContainerLow)
                             .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -279,16 +253,16 @@ fun ResultsCard(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Surface(
-                                shape = emptyShape,
-                                color = emptyContainer,
-                                modifier = Modifier.size(36.dp)
+                                shape = CircleShape,
+                                color = emptyContainer.copy(alpha = 0.72f),
+                                modifier = Modifier.size(34.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         imageVector = emptyIcon,
                                         contentDescription = null,
                                         tint = emptyAccent,
-                                        modifier = Modifier.size(18.dp)
+                                        modifier = Modifier.size(17.dp)
                                     )
                                 }
                             }
@@ -314,12 +288,16 @@ fun ResultsCard(
                                 onClick = { onInspectBin("") },
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                                 shape = CircleShape,
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = colorScheme.surfaceContainerHigh,
+                                    contentColor = colorScheme.onSurface
+                                ),
                                 modifier = Modifier
                                     .height(36.dp)
                                     .testTag("open_bin_lookup_button")
                             ) {
                                 Icon(
-                                    imageVector = Icons.Outlined.AccountBalance,
+                                    imageVector = AppIcons.AccountBalance,
                                     contentDescription = stringResource(R.string.bin_lookup_chip),
                                     modifier = Modifier.size(14.dp)
                                 )
@@ -327,7 +305,7 @@ fun ResultsCard(
                                 Text(
                                     text = stringResource(R.string.bin_lookup_chip),
                                     style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold
+                                    fontWeight = FontWeight.Medium
                                 )
                             }
                         }
@@ -344,14 +322,14 @@ fun ResultsCard(
                 Column(
                     modifier = bodyModifier
                         .background(colorScheme.surfaceContainerLow)
-                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
                 ) {
                     FlowRow(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 10.dp),
+                            .padding(bottom = 8.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         val tabTitle = when (uiState.selectedTab) {
                             ResultBucket.LIVE -> "LIVE (${activeList.size})"
@@ -369,21 +347,18 @@ fun ResultsCard(
                                 color = colorScheme.onSurface
                             )
                             if (totalProcessedInSession > 0) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = consoleColors.liveContainer.copy(alpha = 0.7f)
-                                ) {
-                                    Text(
-                                        text = "$liveRatePercent% Live",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = consoleColors.liveAccent,
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                                    )
-                                }
+                                Text(
+                                    text = "$liveRatePercent% Live",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = consoleColors.liveAccent
+                                )
                             }
                         }
 
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             if (uiState.selectedTab == ResultBucket.LIVE) {
                                 FilledTonalButton(
                                     onClick = {
@@ -393,15 +368,15 @@ fun ResultsCard(
                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
                                     shape = CircleShape,
                                     colors = ButtonDefaults.filledTonalButtonColors(
-                                        containerColor = consoleColors.liveContainer,
-                                        contentColor = consoleColors.liveAccent
+                                        containerColor = colorScheme.surfaceContainerHigh,
+                                        contentColor = colorScheme.onSurface
                                     ),
                                     modifier = Modifier
-                                        .height(36.dp)
+                                        .height(34.dp)
                                         .testTag("open_bin_lookup_button")
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Outlined.AccountBalance,
+                                        imageVector = AppIcons.AccountBalance,
                                         contentDescription = stringResource(R.string.bin_lookup_chip),
                                         modifier = Modifier.size(14.dp)
                                     )
@@ -409,7 +384,7 @@ fun ResultsCard(
                                     Text(
                                         text = stringResource(R.string.bin_lookup_chip),
                                         style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.SemiBold
+                                        fontWeight = FontWeight.Medium
                                     )
                                 }
                             }
@@ -427,15 +402,15 @@ fun ResultsCard(
                                     contentColor = colorScheme.onPrimaryContainer
                                 ),
                                 modifier = Modifier
-                                    .height(36.dp)
+                                    .height(34.dp)
                                     .testTag("copy_all_records_button")
                             ) {
                                 Icon(
-                                    imageVector = Icons.Outlined.ContentCopy,
+                                    imageVector = AppIcons.ContentCopy,
                                     contentDescription = stringResource(R.string.copy_all),
                                     modifier = Modifier.size(14.dp)
                                 )
-                                Spacer(modifier = Modifier.width(6.dp))
+                                Spacer(modifier = Modifier.width(5.dp))
                                 Text(
                                     text = stringResource(R.string.copy_all),
                                     style = MaterialTheme.typography.labelSmall,
@@ -443,20 +418,19 @@ fun ResultsCard(
                                 )
                             }
 
-                            OutlinedButton(
+                            TextButton(
                                 onClick = onClearTab,
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
                                 shape = CircleShape,
-                                border = BorderStroke(1.dp, colorScheme.outlineVariant),
-                                colors = ButtonDefaults.outlinedButtonColors(
+                                colors = ButtonDefaults.textButtonColors(
                                     contentColor = colorScheme.error
                                 ),
                                 modifier = Modifier
-                                    .height(36.dp)
+                                    .height(34.dp)
                                     .testTag("clear_tab_records_button")
                             ) {
                                 Icon(
-                                    imageVector = Icons.Outlined.DeleteOutline,
+                                    imageVector = AppIcons.DeleteOutline,
                                     contentDescription = stringResource(R.string.clear_tab),
                                     modifier = Modifier.size(14.dp)
                                 )
@@ -464,7 +438,7 @@ fun ResultsCard(
                                 Text(
                                     text = stringResource(R.string.clear_tab),
                                     style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold
+                                    fontWeight = FontWeight.Medium
                                 )
                             }
                         }
@@ -482,7 +456,7 @@ fun ResultsCard(
 
                     LazyColumn(
                         modifier = listModifier,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         items(
                             items = activeList,
@@ -539,7 +513,7 @@ private fun BucketToggleItem(
             checkedContentColor = accentColor
         ),
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-        modifier = modifier.height(44.dp)
+        modifier = modifier.height(42.dp)
     ) {
         Text(
             text = label,
@@ -600,7 +574,6 @@ private fun ValidationRecordRow(
         onClick = onCopy,
         shape = MaterialTheme.shapes.medium,
         color = colorScheme.surfaceContainerLowest,
-        border = BorderStroke(1.dp, colorScheme.outlineVariant),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("record_row_${record.pan}")
@@ -614,8 +587,8 @@ private fun ValidationRecordRow(
         ) {
             Box(
                 modifier = Modifier
-                    .width(4.dp)
-                    .height(42.dp)
+                    .width(3.dp)
+                    .height(38.dp)
                     .clip(CircleShape)
                     .background(accentColor)
             )
@@ -631,7 +604,7 @@ private fun ValidationRecordRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(3.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -639,13 +612,13 @@ private fun ValidationRecordRow(
                     Box(
                         modifier = Modifier
                             .clip(CircleShape)
-                            .background(containerAccent)
-                            .padding(horizontal = 7.dp, vertical = 2.dp)
+                            .background(containerAccent.copy(alpha = 0.78f))
+                            .padding(horizontal = 6.dp, vertical = 1.dp)
                     ) {
                         Text(
                             text = record.scheme.displayName,
                             style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.SemiBold,
                             color = accentColor
                         )
                     }
@@ -664,17 +637,16 @@ private fun ValidationRecordRow(
                         onClick = onInspectBin,
                         shape = CircleShape,
                         color = colorScheme.surfaceContainer,
-                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f)),
                         modifier = Modifier.testTag("live_bin_badge_${record.pan}")
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
                             if (isBinLoading && binInfo == null) {
                                 LoadingIndicator(
-                                    modifier = Modifier.size(13.dp),
+                                    modifier = Modifier.size(12.dp),
                                     color = consoleColors.liveAccent
                                 )
                                 Text(
@@ -684,7 +656,7 @@ private fun ValidationRecordRow(
                                 )
                             } else if (binInfo != null) {
                                 Icon(
-                                    imageVector = Icons.Outlined.AccountBalance,
+                                    imageVector = AppIcons.AccountBalance,
                                     contentDescription = null,
                                     tint = consoleColors.liveAccent,
                                     modifier = Modifier.size(12.dp)
@@ -698,13 +670,13 @@ private fun ValidationRecordRow(
                                 )
                             } else {
                                 Icon(
-                                    imageVector = Icons.Outlined.AccountBalance,
+                                    imageVector = AppIcons.AccountBalance,
                                     contentDescription = null,
                                     tint = colorScheme.primary,
                                     modifier = Modifier.size(12.dp)
                                 )
                                 Text(
-                                    text = "BIN ${BinLookupService.extractBin6(record.pan)} • Tap to Lookup",
+                                    text = "BIN ${BinLookupService.extractBin6(record.pan)} • Lookup",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = colorScheme.primary
                                 )
@@ -717,18 +689,18 @@ private fun ValidationRecordRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onCopy) {
                     Icon(
-                        imageVector = Icons.Outlined.ContentCopy,
+                        imageVector = AppIcons.ContentCopy,
                         contentDescription = "Copy line",
                         tint = colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(17.dp)
                     )
                 }
                 IconButton(onClick = onRemove) {
                     Icon(
-                        imageVector = Icons.Outlined.DeleteOutline,
+                        imageVector = AppIcons.DeleteOutline,
                         contentDescription = "Remove line",
                         tint = colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(17.dp)
                     )
                 }
             }

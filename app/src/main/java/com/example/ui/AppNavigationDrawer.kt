@@ -2,8 +2,6 @@ package com.example.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,21 +20,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.OpenInNew
-import androidx.compose.material.icons.filled.AccountBalance
-import androidx.compose.material.icons.filled.Assessment
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.UploadFile
-import androidx.compose.material.icons.outlined.AccountBalance
-import androidx.compose.material.icons.outlined.Assessment
-import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.outlined.Palette
-import androidx.compose.material.icons.outlined.Terminal
-import androidx.compose.material.icons.outlined.Tune
-import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material3.Badge
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -44,7 +27,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LoadingIndicator
-import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -57,12 +39,9 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -102,7 +81,7 @@ fun BinCheckNavigationShell(
             drawerContent = {
                 PermanentDrawerSheet(
                     modifier = Modifier
-                        .width(284.dp)
+                        .width(280.dp)
                         .testTag("permanent_navigation_drawer"),
                     drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                     drawerContentColor = MaterialTheme.colorScheme.onSurface,
@@ -137,7 +116,7 @@ fun BinCheckNavigationShell(
             drawerContent = {
                 ModalDrawerSheet(
                     modifier = Modifier
-                        .width(304.dp)
+                        .width(300.dp)
                         .testTag("modal_navigation_drawer"),
                     drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                     drawerContentColor = MaterialTheme.colorScheme.onSurface,
@@ -194,75 +173,61 @@ private fun DrawerSheetContent(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 14.dp, vertical = 14.dp)
     ) {
-        // Branded Material 3 Expressive Header Card
         Surface(
             shape = MaterialTheme.shapes.large,
-            color = colorScheme.surfaceContainerHigh,
-            border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f)),
+            color = colorScheme.surfaceContainer,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Box(
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(
-                                colorScheme.primaryContainer.copy(alpha = 0.55f),
-                                colorScheme.tertiaryContainer.copy(alpha = 0.30f)
-                            )
-                        )
-                    )
                     .padding(14.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
+                    Surface(
+                        shape = MaterialTheme.shapes.medium,
+                        color = colorScheme.primary,
+                        modifier = Modifier.size(40.dp)
                     ) {
-                        Surface(
-                            shape = MaterialShapes.Cookie7Sided.toShape(),
-                            color = colorScheme.primary,
-                            modifier = Modifier.size(44.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = "BC",
-                                    style = MaterialTheme.typography.titleMediumEmphasized,
-                                    fontFamily = JetBrainsMonoFamily,
-                                    color = colorScheme.onPrimary
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
+                        Box(contentAlignment = Alignment.Center) {
                             Text(
-                                text = stringResource(R.string.app_name),
-                                style = MaterialTheme.typography.titleLargeEmphasized,
-                                color = colorScheme.onSurface
-                            )
-                            val drawerModeSummary = uiState.settings.validationMode.fixedDelayMs?.let { fixedMs ->
-                                "${uiState.settings.validationMode.badgeLabel} • ${fixedMs / 1000L}s delay"
-                            } ?: "${uiState.settings.validationMode.badgeLabel} • ${uiState.settings.concurrency}x"
-                            Text(
-                                text = drawerModeSummary,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                text = "BC",
+                                style = MaterialTheme.typography.titleMediumEmphasized,
+                                fontFamily = JetBrainsMonoFamily,
+                                color = colorScheme.onPrimary
                             )
                         }
                     }
-
-                    AnimatedVisibility(visible = uiState.isRunning || uiState.loadingBins.isNotEmpty()) {
-                        LoadingIndicator(
-                            modifier = Modifier.size(26.dp),
-                            color = consoleColors.liveAccent
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.titleLargeEmphasized,
+                            color = colorScheme.onSurface
+                        )
+                        val drawerModeSummary = uiState.settings.validationMode.fixedDelayMs?.let { fixedMs ->
+                            "${uiState.settings.validationMode.badgeLabel} • ${fixedMs / 1000L}s delay"
+                        } ?: "${uiState.settings.validationMode.badgeLabel} • ${uiState.settings.concurrency}x"
+                        Text(
+                            text = drawerModeSummary,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
+                }
+
+                AnimatedVisibility(visible = uiState.isRunning || uiState.loadingBins.isNotEmpty()) {
+                    LoadingIndicator(
+                        modifier = Modifier.size(22.dp),
+                        color = consoleColors.liveAccent
+                    )
                 }
             }
         }
@@ -296,7 +261,7 @@ private fun DrawerSheetContent(
             },
             icon = {
                 Icon(
-                    imageVector = if (isConsoleSelected) Icons.Filled.Terminal else Icons.Outlined.Terminal,
+                    imageVector = AppIcons.Terminal,
                     contentDescription = null
                 )
             },
@@ -319,7 +284,7 @@ private fun DrawerSheetContent(
             shape = MaterialTheme.shapes.medium,
             colors = itemColors,
             modifier = Modifier
-                .height(50.dp)
+                .height(48.dp)
                 .testTag("drawer_item_workspace")
         )
 
@@ -334,7 +299,7 @@ private fun DrawerSheetContent(
                 },
                 icon = {
                     Icon(
-                        imageVector = if (isResultsSelected) Icons.Filled.Assessment else Icons.Outlined.Assessment,
+                        imageVector = AppIcons.Assessment,
                         contentDescription = null
                     )
                 },
@@ -357,13 +322,13 @@ private fun DrawerSheetContent(
                 shape = MaterialTheme.shapes.medium,
                 colors = itemColors,
                 modifier = Modifier
-                    .height(50.dp)
+                    .height(48.dp)
                     .testTag("drawer_item_results")
             )
         }
 
         Spacer(modifier = Modifier.height(10.dp))
-        HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.65f))
+        HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.45f))
         Spacer(modifier = Modifier.height(10.dp))
 
         Text(
@@ -381,7 +346,7 @@ private fun DrawerSheetContent(
             },
             icon = {
                 Icon(
-                    imageVector = if (uiState.isBinSheetOpen) Icons.Filled.AccountBalance else Icons.Outlined.AccountBalance,
+                    imageVector = AppIcons.AccountBalance,
                     contentDescription = null
                 )
             },
@@ -404,7 +369,7 @@ private fun DrawerSheetContent(
             shape = MaterialTheme.shapes.medium,
             colors = itemColors,
             modifier = Modifier
-                .height(50.dp)
+                .height(48.dp)
                 .testTag("drawer_item_bin_lookup")
         )
 
@@ -418,7 +383,7 @@ private fun DrawerSheetContent(
             },
             icon = {
                 Icon(
-                    imageVector = if (uiState.isFileImportOpen) Icons.Filled.UploadFile else Icons.Outlined.UploadFile,
+                    imageVector = AppIcons.UploadFile,
                     contentDescription = null
                 )
             },
@@ -441,7 +406,7 @@ private fun DrawerSheetContent(
             shape = MaterialTheme.shapes.medium,
             colors = itemColors,
             modifier = Modifier
-                .height(50.dp)
+                .height(48.dp)
                 .testTag("drawer_item_file_import")
         )
 
@@ -455,7 +420,7 @@ private fun DrawerSheetContent(
             },
             icon = {
                 Icon(
-                    imageVector = if (uiState.isHistoryOpen) Icons.Filled.History else Icons.Outlined.History,
+                    imageVector = AppIcons.History,
                     contentDescription = null
                 )
             },
@@ -476,7 +441,7 @@ private fun DrawerSheetContent(
             shape = MaterialTheme.shapes.medium,
             colors = itemColors,
             modifier = Modifier
-                .height(50.dp)
+                .height(48.dp)
                 .testTag("drawer_item_history")
         )
 
@@ -490,7 +455,7 @@ private fun DrawerSheetContent(
             },
             icon = {
                 Icon(
-                    imageVector = if (uiState.isSettingsOpen) Icons.Filled.Tune else Icons.Outlined.Tune,
+                    imageVector = AppIcons.Tune,
                     contentDescription = null
                 )
             },
@@ -514,17 +479,16 @@ private fun DrawerSheetContent(
             shape = MaterialTheme.shapes.medium,
             colors = itemColors,
             modifier = Modifier
-                .height(50.dp)
+                .height(48.dp)
                 .testTag("drawer_item_settings")
         )
 
         Spacer(modifier = Modifier.height(12.dp))
-        HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.65f))
+        HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.45f))
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Quick Theme Switcher inside Drawer
         Text(
-            text = "QUICK THEME",
+            text = "APPEARANCE",
             style = MaterialTheme.typography.labelSmall,
             color = colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
@@ -559,7 +523,7 @@ private fun DrawerSheetContent(
             onClick = { onToggleDynamicColor(!uiState.settings.useDynamicColor) },
             leadingIcon = {
                 Icon(
-                    imageVector = Icons.Outlined.Palette,
+                    imageVector = AppIcons.Palette,
                     contentDescription = null,
                     modifier = Modifier.size(16.dp)
                 )
@@ -579,15 +543,13 @@ private fun DrawerSheetContent(
         Spacer(modifier = Modifier.weight(1f, fill = true))
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Developer Channel Pin in Drawer Footer
         Surface(
             onClick = {
                 onCloseDrawer()
                 onOpenDeveloperChannel()
             },
             shape = MaterialTheme.shapes.medium,
-            color = consoleColors.telegramContainer,
-            border = BorderStroke(1.dp, consoleColors.telegramAccent.copy(alpha = 0.45f)),
+            color = colorScheme.surfaceContainer,
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("drawer_developer_channel_card")
@@ -605,13 +567,13 @@ private fun DrawerSheetContent(
                 ) {
                     Surface(
                         shape = CircleShape,
-                        color = consoleColors.telegramAccent.copy(alpha = 0.2f),
-                        modifier = Modifier.size(30.dp)
+                        color = consoleColors.telegramContainer,
+                        modifier = Modifier.size(28.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             TelegramPaperPlaneIcon(
                                 color = consoleColors.telegramAccent,
-                                modifier = Modifier.size(14.dp)
+                                modifier = Modifier.size(13.dp)
                             )
                         }
                     }
@@ -620,8 +582,8 @@ private fun DrawerSheetContent(
                         Text(
                             text = stringResource(R.string.developer_channel_handle),
                             style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = consoleColors.telegramAccent
+                            fontWeight = FontWeight.SemiBold,
+                            color = colorScheme.onSurface
                         )
                         Text(
                             text = channelUrl,
@@ -633,7 +595,7 @@ private fun DrawerSheetContent(
                     }
                 }
                 Icon(
-                    imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
+                    imageVector = AppIcons.OpenInNew,
                     contentDescription = "Open Telegram Channel",
                     tint = consoleColors.telegramAccent,
                     modifier = Modifier.size(16.dp)

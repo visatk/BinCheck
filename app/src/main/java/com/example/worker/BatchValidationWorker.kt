@@ -111,6 +111,11 @@ class BatchValidationWorker(
         val batchConcreteCache = ConcurrentHashMap<String, ValidationRecord>()
         val batchLineDeduplicator = RequestDeduplicator<String, ValidationRecord>()
 
+        // Buffered DB history writes for high-throughput (< 1s delay) runs
+        val useBatchedDbWrites = effectiveDelayMs < 1_000L
+        val historyWriteBuffer = mutableListOf<com.example.data.local.ValidationHistoryEntity>()
+        val historyBufferMutex = Mutex()
+
         // Buffered Telegram alert digest queue for high-throughput batches
         val telegramBuffer = mutableListOf<ValidationRecord>()
         val telegramBufferMutex = Mutex()
@@ -177,6 +182,46 @@ class BatchValidationWorker(
             return result
         }
 
+        suspend fun persistRecord(itemSourceName: String, record: ValidationRecord) {
+            val effectiveSource = itemSourceName.ifBlank { sourceName }
+            if (!useBatchedDbWrites) {
+                repository.recordResult(
+                    batchId = batchId,
+                    sourceName = effectiveSource,
+                    record = record,
+                    endpointUsed = endpointLabel
+                )
+                return
+            }
+            val entity = repository.toEntity(
+                batchId = batchId,
+                sourceName = effectiveSource,
+                record = record,
+                endpointUsed = endpointLabel
+            )
+            val flushChunk = historyBufferMutex.withLock {
+                historyWriteBuffer.add(entity)
+                if (historyWriteBuffer.size >= DB_BATCH_FLUSH_SIZE) {
+                    historyWriteBuffer.toList().also { historyWriteBuffer.clear() }
+                } else {
+                    null
+                }
+            }
+            if (!flushChunk.isNullOrEmpty()) {
+                repository.recordResultBatch(flushChunk)
+            }
+        }
+
+        suspend fun flushRemainingHistory() {
+            if (!useBatchedDbWrites) return
+            val remaining = historyBufferMutex.withLock {
+                historyWriteBuffer.toList().also { historyWriteBuffer.clear() }
+            }
+            if (remaining.isNotEmpty()) {
+                repository.recordResultBatch(remaining)
+            }
+        }
+
         suspend fun handleTelegramDispatch(record: ValidationRecord) {
             if (!shouldNotifyTelegram) return
             if (telegramLiveOnly && record.bucket != ResultBucket.LIVE) return
@@ -233,12 +278,7 @@ class BatchValidationWorker(
                     if (isStopped) break
                     val record = validateSingleLine(item.rawLine)
 
-                    repository.recordResult(
-                        batchId = batchId,
-                        sourceName = item.sourceName.ifBlank { sourceName },
-                        record = record,
-                        endpointUsed = endpointLabel
-                    )
+                    persistRecord(item.sourceName, record)
 
                     when (record.bucket) {
                         ResultBucket.LIVE -> liveCounter.incrementAndGet()
@@ -263,12 +303,7 @@ class BatchValidationWorker(
                                 if (isStopped) return@withPermit
                                 val record = validateSingleLine(item.rawLine)
 
-                                repository.recordResult(
-                                    batchId = batchId,
-                                    sourceName = item.sourceName.ifBlank { sourceName },
-                                    record = record,
-                                    endpointUsed = endpointLabel
-                                )
+                                persistRecord(item.sourceName, record)
 
                                 when (record.bucket) {
                                     ResultBucket.LIVE -> liveCounter.incrementAndGet()
@@ -290,6 +325,8 @@ class BatchValidationWorker(
                 }
                 maybePublishProgress(processedCounter.get(), force = true)
             }
+
+            flushRemainingHistory()
 
             if (shouldNotifyTelegram) {
                 val remaining = telegramBufferMutex.withLock {
@@ -325,6 +362,7 @@ class BatchValidationWorker(
         const val UNIQUE_BATCH_WORK_NAME = "bincheck_concurrent_batch_validation"
         private const val PROGRESS_ITEM_STRIDE = 4
         private const val PROGRESS_MIN_INTERVAL_MS = 250L
+        private const val DB_BATCH_FLUSH_SIZE = 15
         private const val TELEGRAM_DIGEST_CHUNK_SIZE = 8
 
         const val KEY_BATCH_ID = "batch_id"

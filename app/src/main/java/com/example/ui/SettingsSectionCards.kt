@@ -11,8 +11,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -49,12 +47,12 @@ fun AppearanceSectionCard(
         modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
         color = colorScheme.surfaceContainerLowest,
-        border = BorderStroke(1.dp, colorScheme.outlineVariant)
+        border = BorderStroke(0.75.dp, colorScheme.outlineVariant.copy(alpha = 0.55f))
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    imageVector = Icons.Outlined.Palette,
+                    imageVector = AppIcons.Palette,
                     contentDescription = null,
                     tint = colorScheme.primary,
                     modifier = Modifier.size(18.dp)
@@ -149,8 +147,8 @@ fun ModeOptionCard(
             colorScheme.surfaceContainerLowest
         },
         border = BorderStroke(
-            width = if (selected) 1.5.dp else 1.dp,
-            color = if (selected) colorScheme.secondary else colorScheme.outlineVariant
+            width = if (selected) 1.dp else 0.75.dp,
+            color = if (selected) colorScheme.secondary.copy(alpha = 0.75f) else colorScheme.outlineVariant.copy(alpha = 0.55f)
         ),
         modifier = Modifier
             .fillMaxWidth()

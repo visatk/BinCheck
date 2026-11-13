@@ -16,16 +16,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.outlined.AccountBalance
-import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.CreditCard
-import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Button
@@ -38,7 +34,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.LoadingIndicator
-import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -46,7 +41,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -279,7 +273,7 @@ fun BinLookupBottomSheet(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.large,
                     color = colorScheme.surfaceContainerLowest,
-                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                    border = BorderStroke(0.75.dp, colorScheme.outlineVariant.copy(alpha = 0.55f))
                 ) {
                     Column(
                         modifier = Modifier
@@ -288,16 +282,16 @@ fun BinLookupBottomSheet(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Surface(
-                            shape = MaterialShapes.Cookie7Sided.toShape(),
+                            shape = CircleShape,
                             color = consoleColors.liveContainer.copy(alpha = 0.7f),
-                            modifier = Modifier.size(52.dp)
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = Icons.Outlined.CreditCard,
+                                    imageVector = AppIcons.CreditCard,
                                     contentDescription = null,
                                     tint = consoleColors.liveAccent,
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                         }
@@ -351,7 +345,7 @@ private fun BinDetailsCard(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = Icons.Outlined.CreditCard,
+                        imageVector = AppIcons.CreditCard,
                         contentDescription = null,
                         tint = consoleColors.liveAccent,
                         modifier = Modifier.size(20.dp)
@@ -410,7 +404,7 @@ private fun BinDetailsCard(
 
             Row(verticalAlignment = Alignment.Top) {
                 Icon(
-                    imageVector = Icons.Outlined.AccountBalance,
+                    imageVector = AppIcons.AccountBalance,
                     contentDescription = null,
                     tint = colorScheme.primary,
                     modifier = Modifier.size(18.dp)
@@ -456,7 +450,7 @@ private fun BinDetailsCard(
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Icon(
-                                    imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
+                                    imageVector = AppIcons.OpenInNew,
                                     contentDescription = null,
                                     tint = colorScheme.primary,
                                     modifier = Modifier.size(12.dp)
@@ -471,7 +465,7 @@ private fun BinDetailsCard(
 
             Row(verticalAlignment = Alignment.Top) {
                 Icon(
-                    imageVector = Icons.Outlined.Language,
+                    imageVector = AppIcons.Language,
                     contentDescription = null,
                     tint = colorScheme.secondary,
                     modifier = Modifier.size(18.dp)
@@ -529,7 +523,7 @@ private fun BinDetailsCard(
                     shape = MaterialTheme.shapes.small
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.ContentCopy,
+                        imageVector = AppIcons.ContentCopy,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp)
                     )

@@ -22,15 +22,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Done
-import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material.icons.outlined.DeleteSweep
-import androidx.compose.material.icons.outlined.ErrorOutline
-import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -41,7 +36,6 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -49,7 +43,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -137,14 +130,13 @@ fun HistoryLogBottomSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Surface(
-                        shape = MaterialShapes.Cookie7Sided.toShape(),
+                        shape = CircleShape,
                         color = colorScheme.secondaryContainer,
-                        border = BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.35f)),
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(38.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
-                                imageVector = Icons.Outlined.History,
+                                imageVector = AppIcons.History,
                                 contentDescription = null,
                                 tint = colorScheme.onSecondaryContainer,
                                 modifier = Modifier.size(19.dp)
@@ -230,7 +222,7 @@ fun HistoryLogBottomSheet(
                             .testTag("clear_all_history_button")
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.DeleteSweep,
+                            imageVector = AppIcons.DeleteSweep,
                             contentDescription = stringResource(R.string.clear_history),
                             modifier = Modifier.size(15.dp)
                         )
@@ -300,16 +292,16 @@ fun HistoryLogBottomSheet(
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Surface(
-                                shape = MaterialShapes.Clover4Leaf.toShape(),
-                                color = colorScheme.secondaryContainer.copy(alpha = 0.8f),
-                                modifier = Modifier.size(54.dp)
+                                shape = CircleShape,
+                                color = colorScheme.secondaryContainer.copy(alpha = 0.72f),
+                                modifier = Modifier.size(48.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
-                                        imageVector = Icons.Outlined.History,
+                                        imageVector = AppIcons.History,
                                         contentDescription = null,
                                         tint = colorScheme.onSecondaryContainer,
-                                        modifier = Modifier.size(26.dp)
+                                        modifier = Modifier.size(22.dp)
                                     )
                                 }
                             }
@@ -485,9 +477,9 @@ private fun HistoryEntryRow(
                     ) {
                         Icon(
                             imageVector = if (entry.isSuccess) {
-                                Icons.Outlined.CheckCircle
+                                AppIcons.CheckCircle
                             } else {
-                                Icons.Outlined.ErrorOutline
+                                AppIcons.ErrorOutline
                             },
                             contentDescription = if (entry.isSuccess) "Success" else "Failure",
                             tint = accentColor,
@@ -507,7 +499,7 @@ private fun HistoryEntryRow(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = onCopy) {
                             Icon(
-                                imageVector = Icons.Outlined.ContentCopy,
+                                imageVector = AppIcons.ContentCopy,
                                 contentDescription = "Copy history record",
                                 tint = colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(16.dp)
@@ -515,7 +507,7 @@ private fun HistoryEntryRow(
                         }
                         IconButton(onClick = onDelete) {
                             Icon(
-                                imageVector = Icons.Outlined.DeleteOutline,
+                                imageVector = AppIcons.DeleteOutline,
                                 contentDescription = "Delete history entry",
                                 tint = colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(16.dp)

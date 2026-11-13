@@ -7,24 +7,11 @@
 - **Core Purpose**: Production-grade batch pipe-delimited card/token format validator (`NUMBER|MM|YYYY|CVV`), mathematical `x` wildcard Luhn-compliant generator, real-time IIN/BIN scheme inspector, and optional HTTP Webhook/Gateway batch verifier.
 
 ## UI & Visual Architecture (Material 3 Expressive + Dynamic Color)
-- **Material 3 Theme System (`Color.kt`, `Shape.kt`, `Type.kt`, `Theme.kt`)**:
+- **Material 3 Theme System (`Color.kt`, `Shape.kt`, `Type.kt`, `Theme.kt`) & Lightweight Icons (`AppIcons.kt`)**:
+  - **Lightweight Iconography**: Replaced the ~28 MB `material-icons-extended` dependency with `material-icons-core` + custom curated `AppIcons` vector paths (~4 KB total) to keep APK size minimal and builds fast.
   - **Dynamic Color (Android 12+)**: Uses `dynamicDarkColorScheme` and `dynamicLightColorScheme` with curated obsidian-emerald dark & crisp light tonal surface container fallbacks (`surfaceContainerLowest` through `surfaceContainerHighest`) for Android < 12 or when toggled off.
-  - **Appearance Preferences**: User-selectable `System` / `Dark` / `Light` theme mode (`SingleChoiceSegmentedButtonRow`) and Material You Dynamic Color `Switch` in Settings, persisted via Jetpack `DataStore`.
-  - **Semantic Status Provider (`LocalConsoleColors`)**: Harmonized high-contrast accents for `Live`, `Die`, `Unknown`, and `@drkingbd` Telegram brand surfaces across both dark and light themes.
-  - **Top Telemetry & Developer Bar (`TelemetryComponents.kt`)**: Displays real-time engine mode badge (`LUHN` / `WEBHOOK`), live BIN/IIN brand detection chip, Room History counter pill, and interactive **Developer Channel (`@drkingbd`)** pill linking directly to `https://t.me/drkingbd`.
-  - **Elevated Main Console Card (`ConsoleComponents.kt`)**:
-    - **Recessed IDE-Style Monospace Console (`surfaceContainerLowest`)**: Dynamic line-number gutter (`01`, `02`...), `JetBrains Mono` typography, exact `453225005536xxx3|08|2028|113` placeholder hint, animated focus border, and quick-action M3 tonal pills (`File`, `Gen 10x`, `Solve x`, `Paste`, `Clear`).
-    - **Zero-Permission File Picker (`FileImportBottomSheet.kt` + `FileTextExtractor.kt`)**: Uses Android Storage Access Framework (`ActivityResultContracts.OpenDocument`) to select `.txt` and `.html`/`.htm` files from device storage, strips HTML tags/scripts/entities, previews extracted lines, and supports Append/Replace + Smart Delimited Record filtering.
-    - **Adaptive Responsive Layout (`BoxWithConstraints` + M3 `Scaffold` + `SnackbarHost`)**: Switches dynamically between a centered single-column layout on compact portrait screens and a side-by-side two-pane layout (`Console` left / `Results` right) on landscape, foldables, and tablets (`maxWidth >= 680.dp`).
-    - **Dual Full-Width M3 Action Bars (`surfaceContainerHigh`)**:
-      1. **Run / Stop Bar**: Crisp outlined Play Triangle (`colorScheme.primary`) with Material ripple feedback when idle; live `LinearProgressIndicator` + processed counter + Stop square when active.
-      2. **Settings / Tools Bar**: Crisp outlined Gear (`colorScheme.secondary`) opening the Pattern Generator, Appearance & Gateway Configuration sheet.
-  - **Bottom 3D Results Card (`ResultsComponents.kt`)**:
-    - **3-Tab Header**: `Live`, `Die`, `Unknown` with tonal container elevation (`surfaceContainerHighest`), top semantic accent stripe, and animated count badges.
-    - **Results Viewport**: Expandable list of validated records with scheme badge, diagnostic breakdown, latency (`ms`), M3 `FilledTonalButton` Copy All, Clear, and single-row copy/remove actions.
-  - **History Log (`HistoryLogBottomSheet.kt`)**: M3 `FilterChip` filters (`All`, `Success`, `Failure`), live search, and local Room audit trail.
-  - **Developer Channel Footer & Settings Integration**:
-    - Direct one-tap intent launcher (`Intent.ACTION_VIEW`) for `https://t.me/drkingbd` on the main screen footer and inside the Settings bottom sheet.
+  - **Appearance Preferences**: User-selectable `System` / `Dark` / `Light` theme mode (`SingleChoiceSegmentedButtonRow`) and Material You Dynamic Color `Switch` in Settings & Drawer, persisted via Jetpack `DataStore`.
+  - **Clean Low-Noise Workspace (`TelemetryComponents.kt`, `ConsoleComponents.kt`, `ResultsComponents.kt`)**: Pure M3 canvas without decorative blobs, hairline tonal borders, cohesive monochrome-plus-accent mini toolbar pills, borderless inline Live BIN badge, 3-tab Settings Studio (`Engine`, `Gateway`, `System`) with sticky action bar, and concise `@drkingbd` links in the telemetry strip, Drawer, and System tab.
 
 ## Validation & Processing Engine (100% Production Logic, Zero Mock Data)
 1. **Parser & Mathematical Luhn Wildcard Solver**:

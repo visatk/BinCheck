@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
@@ -854,5 +855,48 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("history_pagination_status").assertIsDisplayed()
         composeTestRule.onNodeWithTag("history_load_more_button").assertIsDisplayed()
         composeTestRule.onNodeWithText("Showing 3 of 12").assertIsDisplayed()
+    }
+
+    @Test
+    fun `settingsBottomSheet switches cleanly across Engine Gateway and System tabs`() {
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                com.example.ui.SettingsBottomSheet(
+                    settings = com.example.data.ValidatorSettings(),
+                    networkStats = NetworkTelemetrySnapshot(),
+                    deviceNetworkStatus = DeviceNetworkStatus(),
+                    isTestingEndpoint = false,
+                    httpProbeResult = null,
+                    isTestingTelegram = false,
+                    telegramProbeResult = null,
+                    onDismiss = {},
+                    onTestEndpoint = {},
+                    onDetectTelegramChat = {},
+                    onTestTelegramWebhook = {},
+                    onClearCaches = {},
+                    onSaveSettings = { _, _, _, _, _, _, _, _, _, _, _, _, _, _ -> },
+                    onGenerateBatchToConsole = { _, _ -> },
+                    onClearAllBuckets = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("settings_tab_engine").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_tab_gateway").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_tab_system").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("save_settings_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("clear_all_buckets_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("pattern_template_input").performScrollTo().assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("settings_tab_gateway").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("webhook_url_input").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("telegram_webhook_switch").performScrollTo().assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("settings_tab_system").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("network_telemetry_strip").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("theme_mode_dark").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_developer_channel_card").performScrollTo().assertIsDisplayed()
     }
 }

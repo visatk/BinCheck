@@ -20,9 +20,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Done
-import androidx.compose.material.icons.outlined.Http
-import androidx.compose.material.icons.outlined.NetworkCheck
-import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
@@ -90,7 +87,7 @@ fun CustomHttpSectionCard(
         modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
         color = colorScheme.surfaceContainerLowest,
-        border = BorderStroke(1.dp, colorScheme.outlineVariant)
+        border = BorderStroke(0.75.dp, colorScheme.outlineVariant.copy(alpha = 0.55f))
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(
@@ -100,7 +97,7 @@ fun CustomHttpSectionCard(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = Icons.Outlined.Http,
+                        imageVector = AppIcons.Http,
                         contentDescription = null,
                         tint = colorScheme.primary,
                         modifier = Modifier.size(20.dp)
@@ -118,7 +115,7 @@ fun CustomHttpSectionCard(
                     modifier = Modifier.testTag("toggle_http_advanced_button")
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.Tune,
+                        imageVector = AppIcons.Tune,
                         contentDescription = null,
                         modifier = Modifier.size(15.dp)
                     )
@@ -495,7 +492,7 @@ fun CustomHttpSectionCard(
                     Text("Probing HTTP Endpoint...", style = MaterialTheme.typography.labelLarge)
                 } else {
                     Icon(
-                        imageVector = Icons.Outlined.NetworkCheck,
+                        imageVector = AppIcons.NetworkCheck,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp)
                     )
