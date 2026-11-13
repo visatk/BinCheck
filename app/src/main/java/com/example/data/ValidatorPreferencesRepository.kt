@@ -20,6 +20,7 @@ data class ValidatorSettings(
     val webhookUrl: String = "",
     val autoResolveWildcards: Boolean = true,
     val batchDelayMs: Long = 55L,
+    val concurrency: Int = 4,
     val patternTemplate: String = "453225005536xxx3|08|2028|113",
     val generateQuantity: Int = 10
 )
@@ -31,6 +32,7 @@ class ValidatorPreferencesRepository(private val context: Context) {
         val WEBHOOK_URL = stringPreferencesKey("webhook_url")
         val AUTO_RESOLVE_WILDCARDS = booleanPreferencesKey("auto_resolve_wildcards")
         val BATCH_DELAY_MS = longPreferencesKey("batch_delay_ms")
+        val CONCURRENCY = intPreferencesKey("worker_concurrency")
         val PATTERN_TEMPLATE = stringPreferencesKey("pattern_template")
         val GENERATE_QUANTITY = intPreferencesKey("generate_quantity")
     }
@@ -45,6 +47,7 @@ class ValidatorPreferencesRepository(private val context: Context) {
             webhookUrl = prefs[Keys.WEBHOOK_URL] ?: "",
             autoResolveWildcards = prefs[Keys.AUTO_RESOLVE_WILDCARDS] ?: true,
             batchDelayMs = prefs[Keys.BATCH_DELAY_MS] ?: 55L,
+            concurrency = (prefs[Keys.CONCURRENCY] ?: 4).coerceIn(1, 8),
             patternTemplate = prefs[Keys.PATTERN_TEMPLATE] ?: "453225005536xxx3|08|2028|113",
             generateQuantity = prefs[Keys.GENERATE_QUANTITY] ?: 10
         )
@@ -55,6 +58,7 @@ class ValidatorPreferencesRepository(private val context: Context) {
         webhookUrl: String,
         autoResolveWildcards: Boolean,
         batchDelayMs: Long,
+        concurrency: Int,
         patternTemplate: String,
         generateQuantity: Int
     ) {
@@ -63,6 +67,7 @@ class ValidatorPreferencesRepository(private val context: Context) {
             prefs[Keys.WEBHOOK_URL] = webhookUrl.trim()
             prefs[Keys.AUTO_RESOLVE_WILDCARDS] = autoResolveWildcards
             prefs[Keys.BATCH_DELAY_MS] = batchDelayMs.coerceIn(0L, 2000L)
+            prefs[Keys.CONCURRENCY] = concurrency.coerceIn(1, 8)
             prefs[Keys.PATTERN_TEMPLATE] = patternTemplate.trim().ifEmpty { "453225005536xxx3|08|2028|113" }
             prefs[Keys.GENERATE_QUANTITY] = generateQuantity.coerceIn(1, 100)
         }

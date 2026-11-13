@@ -1,26 +1,48 @@
 package com.example.ui
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import com.example.data.ValidatorPreferencesRepository
 import com.example.data.ValidatorSettings
+import com.example.data.local.AppDatabase
+import com.example.data.local.HistoryFilter
+import com.example.data.local.ValidationHistoryEntity
+import com.example.data.local.ValidationHistoryRepository
+import com.example.domain.CardScheme
 import com.example.domain.CardValidatorEngine
+import com.example.domain.FileTextExtractor
+import com.example.domain.ImportedFilePreview
 import com.example.domain.ResultBucket
 import com.example.domain.ValidationMode
 import com.example.domain.ValidationRecord
+import com.example.worker.BatchValidationWorker
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.UUID
+
+data class HistoryUiSummary(
+    val totalCount: Int = 0,
+    val successCount: Int = 0,
+    val failureCount: Int = 0
+)
 
 data class ValidatorUiState(
     val rawInputText: String = "",
@@ -32,6 +54,16 @@ data class ValidatorUiState(
     val dieRecords: List<ValidationRecord> = emptyList(),
     val unknownRecords: List<ValidationRecord> = emptyList(),
     val isSettingsOpen: Boolean = false,
+    val isFileImportOpen: Boolean = false,
+    val isHistoryOpen: Boolean = false,
+    val historyFilter: HistoryFilter = HistoryFilter.ALL,
+    val historySearchQuery: String = "",
+    val historyEntries: List<ValidationHistoryEntity> = emptyList(),
+    val historySummary: HistoryUiSummary = HistoryUiSummary(),
+    val isImportingFile: Boolean = false,
+    val fileImportError: String? = null,
+    val importedFilePreview: ImportedFilePreview? = null,
+    val loadedFileName: String? = null,
     val settings: ValidatorSettings = ValidatorSettings(),
     val statusBannerMessage: String? = null
 ) {
@@ -46,19 +78,60 @@ data class ValidatorUiState(
         get() = rawInputText.lines().count { it.isNotBlank() }
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ValidatorViewModel(
     application: Application,
-    private val preferencesRepository: ValidatorPreferencesRepository
+    private val preferencesRepository: ValidatorPreferencesRepository,
+    private val historyRepository: ValidationHistoryRepository,
+    private val workManager: WorkManager
 ) : AndroidViewModel(application) {
 
     private val _localState = MutableStateFlow(ValidatorUiState())
-    private var batchJob: Job? = null
+    private val _historyFilter = MutableStateFlow(HistoryFilter.ALL)
+    private val _historyQuery = MutableStateFlow("")
+
+    private var activeWorkId: UUID? = null
+    private var workerObserverJob: Job? = null
+    private var batchResultsObserverJob: Job? = null
+
+    private val filteredHistoryFlow = _historyFilter
+        .flatMapLatest { filter -> historyRepository.observeHistory(filter) }
+        .combine(_historyQuery) { entries, query ->
+            val q = query.trim().lowercase()
+            if (q.isEmpty()) {
+                entries
+            } else {
+                entries.filter {
+                    it.normalizedLine.lowercase().contains(q) ||
+                        it.scheme.lowercase().contains(q) ||
+                        it.sourceName.lowercase().contains(q) ||
+                        it.message.lowercase().contains(q)
+                }
+            }
+        }
+
+    private val historySummaryFlow = combine(
+        historyRepository.totalHistoryCount,
+        historyRepository.successHistoryCount,
+        historyRepository.failureHistoryCount
+    ) { total, success, failure ->
+        HistoryUiSummary(totalCount = total, successCount = success, failureCount = failure)
+    }
 
     val uiState: StateFlow<ValidatorUiState> = combine(
         _localState,
-        preferencesRepository.settingsFlow
-    ) { state, prefs ->
-        state.copy(settings = prefs)
+        preferencesRepository.settingsFlow,
+        filteredHistoryFlow,
+        historySummaryFlow,
+        combine(_historyFilter, _historyQuery) { f, q -> f to q }
+    ) { state, prefs, historyList, summary, filterPair ->
+        state.copy(
+            settings = prefs,
+            historyEntries = historyList,
+            historySummary = summary,
+            historyFilter = filterPair.first,
+            historySearchQuery = filterPair.second
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -69,6 +142,7 @@ class ValidatorViewModel(
         _localState.update {
             it.copy(
                 rawInputText = newText,
+                loadedFileName = if (newText.isBlank()) null else it.loadedFileName,
                 statusBannerMessage = null
             )
         }
@@ -86,6 +160,142 @@ class ValidatorViewModel(
         _localState.update { it.copy(isSettingsOpen = false) }
     }
 
+    fun openFileImport() {
+        _localState.update {
+            it.copy(
+                isFileImportOpen = true,
+                fileImportError = null,
+                statusBannerMessage = null
+            )
+        }
+    }
+
+    fun closeFileImport() {
+        _localState.update {
+            it.copy(
+                isFileImportOpen = false,
+                fileImportError = null
+            )
+        }
+    }
+
+    fun openHistory() {
+        _localState.update { it.copy(isHistoryOpen = true, statusBannerMessage = null) }
+    }
+
+    fun closeHistory() {
+        _localState.update { it.copy(isHistoryOpen = false) }
+    }
+
+    fun setHistoryFilter(filter: HistoryFilter) {
+        _historyFilter.value = filter
+    }
+
+    fun setHistorySearchQuery(query: String) {
+        _historyQuery.value = query
+    }
+
+    fun deleteHistoryEntry(id: Long) {
+        viewModelScope.launch {
+            historyRepository.deleteEntry(id)
+        }
+    }
+
+    fun clearAllHistory() {
+        viewModelScope.launch {
+            historyRepository.clearAllHistory()
+            _localState.update { it.copy(statusBannerMessage = "History log cleared") }
+        }
+    }
+
+    fun clearFilePreview() {
+        _localState.update {
+            it.copy(
+                importedFilePreview = null,
+                fileImportError = null
+            )
+        }
+    }
+
+    fun onFileUriSelected(uri: Uri) {
+        _localState.update {
+            it.copy(
+                isFileImportOpen = true,
+                isImportingFile = true,
+                fileImportError = null
+            )
+        }
+
+        viewModelScope.launch {
+            val result = FileTextExtractor.readAndParseUri(getApplication(), uri)
+            result.fold(
+                onSuccess = { preview ->
+                    _localState.update {
+                        it.copy(
+                            isImportingFile = false,
+                            importedFilePreview = preview,
+                            fileImportError = if (preview.allNonEmptyLines.isEmpty()) {
+                                "Selected file has no readable text lines."
+                            } else {
+                                null
+                            }
+                        )
+                    }
+                },
+                onFailure = { err ->
+                    _localState.update {
+                        it.copy(
+                            isImportingFile = false,
+                            importedFilePreview = null,
+                            fileImportError = err.localizedMessage ?: "Failed to read selected file."
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    fun applyImportedFile(
+        append: Boolean,
+        onlyDelimitedRecords: Boolean,
+        startImmediately: Boolean
+    ) {
+        val preview = _localState.value.importedFilePreview ?: return
+        val chosenLines = if (onlyDelimitedRecords && preview.delimitedRecordLines.isNotEmpty()) {
+            preview.delimitedRecordLines
+        } else {
+            preview.allNonEmptyLines
+        }
+
+        if (chosenLines.isEmpty()) {
+            _localState.update {
+                it.copy(fileImportError = "No lines available to load from ${preview.fileName}.")
+            }
+            return
+        }
+
+        val payload = chosenLines.joinToString("\n")
+        _localState.update { prev ->
+            val existing = prev.rawInputText.trim()
+            val merged = if (append && existing.isNotEmpty()) {
+                "$existing\n$payload"
+            } else {
+                payload
+            }
+            prev.copy(
+                rawInputText = merged,
+                loadedFileName = preview.fileName,
+                isFileImportOpen = false,
+                fileImportError = null,
+                statusBannerMessage = "Loaded ${chosenLines.size} line(s) from ${preview.fileName}"
+            )
+        }
+
+        if (startImmediately) {
+            startBatchRun()
+        }
+    }
+
     fun clearStatusBanner() {
         _localState.update { it.copy(statusBannerMessage = null) }
     }
@@ -99,12 +309,14 @@ class ValidatorViewModel(
     }
 
     private fun stopBatchRun() {
-        batchJob?.cancel()
-        batchJob = null
+        activeWorkId?.let { workManager.cancelWorkById(it) }
+        workerObserverJob?.cancel()
+        batchResultsObserverJob?.cancel()
+        activeWorkId = null
         _localState.update {
             it.copy(
                 isRunning = false,
-                statusBannerMessage = "Batch paused (${it.processedCount}/${it.totalBatchCount} processed)"
+                statusBannerMessage = "Batch stopped (${it.processedCount}/${it.totalBatchCount} processed)"
             )
         }
     }
@@ -119,80 +331,166 @@ class ValidatorViewModel(
         if (lines.isEmpty()) {
             _localState.update {
                 it.copy(
-                    statusBannerMessage = "Console is empty. Paste records or tap ⚙ to expand a BIN pattern."
+                    statusBannerMessage = "Console is empty. Import a .txt/.html file, paste records, or tap ⚙."
                 )
             }
             return
         }
 
-        batchJob?.cancel()
-        batchJob = viewModelScope.launch {
-            // If a line contains 'x' wildcards and autoResolveWildcards is true, resolve it in-place in the console too
-            val settings = uiState.value.settings
+        workerObserverJob?.cancel()
+        batchResultsObserverJob?.cancel()
+
+        val settings = currentState.settings
+        val batchId = UUID.randomUUID().toString()
+        val sourceName = currentState.loadedFileName ?: "Console"
+
+        viewModelScope.launch {
+            historyRepository.enqueueBatch(
+                batchId = batchId,
+                lines = lines,
+                sourceName = sourceName
+            )
+
+            val inputData = workDataOf(
+                BatchValidationWorker.KEY_BATCH_ID to batchId,
+                BatchValidationWorker.KEY_VALIDATION_MODE to settings.validationMode.name,
+                BatchValidationWorker.KEY_WEBHOOK_URL to settings.webhookUrl,
+                BatchValidationWorker.KEY_AUTO_RESOLVE_WILDCARDS to settings.autoResolveWildcards,
+                BatchValidationWorker.KEY_CONCURRENCY to settings.concurrency,
+                BatchValidationWorker.KEY_BATCH_DELAY_MS to settings.batchDelayMs,
+                BatchValidationWorker.KEY_SOURCE_NAME to sourceName
+            )
+
+            val workRequest = OneTimeWorkRequestBuilder<BatchValidationWorker>()
+                .setInputData(inputData)
+                .build()
+
+            activeWorkId = workRequest.id
+
             _localState.update {
                 it.copy(
                     isRunning = true,
                     processedCount = 0,
                     totalBatchCount = lines.size,
-                    statusBannerMessage = null
+                    statusBannerMessage = "Worker running (${settings.concurrency}x concurrent)..."
                 )
             }
 
-            val remainingLines = lines.toMutableList()
+            // Stream completed records from Room for this batchId into Live / Die / Unknown tabs
+            batchResultsObserverJob = viewModelScope.launch {
+                val baseLive = _localState.value.liveRecords
+                val baseDie = _localState.value.dieRecords
+                val baseUnknown = _localState.value.unknownRecords
 
-            for ((index, line) in lines.withIndex()) {
-                val record = CardValidatorEngine.validateLine(
-                    rawLine = line,
-                    mode = settings.validationMode,
-                    webhookUrl = settings.webhookUrl,
-                    autoResolveWildcards = settings.autoResolveWildcards
-                )
+                historyRepository.observeBatchResults(batchId).collect { batchEntities ->
+                    val batchLive = mutableListOf<ValidationRecord>()
+                    val batchDie = mutableListOf<ValidationRecord>()
+                    val batchUnknown = mutableListOf<ValidationRecord>()
 
-                remainingLines.removeAt(0)
-
-                _localState.update { prev ->
-                    val updatedLive = if (record.bucket == ResultBucket.LIVE) {
-                        listOf(record) + prev.liveRecords
-                    } else {
-                        prev.liveRecords
+                    for (entity in batchEntities.asReversed()) {
+                        val bucket = runCatching { ResultBucket.valueOf(entity.status) }
+                            .getOrDefault(ResultBucket.UNKNOWN)
+                        val scheme = runCatching { CardScheme.valueOf(entity.scheme) }
+                            .getOrDefault(CardScheme.UNKNOWN)
+                        val record = ValidationRecord(
+                            id = "hist_${entity.id}",
+                            rawLine = entity.rawLine,
+                            normalizedLine = entity.normalizedLine,
+                            pan = entity.pan,
+                            month = entity.month,
+                            year = entity.year,
+                            cvv = entity.cvv,
+                            scheme = scheme,
+                            bucket = bucket,
+                            message = entity.message,
+                            latencyMs = entity.latencyMs
+                        )
+                        when (bucket) {
+                            ResultBucket.LIVE -> batchLive.add(record)
+                            ResultBucket.DIE -> batchDie.add(record)
+                            ResultBucket.UNKNOWN -> batchUnknown.add(record)
+                        }
                     }
-                    val updatedDie = if (record.bucket == ResultBucket.DIE) {
-                        listOf(record) + prev.dieRecords
-                    } else {
-                        prev.dieRecords
-                    }
-                    val updatedUnknown = if (record.bucket == ResultBucket.UNKNOWN) {
-                        listOf(record) + prev.unknownRecords
-                    } else {
-                        prev.unknownRecords
-                    }
 
-                    prev.copy(
-                        rawInputText = remainingLines.joinToString("\n"),
-                        processedCount = index + 1,
-                        liveRecords = updatedLive,
-                        dieRecords = updatedDie,
-                        unknownRecords = updatedUnknown
-                    )
-                }
-
-                if (settings.batchDelayMs > 0 && index < lines.lastIndex) {
-                    delay(settings.batchDelayMs)
+                    _localState.update { prev ->
+                        prev.copy(
+                            liveRecords = batchLive + baseLive,
+                            dieRecords = batchDie + baseDie,
+                            unknownRecords = batchUnknown + baseUnknown
+                        )
+                    }
                 }
             }
 
-            _localState.update {
-                it.copy(
-                    isRunning = false,
-                    statusBannerMessage = "Completed ${lines.size} item(s)"
-                )
+            workManager.enqueueUniqueWork(
+                BatchValidationWorker.UNIQUE_BATCH_WORK_NAME,
+                ExistingWorkPolicy.REPLACE,
+                workRequest
+            )
+
+            workerObserverJob = viewModelScope.launch {
+                workManager.getWorkInfoByIdFlow(workRequest.id).collect { workInfo ->
+                    if (workInfo == null) return@collect
+                    val processedFromProgress = workInfo.progress.getInt(BatchValidationWorker.KEY_PROCESSED, -1)
+                    val processedFromOutput = workInfo.outputData.getInt(BatchValidationWorker.KEY_PROCESSED, -1)
+
+                    when (workInfo.state) {
+                        WorkInfo.State.ENQUEUED,
+                        WorkInfo.State.RUNNING -> {
+                            if (processedFromProgress >= 0) {
+                                _localState.update { prev ->
+                                    prev.copy(
+                                        isRunning = true,
+                                        processedCount = processedFromProgress.coerceAtMost(prev.totalBatchCount)
+                                    )
+                                }
+                            }
+                        }
+
+                        WorkInfo.State.SUCCEEDED -> {
+                            val finalCount = if (processedFromOutput >= 0) processedFromOutput else lines.size
+                            _localState.update { prev ->
+                                prev.copy(
+                                    isRunning = false,
+                                    processedCount = finalCount,
+                                    rawInputText = "",
+                                    loadedFileName = null,
+                                    statusBannerMessage = "Worker completed $finalCount item(s) • Saved to History"
+                                )
+                            }
+                            batchResultsObserverJob?.cancel()
+                            workerObserverJob?.cancel()
+                        }
+
+                        WorkInfo.State.CANCELLED -> {
+                            _localState.update { prev ->
+                                prev.copy(
+                                    isRunning = false,
+                                    statusBannerMessage = "Batch worker cancelled (${prev.processedCount}/${prev.totalBatchCount})"
+                                )
+                            }
+                            batchResultsObserverJob?.cancel()
+                            workerObserverJob?.cancel()
+                        }
+
+                        WorkInfo.State.FAILED -> {
+                            _localState.update { prev ->
+                                prev.copy(
+                                    isRunning = false,
+                                    statusBannerMessage = "Batch worker encountered an error"
+                                )
+                            }
+                            batchResultsObserverJob?.cancel()
+                            workerObserverJob?.cancel()
+                        }
+
+                        WorkInfo.State.BLOCKED -> Unit
+                    }
+                }
             }
         }
     }
 
-    /**
-     * Expands wildcards in the current console input or generates a batch from the pattern template.
-     */
     fun generateBatchIntoConsole(pattern: String, quantity: Int) {
         val expanded = CardValidatorEngine.expandPatternBatch(
             templateLine = pattern,
@@ -253,6 +551,7 @@ class ValidatorViewModel(
         webhookUrl: String,
         autoResolveWildcards: Boolean,
         batchDelayMs: Long,
+        concurrency: Int,
         patternTemplate: String,
         generateQuantity: Int
     ) {
@@ -262,13 +561,14 @@ class ValidatorViewModel(
                 webhookUrl = webhookUrl,
                 autoResolveWildcards = autoResolveWildcards,
                 batchDelayMs = batchDelayMs,
+                concurrency = concurrency,
                 patternTemplate = patternTemplate,
                 generateQuantity = generateQuantity
             )
             _localState.update {
                 it.copy(
                     isSettingsOpen = false,
-                    statusBannerMessage = "Configuration saved"
+                    statusBannerMessage = "Configuration saved (${concurrency}x worker concurrency)"
                 )
             }
         }
@@ -290,7 +590,7 @@ class ValidatorViewModel(
                 liveRecords = emptyList(),
                 dieRecords = emptyList(),
                 unknownRecords = emptyList(),
-                statusBannerMessage = "Cleared all result buckets"
+                statusBannerMessage = "Cleared current session buckets"
             )
         }
     }
@@ -309,8 +609,11 @@ class ValidatorViewModel(
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val app = (this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as Application)
-                val repo = ValidatorPreferencesRepository(app.applicationContext)
-                ValidatorViewModel(app, repo)
+                val prefsRepo = ValidatorPreferencesRepository(app.applicationContext)
+                val db = AppDatabase.getInstance(app.applicationContext)
+                val historyRepo = ValidationHistoryRepository(db.validationHistoryDao())
+                val workManager = WorkManager.getInstance(app.applicationContext)
+                ValidatorViewModel(app, prefsRepo, historyRepo, workManager)
             }
         }
     }

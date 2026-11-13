@@ -23,4 +23,18 @@
     <string name="developer_channel_handle">@drkingbd</string>
     <string name="developer_channel_url">https://t.me/drkingbd</string>
     <string name="open_telegram">Join Channel</string>
+    <string name="import_file_title">Import .txt / .html File</string>
+    <string name="import_file_subtitle">Select a text or HTML document from device storage using Android Storage Access Framework.</string>
+    <string name="select_file_button">Browse .txt / .html File</string>
+    <string name="load_into_console">Load into Console</string>
+    <string name="load_and_process">Load &amp; Process</string>
+    <string name="import_file_chip">File</string>
+    <string name="unsupported_file_error">Please select a valid .txt or .html file.</string>
+    <string name="history_log_title">Validation History Log</string>
+    <string name="history_log_subtitle">Local Room SQLite audit trail of processed batch checks.</string>
+    <string name="history_chip">History</string>
+    <string name="filter_all">All</string>
+    <string name="filter_success">Success</string>
+    <string name="filter_failure">Failure</string>
+    <string name="clear_history">Clear All</string>
 </resources>

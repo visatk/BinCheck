@@ -11,7 +11,9 @@
   - Deep obsidian-slate canvas (`#14161B` to `#17191E`) with subtle radial ambient lighting (`Modifier.drawBehind`) and top specular border hairline (`#2C303A`).
   - **Top Telemetry & Developer Bar**: Displays real-time engine mode badge (`LUHN ENGINE` / `WEBHOOK`), live BIN/IIN brand detection chip (`VISA`, `MASTERCARD`, `AMEX`, etc.), and an interactive **Developer Channel (`@drkingbd`)** pill linking directly to `https://t.me/drkingbd`.
   - **Elevated Main Console Card (`#1D2026`)**:
-    - **Recessed IDE-Style Monospace Console (`#111317`)**: Features a dynamic line-number gutter (`01`, `02`...), `JetBrains Mono` typography, exact `453225005536xxx3|08|2028|113` placeholder hint, animated focus border, and quick-action utility chips (`Gen 10x`, `Solve x`, `Paste`, `Clear`).
+    - **Recessed IDE-Style Monospace Console (`#111317`)**: Features a dynamic line-number gutter (`01`, `02`...), `JetBrains Mono` typography, exact `453225005536xxx3|08|2028|113` placeholder hint, animated focus border, and responsive `FlowRow` quick-action utility chips (`File`, `Gen 10x`, `Solve x`, `Paste`, `Clear`).
+    - **Zero-Permission File Picker (`FileImportBottomSheet.kt` + `FileTextExtractor.kt`)**: Uses Android Storage Access Framework (`ActivityResultContracts.OpenDocument`) to select `.txt` and `.html`/`.htm` files from device storage, strips HTML tags/scripts/entities, previews extracted lines, and supports Append/Replace + Smart Delimited Record filtering.
+    - **Adaptive Responsive Layout (`BoxWithConstraints`)**: Switches dynamically between a centered single-column layout on compact portrait screens and a side-by-side two-pane layout (`Console` left / `Results` right) on landscape, foldables, and tablets (`maxWidth >= 680.dp`).
     - **Dual Full-Width Action Bars (`#1A1D23`)**:
       1. **Run / Stop Bar**: Crisp outlined Emerald Play Triangle (`#10B981`) with subtle glow halo when idle; live progress bar + processed counter + Stop square when active.
       2. **Settings / Tools Bar**: Crisp outlined Royal Blue Gear (`#2563EB`) with subtle glow halo to open the Pattern Generator & Gateway Configuration sheet.
@@ -31,8 +33,11 @@
    - **Unknown**: Incomplete format, unexpanded wildcard in strict mode, or HTTP timeout/unreachable in Webhook mode.
 3. **Optional Custom HTTP Endpoint Mode**:
    - Uses `OkHttpClient` to send real HTTP requests (`POST` JSON or `GET` query) to a user-configured endpoint URL.
-4. **Persistence**:
-   - Uses Jetpack `DataStore` (`preferences`) to persist validation settings, custom endpoint configuration, batch delay, and pattern templates.
-5. **CI/CD & GitHub Release Automation (`.github/workflows/release.yml`)**:
+4. **Concurrent Batch Worker (`BatchValidationWorker`)**:
+   - Uses `WorkManager` (`CoroutineWorker`) with bounded `Semaphore` concurrency (`1x`–`8x`, configurable in Settings) and `async`/`awaitAll` to validate uploaded `.txt`/`.html` or console entries simultaneously against the configured HTTP Webhook/API endpoint or local engine, streaming progress via `setProgress`.
+5. **Local Persistence (`DataStore` + `Room` SQLite)**:
+   - Uses Jetpack `DataStore` (`preferences`) to persist validation settings, concurrency, custom endpoint configuration, batch delay, and pattern templates.
+   - Uses `Room` (`AppDatabase`, `ValidationHistoryDao`, `ValidationHistoryRepository`) to queue large batches safely and persist a local **Validation History Log** viewable and filterable by `All`, `Success`, and `Failure` status (`HistoryLogBottomSheet.kt`).
+6. **CI/CD & GitHub Release Automation (`.github/workflows/release.yml`)**:
    - Triggers automatically on version tags (`v*`) or manually via `workflow_dispatch`.
    - Sets up JDK 21, Android SDK, and Gradle 9.3.1, prepares signing keystores (supporting repository secrets `KEYSTORE_BASE64`, `STORE_PASSWORD`, `KEY_PASSWORD` with automatic fallback generation), runs unit tests, builds signed release APK & AAB artifacts with `SHA256SUMS.txt`, and publishes directly to GitHub Releases.

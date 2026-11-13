@@ -55,10 +55,15 @@ data class ValidationRecord(
 object CardValidatorEngine {
 
     private val okHttpClient: OkHttpClient by lazy {
+        val dispatcher = okhttp3.Dispatcher().apply {
+            maxRequests = 64
+            maxRequestsPerHost = 16
+        }
         OkHttpClient.Builder()
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(8, TimeUnit.SECONDS)
-            .writeTimeout(8, TimeUnit.SECONDS)
+            .dispatcher(dispatcher)
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .writeTimeout(10, TimeUnit.SECONDS)
             .build()
     }
 
@@ -446,12 +451,13 @@ object CardValidatorEngine {
     ): ValidationRecord = withContext(Dispatchers.IO) {
         try {
             val request = if (webhookUrl.contains("{card}") || webhookUrl.contains("{lista}")) {
+                val enc = { value: String -> java.net.URLEncoder.encode(value, "UTF-8") }
                 val resolvedUrl = webhookUrl
-                    .replace("{lista}", normalizedLine)
-                    .replace("{card}", pan)
-                    .replace("{mm}", mm)
-                    .replace("{yyyy}", yyyy)
-                    .replace("{cvv}", cvv)
+                    .replace("{lista}", enc(normalizedLine))
+                    .replace("{card}", enc(pan))
+                    .replace("{mm}", enc(mm))
+                    .replace("{yyyy}", enc(yyyy))
+                    .replace("{cvv}", enc(cvv))
                 Request.Builder()
                     .url(resolvedUrl)
                     .get()

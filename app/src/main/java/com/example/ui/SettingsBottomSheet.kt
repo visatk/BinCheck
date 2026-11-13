@@ -91,6 +91,7 @@ fun SettingsBottomSheet(
         webhookUrl: String,
         autoResolveWildcards: Boolean,
         batchDelayMs: Long,
+        concurrency: Int,
         patternTemplate: String,
         generateQuantity: Int
     ) -> Unit,
@@ -106,6 +107,7 @@ fun SettingsBottomSheet(
     var webhookUrl by remember(settings) { mutableStateOf(settings.webhookUrl) }
     var autoResolveWildcards by remember(settings) { mutableStateOf(settings.autoResolveWildcards) }
     var delayMs by remember(settings) { mutableFloatStateOf(settings.batchDelayMs.toFloat()) }
+    var concurrency by remember(settings) { mutableIntStateOf(settings.concurrency) }
     var patternTemplate by remember(settings) { mutableStateOf(settings.patternTemplate) }
     var generateQty by remember(settings) { mutableIntStateOf(settings.generateQuantity) }
 
@@ -531,6 +533,75 @@ fun SettingsBottomSheet(
                 )
             }
 
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Simultaneous Worker Concurrency Selector
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(InputConsoleSurface)
+                    .border(1.dp, ActionButtonBorder, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Simultaneous Worker Concurrency",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = TextPrimaryLight
+                    )
+                    Text(
+                        text = "${concurrency}x parallel",
+                        fontFamily = JetBrainsMonoFamily,
+                        fontSize = 12.sp,
+                        color = GearRoyalBlue
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Number of entries validated concurrently against the webhook/API endpoint.",
+                    fontSize = 11.5.sp,
+                    color = TextSecondaryMuted
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(1, 2, 4, 6, 8).forEach { workers ->
+                        val isSelected = concurrency == workers
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (isSelected) GearRoyalBlue.copy(alpha = 0.2f) else ActionButtonSurface)
+                                .border(
+                                    width = 1.dp,
+                                    color = if (isSelected) GearRoyalBlue else ActionButtonBorder,
+                                    shape = RoundedCornerShape(6.dp)
+                                )
+                                .clickable { concurrency = workers }
+                                .padding(vertical = 8.dp)
+                                .testTag("concurrency_chip_$workers"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "${workers}x",
+                                fontFamily = JetBrainsMonoFamily,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isSelected) GearRoyalBlue else TextPrimaryLight
+                            )
+                        }
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(18.dp))
 
             Row(
@@ -562,6 +633,7 @@ fun SettingsBottomSheet(
                             webhookUrl,
                             autoResolveWildcards,
                             delayMs.toLong(),
+                            concurrency,
                             patternTemplate,
                             generateQty
                         )
