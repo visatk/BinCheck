@@ -1029,4 +1029,41 @@ class ExampleRobolectricTest {
         assertEquals(1, appliedResult?.removedDuplicates)
         assertEquals(1, appliedResult?.removedUnparseable)
     }
+
+    @Test
+    fun `historyRepository exposes combined summary and incremental batch delta`() = runTest {
+        val validRecord = CardValidatorEngine.validateLine(
+            rawLine = "453225005536xxx3|08|2029|113",
+            mode = ValidationMode.LOCAL_DETERMINISTIC,
+            webhookUrl = "",
+            autoResolveWildcards = true
+        )
+        val invalidRecord = CardValidatorEngine.validateLine(
+            rawLine = "123456|08|2029|113",
+            mode = ValidationMode.LOCAL_DETERMINISTIC,
+            webhookUrl = "",
+            autoResolveWildcards = false
+        )
+
+        repository.recordResult("batch-delta", "sample.txt", validRecord, "Local")
+        repository.recordResult("batch-delta", "sample.txt", invalidRecord, "Local")
+        repository.recordResult("batch-other", "other.txt", invalidRecord, "Local")
+
+        val summary = repository.historySummary.first()
+        assertEquals(3, summary.totalCount)
+        assertEquals(1, summary.successCount)
+        assertEquals(2, summary.failureCount)
+
+        val initialDelta = repository.getBatchResultsAfterId("batch-delta", 0L)
+        assertEquals(2, initialDelta.size)
+        assertTrue(initialDelta[0].id < initialDelta[1].id)
+
+        repository.recordResult("batch-delta", "sample.txt", validRecord, "Local")
+        val incrementalDelta = repository.getBatchResultsAfterId("batch-delta", initialDelta.last().id)
+        assertEquals(1, incrementalDelta.size)
+        assertEquals(
+            incrementalDelta.last().id,
+            repository.observeLatestBatchRowId("batch-delta").first()
+        )
+    }
 }

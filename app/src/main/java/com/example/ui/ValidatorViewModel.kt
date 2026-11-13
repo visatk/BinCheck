@@ -55,10 +55,13 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -116,7 +119,25 @@ data class ValidatorUiState(
         }
 
     val inputLineCount: Int
-        get() = rawInputText.lines().count { it.isNotBlank() }
+        get() = countNonBlankLines(rawInputText)
+
+    private fun countNonBlankLines(text: String): Int {
+        if (text.isEmpty()) return 0
+        var count = 0
+        var lineHasNonWhitespace = false
+        for (ch in text) {
+            if (ch == '\n' || ch == '\r') {
+                if (lineHasNonWhitespace) {
+                    count++
+                    lineHasNonWhitespace = false
+                }
+            } else if (!ch.isWhitespace()) {
+                lineHasNonWhitespace = true
+            }
+        }
+        if (lineHasNonWhitespace) count++
+        return count
+    }
 }
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
@@ -128,6 +149,7 @@ class ValidatorViewModel(
 ) : AndroidViewModel(application) {
 
     private val _localState = MutableStateFlow(ValidatorUiState())
+    private val _isHistoryOpen = MutableStateFlow(false)
     private val _historyFilter = MutableStateFlow(HistoryFilter.ALL)
     private val _historyQuery = MutableStateFlow("")
     private val _historyPageLimit = MutableStateFlow(ValidationHistoryRepository.DEFAULT_PAGE_SIZE)
@@ -177,23 +199,40 @@ class ValidatorViewModel(
         Triple(filter, query, limit)
     }
 
-    private val pagedHistoryFlow = pagedHistoryQueryParams.flatMapLatest { (filter, query, limit) ->
-        historyRepository.observePagedHistory(filter = filter, query = query, limit = limit)
+    private val pagedHistoryFlow = combine(_isHistoryOpen, pagedHistoryQueryParams) { isOpen, params ->
+        isOpen to params
+    }.flatMapLatest { (isOpen, params) ->
+        if (!isOpen) {
+            flowOf(emptyList())
+        } else {
+            historyRepository.observePagedHistory(
+                filter = params.first,
+                query = params.second,
+                limit = params.third
+            )
+        }
     }
 
     private val filteredHistoryCountFlow = combine(
+        _isHistoryOpen,
         _historyFilter,
         debouncedHistoryQueryFlow
-    ) { filter, query -> filter to query }.flatMapLatest { (filter, query) ->
-        historyRepository.observeFilteredCount(filter = filter, query = query)
+    ) { isOpen, filter, query ->
+        Triple(isOpen, filter, query)
+    }.flatMapLatest { (isOpen, filter, query) ->
+        if (!isOpen) {
+            flowOf(0)
+        } else {
+            historyRepository.observeFilteredCount(filter = filter, query = query)
+        }
     }
 
-    private val historySummaryFlow = combine(
-        historyRepository.totalHistoryCount,
-        historyRepository.successHistoryCount,
-        historyRepository.failureHistoryCount
-    ) { total, success, failure ->
-        HistoryUiSummary(totalCount = total, successCount = success, failureCount = failure)
+    private val historySummaryFlow = historyRepository.historySummary.map { summary ->
+        HistoryUiSummary(
+            totalCount = summary.totalCount,
+            successCount = summary.successCount,
+            failureCount = summary.failureCount
+        )
     }
 
     val uiState: StateFlow<ValidatorUiState> = combine(
@@ -350,10 +389,12 @@ class ValidatorViewModel(
 
     fun openHistory() {
         _historyPageLimit.value = ValidationHistoryRepository.DEFAULT_PAGE_SIZE
+        _isHistoryOpen.value = true
         _localState.update { it.copy(isHistoryOpen = true, statusBannerMessage = null) }
     }
 
     fun closeHistory() {
+        _isHistoryOpen.value = false
         _localState.update { it.copy(isHistoryOpen = false) }
     }
 
@@ -779,52 +820,66 @@ class ValidatorViewModel(
         workerObserverJob?.cancel()
         batchResultsObserverJob?.cancel()
 
-        batchResultsObserverJob = viewModelScope.launch {
-            val seenIds = HashSet<String>()
-            historyRepository.observeBatchResults(batchId).collect { batchEntities ->
-                val newLive = mutableListOf<ValidationRecord>()
-                val newDie = mutableListOf<ValidationRecord>()
-                val newUnknown = mutableListOf<ValidationRecord>()
+        val resultSyncMutex = Mutex()
+        var lastSeenDbId = 0L
 
-                for (entity in batchEntities) {
-                    val recordId = "hist_${entity.id}"
-                    if (!seenIds.add(recordId)) continue
-
-                    val bucket = runCatching { ResultBucket.valueOf(entity.status) }
-                        .getOrDefault(ResultBucket.UNKNOWN)
-                    val scheme = runCatching { CardScheme.valueOf(entity.scheme) }
-                        .getOrDefault(CardScheme.UNKNOWN)
-                    val record = ValidationRecord(
-                        id = recordId,
-                        rawLine = entity.rawLine,
-                        normalizedLine = entity.normalizedLine,
-                        pan = entity.pan,
-                        month = entity.month,
-                        year = entity.year,
-                        cvv = entity.cvv,
-                        scheme = scheme,
-                        bucket = bucket,
-                        message = entity.message,
-                        latencyMs = entity.latencyMs
-                    )
-                    when (bucket) {
-                        ResultBucket.LIVE -> newLive.add(0, record)
-                        ResultBucket.DIE -> newDie.add(0, record)
-                        ResultBucket.UNKNOWN -> newUnknown.add(0, record)
-                    }
+        suspend fun syncBatchResults() {
+            val deltaEntities = resultSyncMutex.withLock {
+                val fetched = historyRepository.getBatchResultsAfterId(batchId, lastSeenDbId)
+                if (fetched.isNotEmpty()) {
+                    lastSeenDbId = fetched.last().id
                 }
+                fetched
+            }
+            if (deltaEntities.isEmpty()) return
 
-                if (newLive.isNotEmpty() || newDie.isNotEmpty() || newUnknown.isNotEmpty()) {
-                    _localState.update { prev ->
-                        prev.copy(
-                            liveRecords = newLive + prev.liveRecords,
-                            dieRecords = newDie + prev.dieRecords,
-                            unknownRecords = newUnknown + prev.unknownRecords
-                        )
-                    }
-                    if (newLive.isNotEmpty()) {
-                        enrichLiveRecords(newLive)
-                    }
+            val newLive = mutableListOf<ValidationRecord>()
+            val newDie = mutableListOf<ValidationRecord>()
+            val newUnknown = mutableListOf<ValidationRecord>()
+
+            for (entity in deltaEntities.asReversed()) {
+                val bucket = runCatching { ResultBucket.valueOf(entity.status) }
+                    .getOrDefault(ResultBucket.UNKNOWN)
+                val scheme = runCatching { CardScheme.valueOf(entity.scheme) }
+                    .getOrDefault(CardScheme.UNKNOWN)
+                val record = ValidationRecord(
+                    id = "hist_${entity.id}",
+                    rawLine = entity.rawLine,
+                    normalizedLine = entity.normalizedLine,
+                    pan = entity.pan,
+                    month = entity.month,
+                    year = entity.year,
+                    cvv = entity.cvv,
+                    scheme = scheme,
+                    bucket = bucket,
+                    message = entity.message,
+                    latencyMs = entity.latencyMs
+                )
+                when (bucket) {
+                    ResultBucket.LIVE -> newLive.add(record)
+                    ResultBucket.DIE -> newDie.add(record)
+                    ResultBucket.UNKNOWN -> newUnknown.add(record)
+                }
+            }
+
+            if (newLive.isNotEmpty() || newDie.isNotEmpty() || newUnknown.isNotEmpty()) {
+                _localState.update { prev ->
+                    prev.copy(
+                        liveRecords = if (newLive.isEmpty()) prev.liveRecords else newLive + prev.liveRecords,
+                        dieRecords = if (newDie.isEmpty()) prev.dieRecords else newDie + prev.dieRecords,
+                        unknownRecords = if (newUnknown.isEmpty()) prev.unknownRecords else newUnknown + prev.unknownRecords
+                    )
+                }
+                if (newLive.isNotEmpty()) {
+                    enrichLiveRecords(newLive)
+                }
+            }
+        }
+
+        batchResultsObserverJob = viewModelScope.launch {
+            historyRepository.observeLatestBatchRowId(batchId).collect { latestId ->
+                if (latestId != null && latestId > lastSeenDbId) {
+                    syncBatchResults()
                 }
             }
         }
@@ -853,6 +908,8 @@ class ValidatorViewModel(
                     }
 
                     WorkInfo.State.SUCCEEDED -> {
+                        // Sync any final delta committed right before completion so fast batches never drop tail rows
+                        syncBatchResults()
                         val finalCount = if (processedFromOutput >= 0) processedFromOutput else fallbackTotal
                         activeWorkId = null
                         _localState.update { prev ->
@@ -870,6 +927,7 @@ class ValidatorViewModel(
                     }
 
                     WorkInfo.State.CANCELLED -> {
+                        syncBatchResults()
                         activeWorkId = null
                         _localState.update { prev ->
                             prev.copy(
@@ -1017,37 +1075,12 @@ class ValidatorViewModel(
     }
 
     fun setValidationModeQuick(mode: ValidationMode) {
-        val s = uiState.value.settings
+        val currentDelayMs = uiState.value.settings.batchDelayMs
         viewModelScope.launch {
-            preferencesRepository.updateSettings(
-                validationMode = mode,
-                webhookUrl = s.webhookUrl,
-                httpMethod = s.httpMethod,
-                httpHeaders = s.httpHeaders,
-                httpBodyTemplate = s.httpBodyTemplate,
-                httpTimeoutSeconds = s.httpTimeoutSeconds,
-                httpMaxRetries = s.httpMaxRetries,
-                httpLiveKeywords = s.httpLiveKeywords,
-                httpDieKeywords = s.httpDieKeywords,
-                autoResolveWildcards = s.autoResolveWildcards,
-                autoBinLookupForLive = s.autoBinLookupForLive,
-                batchDelayMs = s.batchDelayMs,
-                concurrency = s.concurrency,
-                patternTemplate = s.patternTemplate,
-                generateQuantity = s.generateQuantity,
-                themeMode = s.themeMode,
-                useDynamicColor = s.useDynamicColor,
-                telegramWebhookEnabled = s.telegramWebhookEnabled,
-                telegramChatId = s.telegramChatId,
-                telegramNotifyLiveOnly = s.telegramNotifyLiveOnly,
-                deduplicateBatchInputs = s.deduplicateBatchInputs,
-                gzipCustomRequests = s.gzipCustomRequests,
-                wifiOnlyBatch = s.wifiOnlyBatch,
-                batterySaverMode = s.batterySaverMode
-            )
+            preferencesRepository.setValidationMode(mode)
             val switchMsg = mode.fixedDelayMs?.let { fixedMs ->
                 "Switched to ${mode.badgeLabel} (${fixedMs / 1000L}s pace)."
-            } ?: "Switched to ${mode.badgeLabel} (${s.batchDelayMs}ms pace)."
+            } ?: "Switched to ${mode.badgeLabel} (${currentDelayMs}ms pace)."
             _localState.update {
                 it.copy(statusBannerMessage = switchMsg)
             }
@@ -1055,66 +1088,20 @@ class ValidatorViewModel(
     }
 
     fun setThemeModeQuick(themeMode: AppThemeMode) {
-        val s = uiState.value.settings
         viewModelScope.launch {
-            preferencesRepository.updateSettings(
-                validationMode = s.validationMode,
-                webhookUrl = s.webhookUrl,
-                httpMethod = s.httpMethod,
-                httpHeaders = s.httpHeaders,
-                httpBodyTemplate = s.httpBodyTemplate,
-                httpTimeoutSeconds = s.httpTimeoutSeconds,
-                httpMaxRetries = s.httpMaxRetries,
-                httpLiveKeywords = s.httpLiveKeywords,
-                httpDieKeywords = s.httpDieKeywords,
-                autoResolveWildcards = s.autoResolveWildcards,
-                autoBinLookupForLive = s.autoBinLookupForLive,
-                batchDelayMs = s.batchDelayMs,
-                concurrency = s.concurrency,
-                patternTemplate = s.patternTemplate,
-                generateQuantity = s.generateQuantity,
-                themeMode = themeMode,
-                useDynamicColor = s.useDynamicColor,
-                telegramWebhookEnabled = s.telegramWebhookEnabled,
-                telegramChatId = s.telegramChatId,
-                telegramNotifyLiveOnly = s.telegramNotifyLiveOnly,
-                deduplicateBatchInputs = s.deduplicateBatchInputs,
-                gzipCustomRequests = s.gzipCustomRequests,
-                wifiOnlyBatch = s.wifiOnlyBatch,
-                batterySaverMode = s.batterySaverMode
-            )
+            preferencesRepository.setThemeMode(themeMode)
         }
     }
 
     fun setDynamicColorQuick(enabled: Boolean) {
-        val s = uiState.value.settings
         viewModelScope.launch {
-            preferencesRepository.updateSettings(
-                validationMode = s.validationMode,
-                webhookUrl = s.webhookUrl,
-                httpMethod = s.httpMethod,
-                httpHeaders = s.httpHeaders,
-                httpBodyTemplate = s.httpBodyTemplate,
-                httpTimeoutSeconds = s.httpTimeoutSeconds,
-                httpMaxRetries = s.httpMaxRetries,
-                httpLiveKeywords = s.httpLiveKeywords,
-                httpDieKeywords = s.httpDieKeywords,
-                autoResolveWildcards = s.autoResolveWildcards,
-                autoBinLookupForLive = s.autoBinLookupForLive,
-                batchDelayMs = s.batchDelayMs,
-                concurrency = s.concurrency,
-                patternTemplate = s.patternTemplate,
-                generateQuantity = s.generateQuantity,
-                themeMode = s.themeMode,
-                useDynamicColor = enabled,
-                telegramWebhookEnabled = s.telegramWebhookEnabled,
-                telegramChatId = s.telegramChatId,
-                telegramNotifyLiveOnly = s.telegramNotifyLiveOnly,
-                deduplicateBatchInputs = s.deduplicateBatchInputs,
-                gzipCustomRequests = s.gzipCustomRequests,
-                wifiOnlyBatch = s.wifiOnlyBatch,
-                batterySaverMode = s.batterySaverMode
-            )
+            preferencesRepository.setDynamicColor(enabled)
+        }
+    }
+
+    fun markNotificationPermissionPrompted() {
+        viewModelScope.launch {
+            preferencesRepository.setHasPromptedNotifications(true)
         }
     }
 

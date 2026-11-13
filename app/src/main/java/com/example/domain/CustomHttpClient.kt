@@ -73,7 +73,16 @@ object CustomHttpClient {
         startNanos: Long,
         useCacheAndDedup: Boolean = true
     ): ValidationRecord {
-        val cacheKey = "${config.url.trim()}|${config.method.name}|${config.bodyTemplate.hashCode()}|$normalizedLine"
+        val cacheKey = buildString(128) {
+            append(config.url.trim())
+            append('|').append(config.method.name)
+            append('|').append(config.headersText.hashCode())
+            append('|').append(config.bodyTemplate.hashCode())
+            append('|').append(config.liveKeywords.hashCode())
+            append('|').append(config.dieKeywords.hashCode())
+            append('|').append(config.compressBodyGzip)
+            append('|').append(normalizedLine)
+        }
         if (useCacheAndDedup) {
             responseCache.get(cacheKey)?.let { cached ->
                 NetworkClientProvider.telemetry.recordCacheHit()
@@ -449,7 +458,14 @@ object CustomHttpClient {
                         .add("cvv", cvv)
                         .add("scheme", scheme.displayName)
                         .build()
-                    builder.post(form)
+                    if (config.compressBodyGzip) {
+                        val encoded = okio.Buffer().apply { form.writeTo(this) }.readUtf8()
+                        val mediaType = "application/x-www-form-urlencoded; charset=utf-8".toMediaType()
+                        builder.header("Content-Encoding", "gzip")
+                        builder.post(NetworkClientProvider.createGzipRequestBody(encoded, mediaType))
+                    } else {
+                        builder.post(form)
+                    }
                 }
             }
 

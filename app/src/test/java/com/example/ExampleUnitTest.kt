@@ -6,6 +6,7 @@ import com.example.domain.CustomHttpClient
 import com.example.domain.CustomHttpConfig
 import com.example.domain.FileTextExtractor
 import com.example.domain.HostCircuitBreaker
+import com.example.domain.HttpCallRawResponse
 import com.example.domain.HttpRequestMethod
 import com.example.domain.RequestDeduplicator
 import com.example.domain.ResultBucket
@@ -13,9 +14,11 @@ import com.example.domain.RetryAndBackoffPolicy
 import com.example.domain.SupportedFileType
 import com.example.domain.TtlLruCache
 import com.example.domain.ValidationMode
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import okio.Buffer
 import org.junit.Assert.assertEquals
@@ -403,5 +406,57 @@ class ExampleUnitTest {
             .bufferedReader(Charsets.UTF_8)
             .readText()
         assertEquals("""{"lista":"4532250055360003|08|2028|113","bin":"453225"}""", decompressed)
+    }
+
+    @Test
+    fun detectScheme_prioritizesDiscoverRangeOverUnionPayPrefix() {
+        assertEquals(CardScheme.DISCOVER, CardValidatorEngine.detectScheme("6221260000000000"))
+        assertEquals(CardScheme.DISCOVER, CardValidatorEngine.detectScheme("6229250000000000"))
+        assertEquals(CardScheme.UNIONPAY, CardValidatorEngine.detectScheme("6221250000000000"))
+        assertEquals(CardScheme.UNIONPAY, CardValidatorEngine.detectScheme("6229260000000000"))
+        assertEquals(CardScheme.UNIONPAY, CardValidatorEngine.detectScheme("6210000000000000"))
+    }
+
+    @Test
+    fun retryAndBackoffPolicy_releasesHalfOpenProbeOnCancellation() = runTest {
+        var now = 0L
+        val host = "probe-cancel.example.com"
+        val breaker = HostCircuitBreaker(
+            failureThreshold = 1,
+            openDurationMs = 1_000L,
+            clock = { now }
+        )
+        breaker.recordTransientFailure(host)
+        assertEquals(HostCircuitBreaker.State.OPEN, breaker.currentState(host))
+
+        now = 2_000L
+        assertEquals(HostCircuitBreaker.State.HALF_OPEN, breaker.currentState(host))
+
+        val probeStarted = AtomicInteger(0)
+        val job = launch {
+            RetryAndBackoffPolicy.executeWithExponentialBackoff(
+                host = host,
+                maxRetries = 0,
+                circuitBreaker = breaker,
+                callBlock = {
+                    probeStarted.incrementAndGet()
+                    delay(10_000L)
+                    HttpCallRawResponse(code = 200, body = "ok")
+                },
+                onResult = { _, _, _ -> "done" },
+                onCircuitOpen = { "open" },
+                onFailure = { _, _ -> "fail" }
+            )
+        }
+        testScheduler.advanceTimeBy(50L)
+        assertEquals(1, probeStarted.get())
+        // While suspended, probe slot is claimed
+        assertFalse(breaker.isRequestAllowed(host))
+
+        job.cancel(CancellationException("user cancelled"))
+        job.join()
+
+        // After cancellation, half-open probe lock must be released for the next caller
+        assertTrue(breaker.isRequestAllowed(host))
     }
 }

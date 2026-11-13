@@ -22,6 +22,7 @@ import okio.buffer
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPOutputStream
 import kotlin.coroutines.resume
@@ -44,6 +45,7 @@ data class DeviceNetworkStatus(
 object NetworkClientProvider {
 
     private const val HTTP_CACHE_SIZE_BYTES = 10L * 1024L * 1024L // 10 MiB
+    private const val MAX_RESPONSE_BODY_BYTES = 1024L * 1024L // 1 MiB safety cap
 
     val telemetry = NetworkTelemetry()
     val circuitBreaker = HostCircuitBreaker(
@@ -56,6 +58,7 @@ object NetworkClientProvider {
 
     @Volatile
     private var cachedOkHttpClient: OkHttpClient? = null
+    private val scopedClientsByTimeoutSec = ConcurrentHashMap<Int, OkHttpClient>()
 
     fun init(context: Context) {
         val targetDir = File(context.applicationContext.cacheDir, "bincheck_http_cache")
@@ -64,6 +67,7 @@ object NetworkClientProvider {
                 if (appCacheDir == null) {
                     appCacheDir = targetDir
                     cachedOkHttpClient = null // rebuild once with disk Cache attached
+                    scopedClientsByTimeoutSec.clear()
                 }
             }
         }
@@ -100,16 +104,19 @@ object NetworkClientProvider {
     }
 
     /**
-     * Derives a scoped OkHttpClient sharing the global ConnectionPool, Dispatcher, and Cache.
+     * Derives a cached, scoped OkHttpClient sharing the global ConnectionPool, Dispatcher, and Cache.
      */
     fun clientWithTimeout(timeoutSeconds: Int): OkHttpClient {
-        val clamped = timeoutSeconds.coerceIn(5, 60).toLong()
-        return baseClient.newBuilder()
-            .connectTimeout(clamped, TimeUnit.SECONDS)
-            .readTimeout(clamped, TimeUnit.SECONDS)
-            .writeTimeout(clamped, TimeUnit.SECONDS)
-            .callTimeout(clamped + 5L, TimeUnit.SECONDS)
-            .build()
+        val clamped = timeoutSeconds.coerceIn(5, 60)
+        return scopedClientsByTimeoutSec.getOrPut(clamped) {
+            val sec = clamped.toLong()
+            baseClient.newBuilder()
+                .connectTimeout(sec, TimeUnit.SECONDS)
+                .readTimeout(sec, TimeUnit.SECONDS)
+                .writeTimeout(sec, TimeUnit.SECONDS)
+                .callTimeout(sec + 5L, TimeUnit.SECONDS)
+                .build()
+        }
     }
 
     fun clearDiskHttpCache() {
@@ -194,7 +201,12 @@ object NetworkClientProvider {
                     if (continuation.isActive) {
                         try {
                             val code = res.code
-                            val body = res.body?.string().orEmpty()
+                            val body = res.body?.let { responseBody ->
+                                val source = responseBody.source()
+                                source.request(MAX_RESPONSE_BODY_BYTES)
+                                val bytesToRead = minOf(source.buffer.size, MAX_RESPONSE_BODY_BYTES)
+                                source.readUtf8(bytesToRead)
+                            }.orEmpty()
                             val retryAfter = RetryAndBackoffPolicy.parseRetryAfterMs(
                                 retryAfterHeader = res.header("Retry-After"),
                                 responseBody = body

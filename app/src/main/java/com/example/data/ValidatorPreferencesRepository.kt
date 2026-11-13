@@ -48,7 +48,8 @@ data class ValidatorSettings(
     val deduplicateBatchInputs: Boolean = true,
     val gzipCustomRequests: Boolean = false,
     val wifiOnlyBatch: Boolean = false,
-    val batterySaverMode: Boolean = false
+    val batterySaverMode: Boolean = false,
+    val hasPromptedNotifications: Boolean = false
 ) {
     val effectiveDelayMs: Long
         get() = validationMode.resolveDelayMs(batchDelayMs)
@@ -99,6 +100,7 @@ class ValidatorPreferencesRepository(private val context: Context) {
         val GZIP_CUSTOM_REQUESTS = booleanPreferencesKey("gzip_custom_requests")
         val WIFI_ONLY_BATCH = booleanPreferencesKey("wifi_only_batch")
         val BATTERY_SAVER_MODE = booleanPreferencesKey("battery_saver_mode")
+        val HAS_PROMPTED_NOTIFICATIONS = booleanPreferencesKey("has_prompted_notifications")
     }
 
     val settingsFlow: Flow<ValidatorSettings> = context.dataStore.data.map { prefs ->
@@ -138,8 +140,25 @@ class ValidatorPreferencesRepository(private val context: Context) {
             deduplicateBatchInputs = prefs[Keys.DEDUPLICATE_BATCH_INPUTS] ?: true,
             gzipCustomRequests = prefs[Keys.GZIP_CUSTOM_REQUESTS] ?: false,
             wifiOnlyBatch = prefs[Keys.WIFI_ONLY_BATCH] ?: false,
-            batterySaverMode = prefs[Keys.BATTERY_SAVER_MODE] ?: false
+            batterySaverMode = prefs[Keys.BATTERY_SAVER_MODE] ?: false,
+            hasPromptedNotifications = prefs[Keys.HAS_PROMPTED_NOTIFICATIONS] ?: false
         )
+    }
+
+    suspend fun setValidationMode(mode: ValidationMode) {
+        context.dataStore.edit { it[Keys.VALIDATION_MODE] = mode.name }
+    }
+
+    suspend fun setThemeMode(themeMode: AppThemeMode) {
+        context.dataStore.edit { it[Keys.THEME_MODE] = themeMode.name }
+    }
+
+    suspend fun setDynamicColor(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.USE_DYNAMIC_COLOR] = enabled }
+    }
+
+    suspend fun setHasPromptedNotifications(prompted: Boolean) {
+        context.dataStore.edit { it[Keys.HAS_PROMPTED_NOTIFICATIONS] = prompted }
     }
 
     suspend fun updateSettings(

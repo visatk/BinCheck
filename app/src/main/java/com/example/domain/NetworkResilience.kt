@@ -1,5 +1,6 @@
 package com.example.domain
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -179,6 +180,19 @@ class HostCircuitBreaker(
         }
     }
 
+    /**
+     * Releases an in-flight HALF_OPEN probe permit if the caller coroutine was cancelled
+     * before completing, preventing permanent host lockout.
+     */
+    fun releaseHalfOpenProbe(host: String) {
+        val hs = hosts[host.lowercase()] ?: return
+        synchronized(hs) {
+            if (hs.state == State.HALF_OPEN) {
+                hs.halfOpenProbeInFlight = false
+            }
+        }
+    }
+
     fun recordTransientFailure(host: String): Boolean {
         val hs = hosts.getOrPut(host.lowercase()) { HostState() }
         synchronized(hs) {
@@ -328,8 +342,12 @@ object RetryAndBackoffPolicy {
                         telemetry?.recordCircuitTripped()
                     }
                 }
+            } catch (ce: CancellationException) {
+                circuitBreaker?.releaseHalfOpenProbe(host)
+                throw ce
             } catch (e: Exception) {
                 currentCoroutineContext().ensureActive()
+                circuitBreaker?.releaseHalfOpenProbe(host)
                 return onFailure(e.localizedMessage ?: e.javaClass.simpleName, attempt)
             }
         }

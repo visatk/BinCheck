@@ -57,6 +57,15 @@ class ValidationHistoryRepository(private val dao: ValidationHistoryDao) {
         return dao.observeHistoryByBatchId(batchId)
     }
 
+    fun observeLatestBatchRowId(batchId: String): Flow<Long?> {
+        return dao.observeLatestBatchRowId(batchId)
+    }
+
+    suspend fun getBatchResultsAfterId(batchId: String, afterId: Long): List<ValidationHistoryEntity> {
+        return dao.getBatchResultsAfterId(batchId, afterId)
+    }
+
+    val historySummary: Flow<HistoryCountRow> = dao.observeHistorySummary()
     val totalHistoryCount: Flow<Int> = dao.observeTotalCount()
     val successHistoryCount: Flow<Int> = dao.observeSuccessCount()
     val failureHistoryCount: Flow<Int> = dao.observeFailureCount()

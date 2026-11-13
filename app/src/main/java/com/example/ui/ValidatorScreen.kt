@@ -45,6 +45,7 @@ import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -117,6 +118,8 @@ fun ValidatorScreen(
 
     StartupPermissionsPromptEffect(
         enabled = requestStartupPermissions,
+        alreadyPrompted = uiState.settings.hasPromptedNotifications,
+        onPromptAttempted = viewModel::markNotificationPermissionPrompted,
         onResult = { granted ->
             permissionSnapshot = AppPermissionHelper.inspectSnapshot(context)
             if (!granted) {
@@ -134,7 +137,7 @@ fun ValidatorScreen(
 
     val detectedPreviewInfo by remember(uiState.rawInputText) {
         derivedStateOf {
-            val sampleLine = uiState.rawInputText.lines().firstOrNull { it.isNotBlank() }
+            val sampleLine = uiState.rawInputText.lineSequence().firstOrNull { it.isNotBlank() }
                 ?: "453225005536xxx3|08|2028|113"
             val panToken = sampleLine.split('|', '/', ':').firstOrNull()?.trim().orEmpty()
             val binPrefix = panToken.filter { it.isDigit() }.take(6)

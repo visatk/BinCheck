@@ -116,7 +116,7 @@ fun ListToolkitBottomSheet(
 
     var transformResult by remember {
         mutableStateOf(
-            if (initialInputText.length <= 20_000) {
+            if (initialInputText.length <= 4_000) {
                 ListToolkitEngine.transform(initialInputText, options)
             } else {
                 ToolkitTransformResult(outputText = "")
@@ -130,7 +130,7 @@ fun ListToolkitBottomSheet(
         } else {
             Random.Default
         }
-        if (sourceText.length <= 20_000) {
+        if (sourceText.length <= 4_000) {
             transformResult = ListToolkitEngine.transform(
                 rawInput = sourceText,
                 options = options,

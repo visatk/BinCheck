@@ -10,6 +10,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.Request
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class BinInfo(
     val bin: String,
@@ -77,10 +78,15 @@ object BinLookupService {
 
     @Volatile
     private var binCacheDao: BinCacheDao? = null
+    private val hasPrunedThisSession = AtomicBoolean(false)
 
     fun attachDao(dao: BinCacheDao) {
         binCacheDao = dao
-        ioScope.launch {
+    }
+
+    suspend fun pruneExpiredIfNeeded() {
+        val dao = binCacheDao ?: return
+        if (hasPrunedThisSession.compareAndSet(false, true)) {
             runCatching { dao.pruneExpired(System.currentTimeMillis()) }
         }
     }
@@ -131,6 +137,7 @@ object BinLookupService {
                 }
             }
             val diskCached = binCacheDao?.let { dao ->
+                pruneExpiredIfNeeded()
                 runCatching { dao.getValidBin(bin6, System.currentTimeMillis())?.toBinInfo() }.getOrNull()
             }
             if (diskCached != null && diskCached.isNetworkVerified) {

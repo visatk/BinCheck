@@ -26,19 +26,20 @@ import com.example.domain.NetworkClientProvider
 import com.example.domain.RequestDeduplicator
 import com.example.domain.ResultBucket
 import com.example.domain.TelegramWebhookClient
+import com.example.domain.TtlLruCache
 import com.example.domain.ValidationMode
 import com.example.domain.ValidationRecord
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
@@ -117,14 +118,13 @@ class BatchValidationWorker(
         val dieCounter = AtomicInteger(0)
         val unknownCounter = AtomicInteger(0)
         val lastProgressTime = AtomicLong(0L)
-        val semaphore = Semaphore(permits = effectiveConcurrency)
 
-        // Batch-level concrete line deduplicator (saves duplicate server requests in high-traffic files)
-        val batchConcreteCache = ConcurrentHashMap<String, ValidationRecord>()
+        // Bounded LRU cache prevents unbounded memory growth on huge files while deduplicating concrete lines
+        val batchConcreteCache = TtlLruCache<String, ValidationRecord>(maxEntries = BATCH_CACHE_MAX_ENTRIES)
         val batchLineDeduplicator = RequestDeduplicator<String, ValidationRecord>()
 
-        // Buffered DB history writes for high-throughput (< 1s delay) runs
-        val useBatchedDbWrites = effectiveDelayMs < 1_000L
+        // Buffered DB history writes for high-throughput (< 2s delay or concurrent) runs
+        val useBatchedDbWrites = effectiveDelayMs < 2_000L || effectiveConcurrency > 1
         val historyWriteBuffer = mutableListOf<com.example.data.local.ValidationHistoryEntity>()
         val historyBufferMutex = Mutex()
 
@@ -151,11 +151,12 @@ class BatchValidationWorker(
             )
         )
 
-        suspend fun validateSingleLine(rawLine: String): ValidationRecord {
+        /** Returns the validated record alongside whether it came from local batch dedup/cache. */
+        suspend fun validateSingleLine(rawLine: String): Pair<ValidationRecord, Boolean> {
             val trimmed = rawLine.trim()
             val hasWildcard = trimmed.any { it.equals('x', ignoreCase = true) }
             if (!deduplicateInputs || hasWildcard) {
-                return CardValidatorEngine.validateLine(
+                val record = CardValidatorEngine.validateLine(
                     rawLine = trimmed,
                     mode = mode,
                     webhookUrl = webhookUrl,
@@ -163,15 +164,17 @@ class BatchValidationWorker(
                     customHttpConfig = customHttpConfig,
                     useCacheAndDedup = deduplicateInputs
                 )
+                return record to false
             }
 
-            batchConcreteCache[trimmed]?.let { cached ->
+            batchConcreteCache.get(trimmed)?.let { cached ->
                 NetworkClientProvider.telemetry.recordDeduplicatedSaved()
-                return cached.copy(
+                val dedupRecord = cached.copy(
                     id = "${System.nanoTime()}_${trimmed.hashCode()}",
                     latencyMs = 0L,
                     message = if (cached.message.contains("(Dedup)")) cached.message else "${cached.message} (Dedup)"
                 )
+                return dedupRecord to true
             }
 
             val (result, wasCoalesced) = batchLineDeduplicator.getOrExecute(trimmed) {
@@ -184,14 +187,14 @@ class BatchValidationWorker(
                     useCacheAndDedup = true
                 )
                 if (computed.bucket != ResultBucket.UNKNOWN) {
-                    batchConcreteCache[trimmed] = computed
+                    batchConcreteCache.put(trimmed, computed, BATCH_CACHE_TTL_MS)
                 }
                 computed
             }
             if (wasCoalesced) {
                 NetworkClientProvider.telemetry.recordDeduplicatedSaved()
             }
-            return result
+            return result to wasCoalesced
         }
 
         suspend fun persistRecord(itemSourceName: String, record: ValidationRecord) {
@@ -268,9 +271,12 @@ class BatchValidationWorker(
         suspend fun maybePublishProgress(done: Int, force: Boolean = false) {
             val now = System.currentTimeMillis()
             val prev = lastProgressTime.get()
-            val isIntervalHit = (done % PROGRESS_ITEM_STRIDE == 0) || (now - prev >= PROGRESS_MIN_INTERVAL_MS)
-            if (force || done == total || isIntervalHit) {
-                lastProgressTime.set(now)
+            val shouldUpdate = force || done == total ||
+                (now - prev >= PROGRESS_MIN_INTERVAL_MS && lastProgressTime.compareAndSet(prev, now))
+            if (shouldUpdate) {
+                if (force || done == total) {
+                    lastProgressTime.set(now)
+                }
                 setProgress(
                     workDataOf(
                         KEY_BATCH_ID to batchId,
@@ -284,63 +290,60 @@ class BatchValidationWorker(
             }
         }
 
+        suspend fun processQueueItem(
+            item: com.example.data.local.BatchQueueItemEntity,
+            forceProgress: Boolean = false
+        ): Boolean {
+            val (record, wasDedupHit) = validateSingleLine(item.rawLine)
+
+            persistRecord(item.sourceName, record)
+
+            when (record.bucket) {
+                ResultBucket.LIVE -> liveCounter.incrementAndGet()
+                ResultBucket.DIE -> dieCounter.incrementAndGet()
+                ResultBucket.UNKNOWN -> unknownCounter.incrementAndGet()
+            }
+
+            handleTelegramDispatch(record)
+
+            val done = processedCounter.incrementAndGet()
+            maybePublishProgress(done, force = forceProgress)
+            return wasDedupHit
+        }
+
         try {
-            if (effectiveConcurrency == 1) {
+            val workerCount = effectiveConcurrency.coerceAtMost(total).coerceAtLeast(1)
+            if (workerCount == 1) {
                 for ((index, item) in queueItems.withIndex()) {
                     if (isStopped) break
-                    val record = validateSingleLine(item.rawLine)
-
-                    persistRecord(item.sourceName, record)
-
-                    when (record.bucket) {
-                        ResultBucket.LIVE -> liveCounter.incrementAndGet()
-                        ResultBucket.DIE -> dieCounter.incrementAndGet()
-                        ResultBucket.UNKNOWN -> unknownCounter.incrementAndGet()
-                    }
-
-                    handleTelegramDispatch(record)
-
-                    val done = processedCounter.incrementAndGet()
-                    maybePublishProgress(done, force = index == queueItems.lastIndex)
-
-                    if (index < queueItems.lastIndex && effectiveDelayMs > 0L && !isStopped) {
+                    val wasDedupHit = processQueueItem(item, forceProgress = index == queueItems.lastIndex)
+                    if (!wasDedupHit && index < queueItems.lastIndex && effectiveDelayMs > 0L && !isStopped) {
                         delay(effectiveDelayMs)
                     }
                 }
             } else {
+                // Bounded worker pool avoids allocating up to thousands of suspended async coroutines up front
+                val nextIndex = AtomicInteger(0)
                 coroutineScope {
-                    queueItems.mapIndexed { index, item ->
-                        async {
-                            semaphore.withPermit {
-                                if (isStopped) return@withPermit
-                                val record = validateSingleLine(item.rawLine)
-
-                                persistRecord(item.sourceName, record)
-
-                                when (record.bucket) {
-                                    ResultBucket.LIVE -> liveCounter.incrementAndGet()
-                                    ResultBucket.DIE -> dieCounter.incrementAndGet()
-                                    ResultBucket.UNKNOWN -> unknownCounter.incrementAndGet()
-                                }
-
-                                handleTelegramDispatch(record)
-
-                                val done = processedCounter.incrementAndGet()
-                                maybePublishProgress(done)
-
-                                if (index < queueItems.lastIndex && effectiveDelayMs > 0L && !isStopped) {
+                    List(workerCount) {
+                        launch {
+                            while (!isStopped) {
+                                val index = nextIndex.getAndIncrement()
+                                if (index >= total) break
+                                val wasDedupHit = processQueueItem(queueItems[index])
+                                if (!wasDedupHit && effectiveDelayMs > 0L && !isStopped && nextIndex.get() < total) {
                                     delay(effectiveDelayMs)
                                 }
                             }
                         }
-                    }.awaitAll()
+                    }.joinAll()
                 }
                 maybePublishProgress(processedCounter.get(), force = true)
             }
 
             flushRemainingHistory()
 
-            if (shouldNotifyTelegram) {
+            if (shouldNotifyTelegram && !isStopped) {
                 val remaining = telegramBufferMutex.withLock {
                     telegramBuffer.toList().also { telegramBuffer.clear() }
                 }
@@ -356,7 +359,7 @@ class BatchValidationWorker(
             runCatching { repository.trimExcessHistory() }
 
             val processedTotal = processedCounter.get()
-            if (processedTotal > 0) {
+            if (!isStopped && processedTotal > 0) {
                 runCatching {
                     postCompletionNotification(
                         processed = processedTotal,
@@ -378,8 +381,13 @@ class BatchValidationWorker(
                     KEY_UNKNOWN to unknownCounter.get()
                 )
             )
+        } catch (ce: CancellationException) {
+            throw ce
         } finally {
-            repository.clearQueuedBatch(batchId)
+            withContext(NonCancellable) {
+                runCatching { flushRemainingHistory() }
+                runCatching { repository.clearQueuedBatch(batchId) }
+            }
         }
     }
 
@@ -431,7 +439,7 @@ class BatchValidationWorker(
         val body = "$live Live • $die Die • $unknown Unknown"
 
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID_BATCH_RESULTS)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_stat_bincheck)
             .setContentTitle(title)
             .setContentText(body)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
@@ -446,9 +454,10 @@ class BatchValidationWorker(
         const val UNIQUE_BATCH_WORK_NAME = "bincheck_concurrent_batch_validation"
         private const val CHANNEL_ID_BATCH_RESULTS = "bincheck_batch_results"
         private const val NOTIFICATION_ID_BATCH_DONE = 2048
-        private const val PROGRESS_ITEM_STRIDE = 4
         private const val PROGRESS_MIN_INTERVAL_MS = 250L
-        private const val DB_BATCH_FLUSH_SIZE = 15
+        private const val DB_BATCH_FLUSH_SIZE = 50
+        private const val BATCH_CACHE_MAX_ENTRIES = 2_500
+        private val BATCH_CACHE_TTL_MS = TimeUnit.MINUTES.toMillis(15)
         private const val TELEGRAM_DIGEST_CHUNK_SIZE = 8
 
         const val KEY_BATCH_ID = "batch_id"

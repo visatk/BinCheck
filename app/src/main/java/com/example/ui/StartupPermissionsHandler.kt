@@ -140,6 +140,8 @@ object AppPermissionHelper {
 @Composable
 fun StartupPermissionsPromptEffect(
     enabled: Boolean,
+    alreadyPrompted: Boolean = false,
+    onPromptAttempted: () -> Unit = {},
     onResult: (allGranted: Boolean) -> Unit
 ) {
     val context = LocalContext.current
@@ -153,12 +155,13 @@ fun StartupPermissionsPromptEffect(
         onResult(allGranted)
     }
 
-    LaunchedEffect(enabled) {
-        if (!enabled || isInspection || hasPromptedThisLaunch) return@LaunchedEffect
+    LaunchedEffect(enabled, alreadyPrompted) {
+        if (!enabled || isInspection || alreadyPrompted || hasPromptedThisLaunch) return@LaunchedEffect
         val missing = AppPermissionHelper.missingRuntimePermissions(context)
         hasPromptedThisLaunch = true
+        onPromptAttempted()
         if (missing.isNotEmpty()) {
-            launcher.launch(missing.toTypedArray())
+            runCatching { launcher.launch(missing.toTypedArray()) }
         }
     }
 }

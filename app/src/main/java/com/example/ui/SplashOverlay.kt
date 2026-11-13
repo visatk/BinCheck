@@ -1,5 +1,7 @@
 package com.example.ui
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -40,7 +42,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -63,11 +67,26 @@ private val SplashInkMuted = Color(0xFF9FB2C2)
 fun BinCheckSplashOverlay(
     visible: Boolean,
     onFinished: () -> Unit,
-    durationMillis: Long = 1_150L,
+    durationMillis: Long = 550L,
     modifier: Modifier = Modifier
 ) {
-    val emblemScale = remember { Animatable(0.84f) }
+    val context = LocalContext.current
+    val emblemScale = remember { Animatable(0.86f) }
     val contentAlpha = remember { Animatable(0f) }
+    // Downsample the 1024x1024 splash JPEG to 512x512 RGB_565 to cut cold-start decode time and memory ~8x.
+    val sampledLogoBitmap = remember(context) {
+        runCatching {
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = 2
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }
+            BitmapFactory.decodeResource(
+                context.resources,
+                R.drawable.bincheck_app_icon_1794588466984,
+                opts
+            )?.asImageBitmap()
+        }.getOrNull()
+    }
 
     LaunchedEffect(visible) {
         if (!visible) return@LaunchedEffect
@@ -77,14 +96,14 @@ fun BinCheckSplashOverlay(
                     targetValue = 1f,
                     animationSpec = spring(
                         dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMediumLow
+                        stiffness = Spring.StiffnessMedium
                     )
                 )
             }
             launch {
                 contentAlpha.animateTo(
                     targetValue = 1f,
-                    animationSpec = tween(durationMillis = 360, easing = FastOutSlowInEasing)
+                    animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing)
                 )
             }
         }
@@ -95,10 +114,10 @@ fun BinCheckSplashOverlay(
 
     AnimatedVisibility(
         visible = visible,
-        exit = fadeOut(animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing)) +
+        exit = fadeOut(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) +
             scaleOut(
                 targetScale = 1.03f,
-                animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing)
+                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)
             ),
         modifier = modifier
             .fillMaxSize()
@@ -137,14 +156,25 @@ fun BinCheckSplashOverlay(
                         .scale(emblemScale.value)
                         .testTag("splash_logo")
                 ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.bincheck_app_icon_1794588466984),
-                        contentDescription = stringResource(R.string.app_name),
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(RoundedCornerShape(30.dp))
-                    )
+                    if (sampledLogoBitmap != null) {
+                        Image(
+                            bitmap = sampledLogoBitmap,
+                            contentDescription = stringResource(R.string.app_name),
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(30.dp))
+                        )
+                    } else {
+                        Image(
+                            painter = painterResource(id = R.drawable.bincheck_app_icon_1794588466984),
+                            contentDescription = stringResource(R.string.app_name),
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(30.dp))
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(22.dp))

@@ -7,6 +7,12 @@ import androidx.room.Query
 import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
+data class HistoryCountRow(
+    val totalCount: Int,
+    val successCount: Int,
+    val failureCount: Int
+)
+
 @Dao
 interface ValidationHistoryDao {
 
@@ -76,6 +82,23 @@ interface ValidationHistoryDao {
 
     @Query("SELECT * FROM validation_history WHERE batchId = :batchId ORDER BY id ASC")
     fun observeHistoryByBatchId(batchId: String): Flow<List<ValidationHistoryEntity>>
+
+    @Query("SELECT MAX(id) FROM validation_history WHERE batchId = :batchId")
+    fun observeLatestBatchRowId(batchId: String): Flow<Long?>
+
+    @Query("SELECT * FROM validation_history WHERE batchId = :batchId AND id > :afterId ORDER BY id ASC")
+    suspend fun getBatchResultsAfterId(batchId: String, afterId: Long): List<ValidationHistoryEntity>
+
+    @Query(
+        """
+        SELECT
+            COUNT(*) AS totalCount,
+            COALESCE(SUM(CASE WHEN isSuccess = 1 THEN 1 ELSE 0 END), 0) AS successCount,
+            COALESCE(SUM(CASE WHEN isSuccess = 0 THEN 1 ELSE 0 END), 0) AS failureCount
+        FROM validation_history
+        """
+    )
+    fun observeHistorySummary(): Flow<HistoryCountRow>
 
     @Query("SELECT COUNT(*) FROM validation_history")
     fun observeTotalCount(): Flow<Int>

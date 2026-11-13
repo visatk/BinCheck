@@ -96,9 +96,10 @@ fun HistoryLogBottomSheet(
 
     val shouldAutoLoadMore by remember(hasMore, entries.size) {
         derivedStateOf {
-            if (!hasMore || entries.isEmpty()) return@derivedStateOf false
-            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible >= entries.size - 4
+            val visibleItems = listState.layoutInfo.visibleItemsInfo
+            if (!hasMore || entries.isEmpty() || visibleItems.isEmpty()) return@derivedStateOf false
+            val lastVisible = visibleItems.last().index
+            lastVisible > 0 && lastVisible >= entries.size - 4
         }
     }
 

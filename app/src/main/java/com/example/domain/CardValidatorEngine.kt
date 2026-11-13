@@ -80,8 +80,8 @@ object CardValidatorEngine {
             p1 == 4 -> CardScheme.VISA
             p2 in 51..55 || p4 in 2221..2720 -> CardScheme.MASTERCARD
             p2 == 34 || p2 == 37 -> CardScheme.AMEX
-            p2 == 62 -> CardScheme.UNIONPAY
             p4 == 6011 || p2 == 65 || p3 in 644..649 || p6 in 622126..622925 -> CardScheme.DISCOVER
+            p2 == 62 -> CardScheme.UNIONPAY
             p4 in 3528..3589 -> CardScheme.JCB
             p3 in 300..305 || p2 == 36 || p2 == 38 || p2 == 39 -> CardScheme.DINERS
             p2 == 50 || p2 in 56..69 -> CardScheme.MAESTRO
@@ -153,16 +153,16 @@ object CardValidatorEngine {
     ): List<String> {
         val cleanTemplate = templateLine.trim().ifEmpty { "453225005536xxx3|08|2028|113" }
         val parts = cleanTemplate.split('|', '/', ':').map { it.trim() }
+        val currentYear = Calendar.getInstance().get(Calendar.YEAR)
         val rawPan = parts.getOrNull(0).orEmpty().replace(" ", "").replace("-", "")
         val panPattern = rawPan.ifEmpty { "453225005536xxx3" }
         val mmPattern = parts.getOrNull(1)?.ifEmpty { "xx" } ?: "08"
-        val yyyyPattern = parts.getOrNull(2)?.ifEmpty { "xxxx" } ?: "2028"
+        val yyyyPattern = parts.getOrNull(2)?.ifEmpty { "xxxx" } ?: (currentYear + 2).toString()
         val schemeForPan = detectScheme(panPattern)
         val defaultCvvMask = "x".repeat(schemeForPan.cvvLength)
         val cvvPattern = parts.getOrNull(3)?.ifEmpty { defaultCvvMask } ?: defaultCvvMask
 
         val results = LinkedHashSet<String>()
-        val currentYear = Calendar.getInstance().get(Calendar.YEAR)
         var attempts = 0
         val maxAttempts = count * 12
 
