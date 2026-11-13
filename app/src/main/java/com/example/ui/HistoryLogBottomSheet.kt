@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Done
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -49,6 +51,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,6 +83,9 @@ fun HistoryLogBottomSheet(
     summary: HistoryUiSummary,
     activeFilter: HistoryFilter,
     searchQuery: String,
+    filteredTotalCount: Int = entries.size,
+    hasMore: Boolean = false,
+    onLoadMore: () -> Unit = {},
     onSelectFilter: (HistoryFilter) -> Unit,
     onSearchQueryChanged: (String) -> Unit,
     onCopyEntry: (ValidationHistoryEntity) -> Unit,
@@ -88,9 +96,24 @@ fun HistoryLogBottomSheet(
     BackHandler(onBack = onDismiss)
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val listState = rememberLazyListState()
     val dateFormatter = remember { SimpleDateFormat("MMM dd, HH:mm:ss", Locale.US) }
     val colorScheme = MaterialTheme.colorScheme
     val consoleColors = LocalConsoleColors.current
+
+    val shouldAutoLoadMore by remember(hasMore, entries.size) {
+        derivedStateOf {
+            if (!hasMore || entries.isEmpty()) return@derivedStateOf false
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            lastVisible >= entries.size - 4
+        }
+    }
+
+    LaunchedEffect(shouldAutoLoadMore) {
+        if (shouldAutoLoadMore) {
+            onLoadMore()
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -317,9 +340,11 @@ fun HistoryLogBottomSheet(
                 }
             } else {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 180.dp, max = 420.dp),
+                        .heightIn(min = 180.dp, max = 420.dp)
+                        .testTag("history_lazy_list"),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(
@@ -338,6 +363,39 @@ fun HistoryLogBottomSheet(
                             onCopy = { onCopyEntry(entry) },
                             onDelete = { onDeleteEntry(entry.id) }
                         )
+                    }
+
+                    item(key = "history_pagination_footer") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 6.dp, bottom = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Showing ${entries.size} of ${filteredTotalCount.coerceAtLeast(entries.size)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colorScheme.onSurfaceVariant,
+                                modifier = Modifier.testTag("history_pagination_status")
+                            )
+                            if (hasMore) {
+                                FilledTonalButton(
+                                    onClick = onLoadMore,
+                                    shape = MaterialTheme.shapes.small,
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier
+                                        .height(36.dp)
+                                        .testTag("history_load_more_button")
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.history_load_more),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

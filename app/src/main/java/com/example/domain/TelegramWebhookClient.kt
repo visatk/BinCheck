@@ -1,20 +1,10 @@
 package com.example.domain
 
 import com.example.BuildConfig
-import kotlinx.coroutines.suspendCancellableCoroutine
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
 import org.json.JSONObject
-import java.io.IOException
-import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 data class TelegramWebhookConfig(
     val enabled: Boolean = false,
@@ -33,16 +23,9 @@ object TelegramWebhookClient {
 
     private const val PLACEHOLDER_TOKEN = "MY_TELEGRAM_BOT_TOKEN"
     private const val TELEGRAM_API_BASE = "https://api.telegram.org"
+    private const val TELEGRAM_HOST = "api.telegram.org"
 
-    private val okHttpClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
-            .connectTimeout(12, TimeUnit.SECONDS)
-            .readTimeout(12, TimeUnit.SECONDS)
-            .writeTimeout(12, TimeUnit.SECONDS)
-            .callTimeout(15, TimeUnit.SECONDS)
-            .build()
-    }
+    private val detectDeduplicator = RequestDeduplicator<String, TelegramProbeResult>()
 
     fun resolveConfiguredBotToken(): String {
         val raw = runCatching { BuildConfig.TELEGRAM_BOT_TOKEN }.getOrDefault("").trim()
@@ -62,49 +45,76 @@ object TelegramWebhookClient {
             )
         }
 
-        val getMeReq = Request.Builder()
-            .url("$TELEGRAM_API_BASE/bot$token/getMe")
-            .get()
-            .build()
+        val (result, wasCoalesced) = detectDeduplicator.getOrExecute("detect:$token") {
+            val client = NetworkClientProvider.baseClient
+            val getMeReq = Request.Builder()
+                .url("$TELEGRAM_API_BASE/bot$token/getMe")
+                .get()
+                .build()
 
-        val getMeRes = runCatching { awaitCall(getMeReq) }.getOrElse { err ->
-            return TelegramProbeResult(
-                success = false,
-                message = "Telegram API error: ${err.localizedMessage ?: err.javaClass.simpleName}"
+            val getMeRes = RetryAndBackoffPolicy.executeWithExponentialBackoff(
+                host = TELEGRAM_HOST,
+                maxRetries = 1,
+                baseDelayMs = 450L,
+                maxDelayMs = 4_000L,
+                circuitBreaker = NetworkClientProvider.circuitBreaker,
+                telemetry = NetworkClientProvider.telemetry,
+                callBlock = { NetworkClientProvider.awaitRawCall(client, getMeReq) },
+                onResult = { code, body, _ -> code to body },
+                onCircuitOpen = { remainingMs ->
+                    503 to """{"description":"Telegram cooldown ${(remainingMs / 1000L).coerceAtLeast(1L)}s"}"""
+                },
+                onFailure = { reason, _ -> -1 to reason }
+            )
+
+            if (getMeRes.first !in 200..299) {
+                val msg = if (getMeRes.first == -1) {
+                    "Telegram API error: ${getMeRes.second}"
+                } else {
+                    "Bot auth failed (HTTP ${getMeRes.first}). Check TELEGRAM_BOT_TOKEN."
+                }
+                return@getOrExecute TelegramProbeResult(success = false, message = msg)
+            }
+
+            val botUsername = parseBotUsername(getMeRes.second)
+
+            val updatesReq = Request.Builder()
+                .url("$TELEGRAM_API_BASE/bot$token/getUpdates?limit=15")
+                .get()
+                .build()
+
+            val detectedChatId = RetryAndBackoffPolicy.executeWithExponentialBackoff(
+                host = TELEGRAM_HOST,
+                maxRetries = 1,
+                baseDelayMs = 450L,
+                maxDelayMs = 4_000L,
+                circuitBreaker = NetworkClientProvider.circuitBreaker,
+                telemetry = NetworkClientProvider.telemetry,
+                callBlock = { NetworkClientProvider.awaitRawCall(client, updatesReq) },
+                onResult = { code, body, _ ->
+                    if (code in 200..299) parseLatestChatId(body) else null
+                },
+                onCircuitOpen = { null },
+                onFailure = { _, _ -> null }
+            )
+
+            val msg = if (detectedChatId != null) {
+                "Connected @$botUsername • Detected Chat ID: $detectedChatId"
+            } else {
+                "Connected @$botUsername • Send /start to @$botUsername in Telegram, then tap Detect Chat ID."
+            }
+
+            TelegramProbeResult(
+                success = true,
+                botUsername = botUsername,
+                detectedChatId = detectedChatId,
+                message = msg
             )
         }
-
-        if (getMeRes.first !in 200..299) {
-            return TelegramProbeResult(
-                success = false,
-                message = "Bot auth failed (HTTP ${getMeRes.first}). Check TELEGRAM_BOT_TOKEN."
-            )
+        if (wasCoalesced) {
+            NetworkClientProvider.telemetry.recordDeduplicatedSaved()
         }
-
-        val botUsername = parseBotUsername(getMeRes.second)
-
-        val updatesReq = Request.Builder()
-            .url("$TELEGRAM_API_BASE/bot$token/getUpdates?limit=15")
-            .get()
-            .build()
-
-        val detectedChatId = runCatching {
-            val updatesRes = awaitCall(updatesReq)
-            if (updatesRes.first in 200..299) parseLatestChatId(updatesRes.second) else null
-        }.getOrNull()
-
-        val msg = if (detectedChatId != null) {
-            "Connected @$botUsername • Detected Chat ID: $detectedChatId"
-        } else {
-            "Connected @$botUsername • Send /start to @$botUsername in Telegram, then tap Detect Chat ID."
-        }
-
-        return TelegramProbeResult(
-            success = true,
-            botUsername = botUsername,
-            detectedChatId = detectedChatId,
-            message = msg
-        )
+        return result
     }
 
     suspend fun sendTestMessage(
@@ -139,27 +149,41 @@ object TelegramWebhookClient {
             htmlText = text
         )
 
-        return runCatching {
-            val (code, body) = awaitCall(req)
-            if (code in 200..299) {
-                TelegramProbeResult(
-                    success = true,
-                    detectedChatId = targetChatId,
-                    message = "Test alert delivered to Chat ID $targetChatId"
-                )
-            } else {
-                val desc = parseTelegramErrorDescription(body)
+        return RetryAndBackoffPolicy.executeWithExponentialBackoff(
+            host = TELEGRAM_HOST,
+            maxRetries = 2,
+            baseDelayMs = 500L,
+            maxDelayMs = 8_000L,
+            circuitBreaker = NetworkClientProvider.circuitBreaker,
+            telemetry = NetworkClientProvider.telemetry,
+            callBlock = { NetworkClientProvider.awaitRawCall(NetworkClientProvider.baseClient, req) },
+            onResult = { code, body, _ ->
+                if (code in 200..299) {
+                    TelegramProbeResult(
+                        success = true,
+                        detectedChatId = targetChatId,
+                        message = "Test alert delivered to Chat ID $targetChatId"
+                    )
+                } else {
+                    TelegramProbeResult(
+                        success = false,
+                        message = "Telegram HTTP $code: ${parseTelegramErrorDescription(body)}"
+                    )
+                }
+            },
+            onCircuitOpen = { remainingMs ->
                 TelegramProbeResult(
                     success = false,
-                    message = "Telegram HTTP $code: $desc"
+                    message = "Telegram rate-limit cooldown (${(remainingMs / 1000L).coerceAtLeast(1L)}s)"
+                )
+            },
+            onFailure = { reason, _ ->
+                TelegramProbeResult(
+                    success = false,
+                    message = "Webhook failed: $reason"
                 )
             }
-        }.getOrElse { err ->
-            TelegramProbeResult(
-                success = false,
-                message = "Webhook failed: ${err.localizedMessage ?: err.javaClass.simpleName}"
-            )
-        }
+        )
     }
 
     suspend fun sendValidationNotification(
@@ -189,16 +213,82 @@ object TelegramWebhookClient {
             }
         }.trim()
 
+        return dispatchHtmlMessage(token = token, chatId = targetChatId, htmlText = html)
+    }
+
+    /**
+     * Dispatches multiple validation hits in a single compact Telegram message to avoid
+     * HTTP 429 flood throttling and save radio/battery under high-traffic batch runs.
+     */
+    suspend fun sendBatchDigest(
+        records: List<ValidationRecord>,
+        engineLabel: String,
+        chatId: String,
+        botToken: String = resolveConfiguredBotToken()
+    ): Boolean {
+        if (records.isEmpty()) return true
+        if (records.size == 1) {
+            val single = records.first()
+            val binInfo = BinLookupService.getCached(single.pan)
+            return sendValidationNotification(
+                record = single,
+                engineLabel = engineLabel,
+                chatId = chatId,
+                binInfo = binInfo,
+                botToken = botToken
+            )
+        }
+        val token = botToken.trim()
+        val targetChatId = chatId.trim()
+        if (token.isEmpty() || targetChatId.isEmpty()) return false
+
+        val liveCount = records.count { it.bucket == ResultBucket.LIVE }
+        val dieCount = records.count { it.bucket == ResultBucket.DIE }
+        val unknownCount = records.size - liveCount - dieCount
+
+        val html = buildString {
+            appendLine("<b>BinCheck Batch Digest (${records.size} items)</b>")
+            appendLine("Engine: <b>${escapeHtml(engineLabel)}</b> | Live: $liveCount • Die: $dieCount • Unk: $unknownCount")
+            appendLine()
+            records.take(15).forEach { rec ->
+                val tag = when (rec.bucket) {
+                    ResultBucket.LIVE -> "LIVE"
+                    ResultBucket.DIE -> "DIE"
+                    ResultBucket.UNKNOWN -> "UNK"
+                }
+                appendLine("• <b>[$tag]</b> <code>${escapeHtml(rec.normalizedLine)}</code> (${escapeHtml(rec.scheme.displayName)})")
+            }
+            if (records.size > 15) {
+                append("<i>...and ${records.size - 15} more record(s)</i>")
+            }
+        }.trim()
+
+        return dispatchHtmlMessage(token = token, chatId = targetChatId, htmlText = html)
+    }
+
+    private suspend fun dispatchHtmlMessage(
+        token: String,
+        chatId: String,
+        htmlText: String
+    ): Boolean {
         val request = buildSendMessageRequest(
             botToken = token,
-            chatId = targetChatId,
-            htmlText = html
+            chatId = chatId,
+            htmlText = htmlText
         )
 
-        return runCatching {
-            val (code, _) = awaitCall(request)
-            code in 200..299
-        }.getOrDefault(false)
+        return RetryAndBackoffPolicy.executeWithExponentialBackoff(
+            host = TELEGRAM_HOST,
+            maxRetries = 2,
+            baseDelayMs = 600L,
+            maxDelayMs = 10_000L,
+            circuitBreaker = NetworkClientProvider.circuitBreaker,
+            telemetry = NetworkClientProvider.telemetry,
+            callBlock = { NetworkClientProvider.awaitRawCall(NetworkClientProvider.baseClient, request) },
+            onResult = { code, _, _ -> code in 200..299 },
+            onCircuitOpen = { false },
+            onFailure = { _, _ -> false }
+        )
     }
 
     internal fun buildSendMessageRequest(
@@ -256,29 +346,4 @@ object TelegramWebhookClient {
         raw.replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
-
-    private suspend fun awaitCall(request: Request): Pair<Int, String> =
-        suspendCancellableCoroutine { continuation ->
-            val call = okHttpClient.newCall(request)
-            continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    if (continuation.isActive) {
-                        continuation.resumeWithException(e)
-                    }
-                }
-
-                override fun onResponse(call: Call, response: Response) {
-                    response.use { res ->
-                        if (continuation.isActive) {
-                            try {
-                                continuation.resume(res.code to res.body?.string().orEmpty())
-                            } catch (t: Throwable) {
-                                continuation.resumeWithException(t)
-                            }
-                        }
-                    }
-                }
-            })
-        }
 }

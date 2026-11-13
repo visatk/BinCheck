@@ -44,7 +44,11 @@ data class ValidatorSettings(
     val useDynamicColor: Boolean = true,
     val telegramWebhookEnabled: Boolean = false,
     val telegramChatId: String = "",
-    val telegramNotifyLiveOnly: Boolean = true
+    val telegramNotifyLiveOnly: Boolean = true,
+    val deduplicateBatchInputs: Boolean = true,
+    val gzipCustomRequests: Boolean = false,
+    val wifiOnlyBatch: Boolean = false,
+    val batterySaverMode: Boolean = false
 ) {
     val effectiveDelayMs: Long
         get() = validationMode.resolveDelayMs(batchDelayMs)
@@ -57,7 +61,8 @@ data class ValidatorSettings(
         timeoutSeconds = httpTimeoutSeconds,
         maxRetries = httpMaxRetries,
         liveKeywords = httpLiveKeywords,
-        dieKeywords = httpDieKeywords
+        dieKeywords = httpDieKeywords,
+        compressBodyGzip = gzipCustomRequests
     )
 
     fun toTelegramWebhookConfig(): TelegramWebhookConfig = TelegramWebhookConfig(
@@ -90,6 +95,10 @@ class ValidatorPreferencesRepository(private val context: Context) {
         val TELEGRAM_WEBHOOK_ENABLED = booleanPreferencesKey("telegram_webhook_enabled")
         val TELEGRAM_CHAT_ID = stringPreferencesKey("telegram_chat_id")
         val TELEGRAM_NOTIFY_LIVE_ONLY = booleanPreferencesKey("telegram_notify_live_only")
+        val DEDUPLICATE_BATCH_INPUTS = booleanPreferencesKey("deduplicate_batch_inputs")
+        val GZIP_CUSTOM_REQUESTS = booleanPreferencesKey("gzip_custom_requests")
+        val WIFI_ONLY_BATCH = booleanPreferencesKey("wifi_only_batch")
+        val BATTERY_SAVER_MODE = booleanPreferencesKey("battery_saver_mode")
     }
 
     val settingsFlow: Flow<ValidatorSettings> = context.dataStore.data.map { prefs ->
@@ -125,7 +134,11 @@ class ValidatorPreferencesRepository(private val context: Context) {
             useDynamicColor = prefs[Keys.USE_DYNAMIC_COLOR] ?: true,
             telegramWebhookEnabled = prefs[Keys.TELEGRAM_WEBHOOK_ENABLED] ?: false,
             telegramChatId = prefs[Keys.TELEGRAM_CHAT_ID] ?: "",
-            telegramNotifyLiveOnly = prefs[Keys.TELEGRAM_NOTIFY_LIVE_ONLY] ?: true
+            telegramNotifyLiveOnly = prefs[Keys.TELEGRAM_NOTIFY_LIVE_ONLY] ?: true,
+            deduplicateBatchInputs = prefs[Keys.DEDUPLICATE_BATCH_INPUTS] ?: true,
+            gzipCustomRequests = prefs[Keys.GZIP_CUSTOM_REQUESTS] ?: false,
+            wifiOnlyBatch = prefs[Keys.WIFI_ONLY_BATCH] ?: false,
+            batterySaverMode = prefs[Keys.BATTERY_SAVER_MODE] ?: false
         )
     }
 
@@ -149,7 +162,11 @@ class ValidatorPreferencesRepository(private val context: Context) {
         useDynamicColor: Boolean,
         telegramWebhookEnabled: Boolean = false,
         telegramChatId: String = "",
-        telegramNotifyLiveOnly: Boolean = true
+        telegramNotifyLiveOnly: Boolean = true,
+        deduplicateBatchInputs: Boolean = true,
+        gzipCustomRequests: Boolean = false,
+        wifiOnlyBatch: Boolean = false,
+        batterySaverMode: Boolean = false
     ) {
         context.dataStore.edit { prefs ->
             prefs[Keys.VALIDATION_MODE] = validationMode.name
@@ -172,6 +189,10 @@ class ValidatorPreferencesRepository(private val context: Context) {
             prefs[Keys.TELEGRAM_WEBHOOK_ENABLED] = telegramWebhookEnabled
             prefs[Keys.TELEGRAM_CHAT_ID] = telegramChatId.trim()
             prefs[Keys.TELEGRAM_NOTIFY_LIVE_ONLY] = telegramNotifyLiveOnly
+            prefs[Keys.DEDUPLICATE_BATCH_INPUTS] = deduplicateBatchInputs
+            prefs[Keys.GZIP_CUSTOM_REQUESTS] = gzipCustomRequests
+            prefs[Keys.WIFI_ONLY_BATCH] = wifiOnlyBatch
+            prefs[Keys.BATTERY_SAVER_MODE] = batterySaverMode
         }
     }
 }

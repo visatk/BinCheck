@@ -226,7 +226,8 @@ object CardValidatorEngine {
         mode: ValidationMode,
         webhookUrl: String,
         autoResolveWildcards: Boolean,
-        customHttpConfig: CustomHttpConfig? = null
+        customHttpConfig: CustomHttpConfig? = null,
+        useCacheAndDedup: Boolean = true
     ): ValidationRecord {
         val startNanos = System.nanoTime()
         val trimmed = rawLine.trim()
@@ -462,7 +463,8 @@ object CardValidatorEngine {
                         cvv = cvv,
                         scheme = scheme,
                         config = resolvedConfig,
-                        startNanos = startNanos
+                        startNanos = startNanos,
+                        useCacheAndDedup = useCacheAndDedup
                     )
                 }
             }

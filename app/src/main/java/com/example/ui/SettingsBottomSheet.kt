@@ -77,7 +77,9 @@ import com.example.R
 import com.example.data.AppThemeMode
 import com.example.data.ValidatorSettings
 import com.example.domain.CustomHttpConfig
+import com.example.domain.DeviceNetworkStatus
 import com.example.domain.HttpProbeResult
+import com.example.domain.NetworkTelemetrySnapshot
 import com.example.domain.TelegramProbeResult
 import com.example.domain.TelegramWebhookConfig
 import com.example.domain.ValidationMode
@@ -93,6 +95,8 @@ import kotlin.math.roundToInt
 @Composable
 fun SettingsBottomSheet(
     settings: ValidatorSettings,
+    networkStats: NetworkTelemetrySnapshot,
+    deviceNetworkStatus: DeviceNetworkStatus,
     isTestingEndpoint: Boolean,
     httpProbeResult: HttpProbeResult?,
     isTestingTelegram: Boolean,
@@ -101,6 +105,7 @@ fun SettingsBottomSheet(
     onTestEndpoint: (CustomHttpConfig) -> Unit,
     onDetectTelegramChat: () -> Unit,
     onTestTelegramWebhook: (String) -> Unit,
+    onClearCaches: () -> Unit,
     onSaveSettings: (
         validationMode: ValidationMode,
         httpConfig: CustomHttpConfig,
@@ -112,7 +117,10 @@ fun SettingsBottomSheet(
         patternTemplate: String,
         generateQuantity: Int,
         themeMode: AppThemeMode,
-        useDynamicColor: Boolean
+        useDynamicColor: Boolean,
+        deduplicateBatchInputs: Boolean,
+        wifiOnlyBatch: Boolean,
+        batterySaverMode: Boolean
     ) -> Unit,
     onGenerateBatchToConsole: (pattern: String, quantity: Int) -> Unit,
     onClearAllBuckets: () -> Unit
@@ -135,6 +143,9 @@ fun SettingsBottomSheet(
     var generateQty by remember(settings) { mutableIntStateOf(settings.generateQuantity) }
     var selectedThemeMode by remember(settings) { mutableStateOf(settings.themeMode) }
     var useDynamicColor by remember(settings) { mutableStateOf(settings.useDynamicColor) }
+    var deduplicateBatchInputs by remember(settings) { mutableStateOf(settings.deduplicateBatchInputs) }
+    var wifiOnlyBatch by remember(settings) { mutableStateOf(settings.wifiOnlyBatch) }
+    var batterySaverMode by remember(settings) { mutableStateOf(settings.batterySaverMode) }
 
     val channelUrl = stringResource(R.string.developer_channel_url)
 
@@ -495,6 +506,20 @@ fun SettingsBottomSheet(
 
             Spacer(modifier = Modifier.height(14.dp))
 
+            NetworkOptimizationSectionCard(
+                networkStats = networkStats,
+                deviceNetworkStatus = deviceNetworkStatus,
+                deduplicateBatchInputs = deduplicateBatchInputs,
+                wifiOnlyBatch = wifiOnlyBatch,
+                batterySaverMode = batterySaverMode,
+                onToggleDedupCache = { deduplicateBatchInputs = it },
+                onToggleWifiOnly = { wifiOnlyBatch = it },
+                onToggleBatterySaver = { batterySaverMode = it },
+                onClearCaches = onClearCaches
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.medium,
@@ -768,7 +793,10 @@ fun SettingsBottomSheet(
                             patternTemplate,
                             generateQty,
                             selectedThemeMode,
-                            useDynamicColor
+                            useDynamicColor,
+                            deduplicateBatchInputs,
+                            wifiOnlyBatch,
+                            batterySaverMode
                         )
                     },
                     modifier = Modifier

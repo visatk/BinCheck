@@ -6,9 +6,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -18,6 +20,7 @@ import androidx.work.workDataOf
 import com.example.data.AppThemeMode
 import com.example.data.ValidatorPreferencesRepository
 import com.example.data.local.AppDatabase
+import com.example.data.local.BinCacheEntity
 import com.example.data.local.HistoryFilter
 import com.example.data.local.ValidationHistoryRepository
 import androidx.compose.ui.test.onNodeWithText
@@ -26,7 +29,9 @@ import com.example.domain.BinLookupService
 import com.example.domain.CardScheme
 import com.example.domain.CardValidatorEngine
 import com.example.domain.CustomHttpConfig
+import com.example.domain.DeviceNetworkStatus
 import com.example.domain.HttpRequestMethod
+import com.example.domain.NetworkTelemetrySnapshot
 import com.example.domain.ResultBucket
 import com.example.domain.TelegramWebhookClient
 import com.example.domain.TelegramWebhookConfig
@@ -37,6 +42,9 @@ import okio.Buffer
 import com.example.ui.BinCheckTopBar
 import com.example.ui.ConsoleInputCard
 import com.example.ui.CustomHttpSectionCard
+import com.example.ui.HistoryLogBottomSheet
+import com.example.ui.HistoryUiSummary
+import com.example.ui.NetworkOptimizationSectionCard
 import com.example.ui.ResultsCard
 import com.example.ui.TelegramWebhookSectionCard
 import com.example.ui.TopTelemetryStrip
@@ -671,5 +679,180 @@ class ExampleRobolectricTest {
                 """{"ok":true,"result":[{"update_id":1,"message":{"chat":{"id":111}}},{"update_id":2,"message":{"chat":{"id":987654321}}}]}"""
             )
         )
+    }
+
+    @Test
+    fun `binCacheDao stores respects TTL and prunes expired bins`() = runTest {
+        val dao = inMemoryDb.binCacheDao()
+        val now = 1_000_000L
+        val validInfo = BinInfo(
+            bin = "453225",
+            scheme = "VISA",
+            type = "CREDIT",
+            brand = "CLASSIC",
+            bankName = "CHASE BANK",
+            countryCode = "US",
+            countryEmoji = "🇺🇸",
+            isNetworkVerified = true
+        )
+        val expiredInfo = validInfo.copy(bin = "541275", scheme = "MASTERCARD")
+
+        dao.upsertBin(BinCacheEntity.fromBinInfo(validInfo, ttlMillis = 60_000L, nowMillis = now))
+        dao.upsertBin(BinCacheEntity.fromBinInfo(expiredInfo, ttlMillis = 100L, nowMillis = now - 500L))
+
+        val loadedValid = dao.getValidBin("453225", now)
+        assertEquals("CHASE BANK", loadedValid?.bankName)
+        assertEquals(null, dao.getValidBin("541275", now))
+        assertEquals(1, dao.pruneExpired(now))
+        assertEquals(1, dao.countValidBins(now))
+    }
+
+    @Test
+    fun `history repository supports SQLite pagination search filtering and trimming`() = runTest {
+        val entries = (1..5).map { idx ->
+            val pan = "453225005536000$idx"
+            val record = ValidationRecord(
+                id = "r_$idx",
+                rawLine = "$pan|08|2028|113",
+                normalizedLine = "$pan|08|2028|113",
+                pan = pan,
+                month = "08",
+                year = "2028",
+                cvv = "113",
+                scheme = if (idx % 2 == 0) CardScheme.MASTERCARD else CardScheme.VISA,
+                bucket = if (idx % 2 == 0) ResultBucket.DIE else ResultBucket.LIVE,
+                message = "Test $idx",
+                latencyMs = 5L
+            )
+            repository.toEntity("batch-pg", "test.txt", record, "Luhn")
+        }
+        repository.recordResultBatch(entries)
+
+        val page1 = repository.getHistoryPage(HistoryFilter.ALL, query = "", limit = 2, offset = 0)
+        val page2 = repository.getHistoryPage(HistoryFilter.ALL, query = "", limit = 2, offset = 2)
+        assertEquals(2, page1.size)
+        assertEquals(2, page2.size)
+        assertTrue(page1.map { it.id }.intersect(page2.map { it.id }.toSet()).isEmpty())
+
+        val pagedVisa = repository.observePagedHistory(HistoryFilter.SUCCESS, query = "VISA", limit = 10).first()
+        assertEquals(3, pagedVisa.size)
+        assertEquals(3, repository.observeFilteredCount(HistoryFilter.SUCCESS, query = "VISA").first())
+    }
+
+    @Test
+    fun `preferences repository persists high-traffic network optimizer settings`() = runTest {
+        val prefsRepo = ValidatorPreferencesRepository(context)
+        prefsRepo.updateSettings(
+            validationMode = ValidationMode.REMOTE_WEBHOOK,
+            webhookUrl = "https://api.example.com/check",
+            autoResolveWildcards = true,
+            batchDelayMs = 100L,
+            concurrency = 4,
+            patternTemplate = "453225005536xxx3|08|2028|113",
+            generateQuantity = 10,
+            themeMode = AppThemeMode.DARK,
+            useDynamicColor = true,
+            deduplicateBatchInputs = false,
+            gzipCustomRequests = true,
+            wifiOnlyBatch = true,
+            batterySaverMode = true
+        )
+
+        val stored = prefsRepo.settingsFlow.first()
+        assertEquals(false, stored.deduplicateBatchInputs)
+        assertEquals(true, stored.gzipCustomRequests)
+        assertEquals(true, stored.wifiOnlyBatch)
+        assertEquals(true, stored.batterySaverMode)
+        assertEquals(true, stored.toCustomHttpConfig().compressBodyGzip)
+    }
+
+    @Test
+    fun `networkOptimizationSectionCard renders telemetry badges and optimizer switches`() {
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                Box(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    NetworkOptimizationSectionCard(
+                        networkStats = NetworkTelemetrySnapshot(
+                            httpRequestsSent = 18,
+                            cacheHits = 6,
+                            deduplicatedSaved = 4,
+                            retriesPerformed = 2,
+                            circuitBreakerTrips = 1
+                        ),
+                        deviceNetworkStatus = DeviceNetworkStatus(
+                            isConnected = true,
+                            isMetered = true,
+                            isPowerSaveMode = true
+                        ),
+                        deduplicateBatchInputs = true,
+                        wifiOnlyBatch = true,
+                        batterySaverMode = true,
+                        onToggleDedupCache = {},
+                        onToggleWifiOnly = {},
+                        onToggleBatterySaver = {},
+                        onClearCaches = {}
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("network_telemetry_strip").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("dedup_cache_switch").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("wifi_only_batch_switch").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("battery_saver_switch").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("clear_network_cache_button").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("HTTP: 18").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Saved: 10").assertIsDisplayed()
+    }
+
+    @Test
+    fun `historyLogBottomSheet displays pagination status and Load More button when hasMore is true`() {
+        val sampleEntries = (1..3).map { idx ->
+            val pan = "453225005536000$idx"
+            repository.toEntity(
+                batchId = "b1",
+                sourceName = "console",
+                record = ValidationRecord(
+                    id = "id_$idx",
+                    rawLine = "$pan|08|2028|113",
+                    normalizedLine = "$pan|08|2028|113",
+                    pan = pan,
+                    month = "08",
+                    year = "2028",
+                    cvv = "113",
+                    scheme = CardScheme.VISA,
+                    bucket = ResultBucket.LIVE,
+                    message = "Valid",
+                    latencyMs = 2L
+                ),
+                endpointUsed = "LUHN"
+            ).copy(id = idx.toLong())
+        }
+
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                HistoryLogBottomSheet(
+                    entries = sampleEntries,
+                    summary = HistoryUiSummary(totalCount = 12, successCount = 12, failureCount = 0),
+                    activeFilter = HistoryFilter.ALL,
+                    searchQuery = "",
+                    filteredTotalCount = 12,
+                    hasMore = true,
+                    onLoadMore = {},
+                    onSelectFilter = {},
+                    onSearchQueryChanged = {},
+                    onCopyEntry = {},
+                    onDeleteEntry = {},
+                    onClearAllHistory = {},
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("history_lazy_list")
+            .performScrollToNode(hasTestTag("history_load_more_button"))
+        composeTestRule.onNodeWithTag("history_pagination_status").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("history_load_more_button").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Showing 3 of 12").assertIsDisplayed()
     }
 }

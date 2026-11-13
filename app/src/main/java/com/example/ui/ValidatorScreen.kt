@@ -123,6 +123,8 @@ fun ValidatorScreen(
     if (uiState.isSettingsOpen) {
         SettingsBottomSheet(
             settings = uiState.settings,
+            networkStats = uiState.networkStats,
+            deviceNetworkStatus = uiState.deviceNetworkStatus,
             isTestingEndpoint = uiState.isTestingEndpoint,
             httpProbeResult = uiState.httpProbeResult,
             isTestingTelegram = uiState.isTestingTelegram,
@@ -131,6 +133,7 @@ fun ValidatorScreen(
             onTestEndpoint = viewModel::testHttpEndpoint,
             onDetectTelegramChat = viewModel::detectTelegramBotAndChat,
             onTestTelegramWebhook = viewModel::sendTelegramTestWebhook,
+            onClearCaches = viewModel::clearNetworkAndBinCaches,
             onSaveSettings = viewModel::saveSettings,
             onGenerateBatchToConsole = viewModel::generateBatchIntoConsole,
             onClearAllBuckets = viewModel::clearAllResults
@@ -156,6 +159,9 @@ fun ValidatorScreen(
             summary = uiState.historySummary,
             activeFilter = uiState.historyFilter,
             searchQuery = uiState.historySearchQuery,
+            filteredTotalCount = uiState.historyFilteredTotalCount,
+            hasMore = uiState.hasMoreHistory,
+            onLoadMore = viewModel::loadMoreHistory,
             onSelectFilter = viewModel::setHistoryFilter,
             onSearchQueryChanged = viewModel::setHistorySearchQuery,
             onCopyEntry = { entry -> copyToClipboard("History Record", entry.normalizedLine) },

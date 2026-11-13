@@ -25,12 +25,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.AccountBalance
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.ErrorOutline
-import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.CardDefaults
@@ -187,7 +187,7 @@ fun ResultsCard(
                 val emptyIcon = when (uiState.selectedTab) {
                     ResultBucket.LIVE -> Icons.Outlined.CheckCircle
                     ResultBucket.DIE -> Icons.Outlined.ErrorOutline
-                    ResultBucket.UNKNOWN -> Icons.Outlined.HelpOutline
+                    ResultBucket.UNKNOWN -> Icons.AutoMirrored.Outlined.HelpOutline
                 }
                 val emptyHeadline = when (uiState.selectedTab) {
                     ResultBucket.LIVE -> "No Live records yet"

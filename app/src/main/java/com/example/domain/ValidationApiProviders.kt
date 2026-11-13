@@ -1,24 +1,13 @@
 package com.example.domain
 
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.suspendCancellableCoroutine
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.ConnectionPool
-import okhttp3.Dispatcher
 import okhttp3.FormBody
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
 import org.json.JSONObject
-import java.io.IOException
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 internal data class ParsedApiVerdict(
     val bucket: ResultBucket,
@@ -31,20 +20,12 @@ object ValidationApiProviders {
     const val PAYATE_URL = "https://mock.payate.com/api.php"
     const val CHKR_URL = "https://api.chkr.cc/"
 
-    private val client: OkHttpClient by lazy {
-        val dispatcher = Dispatcher().apply {
-            maxRequests = 64
-            maxRequestsPerHost = 16
-        }
-        OkHttpClient.Builder()
-            .dispatcher(dispatcher)
-            .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
-            .followRedirects(true)
-            .connectTimeout(12, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .writeTimeout(12, TimeUnit.SECONDS)
-            .callTimeout(20, TimeUnit.SECONDS)
-            .build()
+    private val VERDICT_CACHE_TTL_MS = TimeUnit.MINUTES.toMillis(5)
+    private val responseCache = TtlLruCache<String, ValidationRecord>(maxEntries = 1_000)
+    private val deduplicator = RequestDeduplicator<String, ValidationRecord>()
+
+    fun clearCache() {
+        responseCache.clear()
     }
 
     suspend fun executePayate(
@@ -58,21 +39,43 @@ object ValidationApiProviders {
         timeoutSeconds: Int = 15,
         startNanos: Long
     ): ValidationRecord {
-        val request = buildPayateRequest(normalizedLine)
-        return executeSingleProvider(
-            providerName = "Payate",
-            request = request,
-            rawLine = rawLine,
-            normalizedLine = normalizedLine,
-            pan = pan,
-            mm = mm,
-            yyyy = yyyy,
-            cvv = cvv,
-            scheme = scheme,
-            timeoutSeconds = timeoutSeconds,
-            startNanos = startNanos,
-            parser = { statusCode, body -> parsePayateResponse(statusCode, body) }
-        )
+        val cacheKey = "payate|$normalizedLine"
+        responseCache.get(cacheKey)?.let { cached ->
+            NetworkClientProvider.telemetry.recordCacheHit()
+            return cached.copy(
+                id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
+                rawLine = rawLine,
+                latencyMs = 1L,
+                message = "${cached.message} (Cached)"
+            )
+        }
+
+        val (record, wasCoalesced) = deduplicator.getOrExecute(cacheKey) {
+            val request = buildPayateRequest(normalizedLine)
+            val fresh = executeSingleProvider(
+                providerName = "Payate",
+                host = "mock.payate.com",
+                request = request,
+                rawLine = rawLine,
+                normalizedLine = normalizedLine,
+                pan = pan,
+                mm = mm,
+                yyyy = yyyy,
+                cvv = cvv,
+                scheme = scheme,
+                timeoutSeconds = timeoutSeconds,
+                startNanos = startNanos,
+                parser = { statusCode, body -> parsePayateResponse(statusCode, body) }
+            )
+            if (fresh.bucket != ResultBucket.UNKNOWN) {
+                responseCache.put(cacheKey, fresh, VERDICT_CACHE_TTL_MS)
+            }
+            fresh
+        }
+        if (wasCoalesced) {
+            NetworkClientProvider.telemetry.recordDeduplicatedSaved()
+        }
+        return record
     }
 
     suspend fun executeChkr(
@@ -86,25 +89,46 @@ object ValidationApiProviders {
         timeoutSeconds: Int = 15,
         startNanos: Long
     ): ValidationRecord {
-        val request = buildChkrRequest(normalizedLine)
-        val record = executeSingleProvider(
-            providerName = "Chkr.cc",
-            request = request,
-            rawLine = rawLine,
-            normalizedLine = normalizedLine,
-            pan = pan,
-            mm = mm,
-            yyyy = yyyy,
-            cvv = cvv,
-            scheme = scheme,
-            timeoutSeconds = timeoutSeconds,
-            startNanos = startNanos,
-            parser = { statusCode, body ->
-                val parsed = parseChkrResponse(pan, statusCode, body)
-                parsed.embeddedBinInfo?.let { BinLookupService.cacheVerifiedBin(it) }
-                parsed
+        val cacheKey = "chkr|$normalizedLine"
+        responseCache.get(cacheKey)?.let { cached ->
+            NetworkClientProvider.telemetry.recordCacheHit()
+            return cached.copy(
+                id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
+                rawLine = rawLine,
+                latencyMs = 1L,
+                message = "${cached.message} (Cached)"
+            )
+        }
+
+        val (record, wasCoalesced) = deduplicator.getOrExecute(cacheKey) {
+            val request = buildChkrRequest(normalizedLine)
+            val fresh = executeSingleProvider(
+                providerName = "Chkr.cc",
+                host = "api.chkr.cc",
+                request = request,
+                rawLine = rawLine,
+                normalizedLine = normalizedLine,
+                pan = pan,
+                mm = mm,
+                yyyy = yyyy,
+                cvv = cvv,
+                scheme = scheme,
+                timeoutSeconds = timeoutSeconds,
+                startNanos = startNanos,
+                parser = { statusCode, body ->
+                    val parsed = parseChkrResponse(pan, statusCode, body)
+                    parsed.embeddedBinInfo?.let { BinLookupService.cacheVerifiedBin(it) }
+                    parsed
+                }
+            )
+            if (fresh.bucket != ResultBucket.UNKNOWN) {
+                responseCache.put(cacheKey, fresh, VERDICT_CACHE_TTL_MS)
             }
-        )
+            fresh
+        }
+        if (wasCoalesced) {
+            NetworkClientProvider.telemetry.recordDeduplicatedSaved()
+        }
         return record
     }
 
@@ -314,6 +338,7 @@ object ValidationApiProviders {
 
     private suspend fun executeSingleProvider(
         providerName: String,
+        host: String,
         request: Request,
         rawLine: String,
         normalizedLine: String,
@@ -326,27 +351,21 @@ object ValidationApiProviders {
         startNanos: Long,
         parser: (Int, String) -> ParsedApiVerdict
     ): ValidationRecord {
-        val timeout = timeoutSeconds.coerceIn(5, 60).toLong()
-        val scopedClient = client.newBuilder()
-            .connectTimeout(timeout, TimeUnit.SECONDS)
-            .readTimeout(timeout, TimeUnit.SECONDS)
-            .writeTimeout(timeout, TimeUnit.SECONDS)
-            .callTimeout(timeout + 5L, TimeUnit.SECONDS)
-            .build()
+        val scopedClient = NetworkClientProvider.clientWithTimeout(timeoutSeconds)
 
-        var lastError: String? = null
-        for (attempt in 1..2) {
-            currentCoroutineContext().ensureActive()
-            try {
-                val (code, body) = awaitCall(scopedClient, request)
-                if ((code == 429 || code in 500..599) && attempt == 1) {
-                    lastError = "HTTP $code"
-                    delay(300L)
-                    continue
-                }
+        return RetryAndBackoffPolicy.executeWithExponentialBackoff(
+            host = host,
+            maxRetries = 2,
+            baseDelayMs = 450L,
+            maxDelayMs = 6_000L,
+            circuitBreaker = NetworkClientProvider.circuitBreaker,
+            telemetry = NetworkClientProvider.telemetry,
+            callBlock = { NetworkClientProvider.awaitRawCall(scopedClient, request) },
+            onResult = { code, body, attempts ->
                 val parsed = parser(code, body)
                 val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos).coerceAtLeast(1L)
-                return ValidationRecord(
+                val retryTag = if (attempts > 1) " • ${attempts}x" else ""
+                ValidationRecord(
                     id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
                     rawLine = rawLine,
                     normalizedLine = normalizedLine,
@@ -356,34 +375,42 @@ object ValidationApiProviders {
                     cvv = cvv,
                     scheme = scheme,
                     bucket = parsed.bucket,
-                    message = "$providerName • ${parsed.detailMessage}",
+                    message = "$providerName • ${parsed.detailMessage}$retryTag",
                     latencyMs = elapsed
                 )
-            } catch (e: IOException) {
-                lastError = e.localizedMessage ?: e.javaClass.simpleName
-                if (attempt == 1) {
-                    delay(250L)
-                }
-            } catch (e: Exception) {
-                currentCoroutineContext().ensureActive()
-                lastError = e.localizedMessage ?: e.javaClass.simpleName
-                break
+            },
+            onCircuitOpen = { remainingMs ->
+                val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos).coerceAtLeast(1L)
+                ValidationRecord(
+                    id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
+                    rawLine = rawLine,
+                    normalizedLine = normalizedLine,
+                    pan = pan,
+                    month = mm,
+                    year = yyyy,
+                    cvv = cvv,
+                    scheme = scheme,
+                    bucket = ResultBucket.UNKNOWN,
+                    message = "$providerName paused (${(remainingMs / 1000L).coerceAtLeast(1L)}s overload cooldown)",
+                    latencyMs = elapsed
+                )
+            },
+            onFailure = { reason, attempts ->
+                val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos).coerceAtLeast(1L)
+                ValidationRecord(
+                    id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
+                    rawLine = rawLine,
+                    normalizedLine = normalizedLine,
+                    pan = pan,
+                    month = mm,
+                    year = yyyy,
+                    cvv = cvv,
+                    scheme = scheme,
+                    bucket = ResultBucket.UNKNOWN,
+                    message = "$providerName error (${attempts}x): $reason",
+                    latencyMs = elapsed
+                )
             }
-        }
-
-        val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos).coerceAtLeast(1L)
-        return ValidationRecord(
-            id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
-            rawLine = rawLine,
-            normalizedLine = normalizedLine,
-            pan = pan,
-            month = mm,
-            year = yyyy,
-            cvv = cvv,
-            scheme = scheme,
-            bucket = ResultBucket.UNKNOWN,
-            message = "$providerName error: ${lastError ?: "Request failed"}",
-            latencyMs = elapsed
         )
     }
 
@@ -427,32 +454,5 @@ object ValidationApiProviders {
             }
         }
         return sb.toString()
-    }
-
-    private suspend fun awaitCall(
-        okClient: OkHttpClient,
-        request: Request
-    ): Pair<Int, String> = suspendCancellableCoroutine { continuation ->
-        val call = okClient.newCall(request)
-        continuation.invokeOnCancellation { call.cancel() }
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                if (continuation.isActive) {
-                    continuation.resumeWithException(e)
-                }
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                response.use { res ->
-                    if (continuation.isActive) {
-                        try {
-                            continuation.resume(res.code to res.body?.string().orEmpty())
-                        } catch (t: Throwable) {
-                            continuation.resumeWithException(t)
-                        }
-                    }
-                }
-            }
-        })
     }
 }

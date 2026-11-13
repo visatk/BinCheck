@@ -1,22 +1,15 @@
 package com.example.domain
 
+import com.example.data.local.BinCacheDao
+import com.example.data.local.BinCacheEntity
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.ConnectionPool
-import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Response
 import org.json.JSONObject
-import java.io.IOException
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 data class BinInfo(
     val bin: String,
@@ -74,18 +67,23 @@ data class BinInfo(
 
 object BinLookupService {
 
-    private val client: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(8, TimeUnit.SECONDS)
-            .writeTimeout(8, TimeUnit.SECONDS)
-            .callTimeout(12, TimeUnit.SECONDS)
-            .build()
-    }
+    private val VERIFIED_MEM_TTL_MS = TimeUnit.HOURS.toMillis(24)
+    private val VERIFIED_DISK_TTL_MS = TimeUnit.DAYS.toMillis(7)
+    private val FALLBACK_MEM_TTL_MS = TimeUnit.MINUTES.toMillis(5)
 
-    private val cache = ConcurrentHashMap<String, BinInfo>()
-    private val inFlightLocks = ConcurrentHashMap<String, Mutex>()
+    private val memoryCache = TtlLruCache<String, BinInfo>(maxEntries = 500)
+    private val deduplicator = RequestDeduplicator<String, BinInfo?>()
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    @Volatile
+    private var binCacheDao: BinCacheDao? = null
+
+    fun attachDao(dao: BinCacheDao) {
+        binCacheDao = dao
+        ioScope.launch {
+            runCatching { dao.pruneExpired(System.currentTimeMillis()) }
+        }
+    }
 
     fun extractBin6(panOrBin: String): String {
         return panOrBin.filter { it.isDigit() }.take(6)
@@ -94,12 +92,27 @@ object BinLookupService {
     fun getCached(panOrBin: String): BinInfo? {
         val bin6 = extractBin6(panOrBin)
         if (bin6.length < 6) return null
-        return cache[bin6]
+        return memoryCache.get(bin6)
     }
 
     fun cacheVerifiedBin(info: BinInfo) {
         if (info.bin.length == 6 && info.isNetworkVerified) {
-            cache[info.bin] = info
+            memoryCache.put(info.bin, info, VERIFIED_MEM_TTL_MS)
+            val dao = binCacheDao
+            if (dao != null) {
+                ioScope.launch {
+                    runCatching {
+                        dao.upsertBin(BinCacheEntity.fromBinInfo(info, VERIFIED_DISK_TTL_MS))
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun clearAllCaches() {
+        memoryCache.clear()
+        binCacheDao?.let { dao ->
+            runCatching { dao.clearAll() }
         }
     }
 
@@ -111,73 +124,116 @@ object BinLookupService {
         if (bin6.length < 6) return@withContext null
 
         if (!forceRefresh) {
-            cache[bin6]?.let { cached ->
-                if (cached.isNetworkVerified) return@withContext cached
+            memoryCache.get(bin6)?.let { cached ->
+                if (cached.isNetworkVerified) {
+                    NetworkClientProvider.telemetry.recordCacheHit()
+                    return@withContext cached
+                }
+            }
+            val diskCached = binCacheDao?.let { dao ->
+                runCatching { dao.getValidBin(bin6, System.currentTimeMillis())?.toBinInfo() }.getOrNull()
+            }
+            if (diskCached != null && diskCached.isNetworkVerified) {
+                memoryCache.put(bin6, diskCached, VERIFIED_MEM_TTL_MS)
+                NetworkClientProvider.telemetry.recordCacheHit()
+                return@withContext diskCached
             }
         }
 
-        val lock = inFlightLocks.getOrPut(bin6) { Mutex() }
-        lock.withLock {
+        val dedupKey = if (forceRefresh) "refresh:$bin6" else bin6
+        val (result, wasCoalesced) = deduplicator.getOrExecute(dedupKey) {
             if (!forceRefresh) {
-                cache[bin6]?.let { cached ->
-                    if (cached.isNetworkVerified) return@withContext cached
+                memoryCache.get(bin6)?.let { cached ->
+                    if (cached.isNetworkVerified) {
+                        NetworkClientProvider.telemetry.recordCacheHit()
+                        return@getOrExecute cached
+                    }
                 }
             }
 
-            // Primary provider: lookup.binlist.net
+            // Primary provider: lookup.binlist.net (protected by circuit breaker & backoff)
             val binlistResult = fetchFromBinlist(bin6)
             if (binlistResult != null) {
-                cache[bin6] = binlistResult
-                return@withContext binlistResult
+                cacheVerifiedBin(binlistResult)
+                return@getOrExecute binlistResult
             }
 
             // Secondary provider: data.handyapi.com
             val handyResult = fetchFromHandyApi(bin6)
             if (handyResult != null) {
-                cache[bin6] = handyResult
-                return@withContext handyResult
+                cacheVerifiedBin(handyResult)
+                return@getOrExecute handyResult
             }
 
-            // Offline / rate-limited fallback using deterministic ISO/IEC 7812 IIN scheme rules
+            // Offline / rate-limited fallback cached briefly (5m) so recovery is prompt
             val localFallback = buildLocalFallback(bin6)
-            cache.putIfAbsent(bin6, localFallback)
-            cache[bin6] ?: localFallback
+            if (memoryCache.get(bin6) == null) {
+                memoryCache.put(bin6, localFallback, FALLBACK_MEM_TTL_MS)
+            }
+            memoryCache.get(bin6) ?: localFallback
         }
+
+        if (wasCoalesced) {
+            NetworkClientProvider.telemetry.recordDeduplicatedSaved()
+        }
+        result
     }
 
     private suspend fun fetchFromBinlist(bin6: String): BinInfo? {
-        return runCatching {
-            val request = Request.Builder()
-                .url("https://lookup.binlist.net/$bin6")
-                .header("Accept-Version", "3")
-                .header("Accept", "application/json")
-                .get()
-                .build()
+        val client = NetworkClientProvider.clientWithTimeout(8)
+        val request = Request.Builder()
+            .url("https://lookup.binlist.net/$bin6")
+            .header("Accept-Version", "3")
+            .header("Accept", "application/json")
+            .get()
+            .build()
 
-            val (code, body) = awaitCall(request)
-            if (code in 200..299 && body.isNotBlank()) {
-                parseBinlistJson(bin6, body)
-            } else {
-                null
-            }
-        }.getOrNull()
+        return RetryAndBackoffPolicy.executeWithExponentialBackoff(
+            host = "lookup.binlist.net",
+            maxRetries = 1,
+            baseDelayMs = 450L,
+            maxDelayMs = 3_000L,
+            circuitBreaker = NetworkClientProvider.circuitBreaker,
+            telemetry = NetworkClientProvider.telemetry,
+            callBlock = { NetworkClientProvider.awaitRawCall(client, request) },
+            onResult = { code, body, _ ->
+                if (code in 200..299 && body.isNotBlank()) {
+                    parseBinlistJson(bin6, body)
+                } else {
+                    null
+                }
+            },
+            onCircuitOpen = { null },
+            onFailure = { _, _ -> null }
+        )
     }
 
     private suspend fun fetchFromHandyApi(bin6: String): BinInfo? {
-        return runCatching {
-            val request = Request.Builder()
-                .url("https://data.handyapi.com/bin/$bin6")
-                .header("Accept", "application/json")
-                .get()
-                .build()
+        val client = NetworkClientProvider.clientWithTimeout(8)
+        val request = Request.Builder()
+            .url("https://data.handyapi.com/bin/$bin6")
+            .header("Accept", "application/json")
+            .get()
+            .build()
 
-            val (code, body) = awaitCall(request)
-            if (code in 200..299 && body.isNotBlank()) {
-                parseHandyApiJson(bin6, body)
-            } else {
-                null
-            }
-        }.getOrNull()
+        return RetryAndBackoffPolicy.executeWithExponentialBackoff(
+            host = "data.handyapi.com",
+            maxRetries = 1,
+            baseDelayMs = 450L,
+            maxDelayMs = 3_000L,
+            circuitBreaker = NetworkClientProvider.circuitBreaker,
+            telemetry = NetworkClientProvider.telemetry,
+            callBlock = { NetworkClientProvider.awaitRawCall(client, request) },
+            onResult = { code, body, _ ->
+                if (code in 200..299 && body.isNotBlank()) {
+                    parseHandyApiJson(bin6, body)
+                } else {
+                    null
+                }
+            },
+            onCircuitOpen = { null },
+            onFailure = { _, _ -> null }
+        )
     }
 
     internal fun parseBinlistJson(bin6: String, jsonText: String): BinInfo? {
@@ -279,29 +335,4 @@ object BinLookupService {
         val second = Character.codePointAt(clean, 1) - 'A'.code + 0x1F1E6
         return String(Character.toChars(first)) + String(Character.toChars(second))
     }
-
-    private suspend fun awaitCall(request: Request): Pair<Int, String> =
-        suspendCancellableCoroutine { continuation ->
-            val call = client.newCall(request)
-            continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    if (continuation.isActive) {
-                        continuation.resumeWithException(e)
-                    }
-                }
-
-                override fun onResponse(call: Call, response: Response) {
-                    response.use { res ->
-                        if (continuation.isActive) {
-                            try {
-                                continuation.resume(res.code to res.body?.string().orEmpty())
-                            } catch (t: Throwable) {
-                                continuation.resumeWithException(t)
-                            }
-                        }
-                    }
-                }
-            })
-        }
 }

@@ -2,17 +2,20 @@ package com.example.ui
 
 import android.app.Application
 import android.net.Uri
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
-import androidx.compose.runtime.Immutable
 import com.example.data.AppThemeMode
 import com.example.data.ValidatorPreferencesRepository
 import com.example.data.ValidatorSettings
@@ -26,27 +29,37 @@ import com.example.domain.CardScheme
 import com.example.domain.CardValidatorEngine
 import com.example.domain.CustomHttpClient
 import com.example.domain.CustomHttpConfig
+import com.example.domain.DeviceNetworkStatus
 import com.example.domain.FileTextExtractor
 import com.example.domain.HttpProbeResult
 import com.example.domain.ImportedFilePreview
+import com.example.domain.NetworkClientProvider
+import com.example.domain.NetworkTelemetrySnapshot
 import com.example.domain.ResultBucket
 import com.example.domain.TelegramProbeResult
 import com.example.domain.TelegramWebhookClient
 import com.example.domain.TelegramWebhookConfig
+import com.example.domain.ValidationApiProviders
 import com.example.domain.ValidationMode
 import com.example.domain.ValidationRecord
 import com.example.worker.BatchValidationWorker
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 @Immutable
 data class HistoryUiSummary(
@@ -71,6 +84,8 @@ data class ValidatorUiState(
     val historyFilter: HistoryFilter = HistoryFilter.ALL,
     val historySearchQuery: String = "",
     val historyEntries: List<ValidationHistoryEntity> = emptyList(),
+    val historyFilteredTotalCount: Int = 0,
+    val hasMoreHistory: Boolean = false,
     val historySummary: HistoryUiSummary = HistoryUiSummary(),
     val isImportingFile: Boolean = false,
     val fileImportError: String? = null,
@@ -87,6 +102,8 @@ data class ValidatorUiState(
     val inspectedBinInput: String = "",
     val inspectedBinInfo: BinInfo? = null,
     val isInspectingBin: Boolean = false,
+    val networkStats: NetworkTelemetrySnapshot = NetworkTelemetrySnapshot(),
+    val deviceNetworkStatus: DeviceNetworkStatus = DeviceNetworkStatus(),
     val statusBannerMessage: String? = null
 ) {
     val activeTabRecords: List<ValidationRecord>
@@ -100,7 +117,7 @@ data class ValidatorUiState(
         get() = rawInputText.lines().count { it.isNotBlank() }
 }
 
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class ValidatorViewModel(
     application: Application,
     private val preferencesRepository: ValidatorPreferencesRepository,
@@ -111,30 +128,63 @@ class ValidatorViewModel(
     private val _localState = MutableStateFlow(ValidatorUiState())
     private val _historyFilter = MutableStateFlow(HistoryFilter.ALL)
     private val _historyQuery = MutableStateFlow("")
+    private val _historyPageLimit = MutableStateFlow(ValidationHistoryRepository.DEFAULT_PAGE_SIZE)
+    private val _binInputStream = MutableStateFlow("")
 
     private var activeWorkId: UUID? = null
     private var workerObserverJob: Job? = null
     private var batchResultsObserverJob: Job? = null
 
     init {
+        NetworkClientProvider.init(application)
+        BinLookupService.attachDao(AppDatabase.getInstance(application).binCacheDao())
+        refreshDeviceAndNetworkTelemetry()
+        observeDebouncedBinInput()
         reconnectOngoingBatchWork()
     }
 
-    private val filteredHistoryFlow = _historyFilter
-        .flatMapLatest { filter -> historyRepository.observeHistory(filter) }
-        .combine(_historyQuery) { entries, query ->
-            val q = query.trim().lowercase()
-            if (q.isEmpty()) {
-                entries
-            } else {
-                entries.filter {
-                    it.normalizedLine.lowercase().contains(q) ||
-                        it.scheme.lowercase().contains(q) ||
-                        it.sourceName.lowercase().contains(q) ||
-                        it.message.lowercase().contains(q)
+    private fun observeDebouncedBinInput() {
+        viewModelScope.launch {
+            _binInputStream
+                .map { it.filter { ch -> ch.isDigit() } }
+                .distinctUntilChanged()
+                .debounce(400L)
+                .filter { digits -> digits.length >= 6 && _localState.value.isBinSheetOpen }
+                .collect { digits ->
+                    val bin6 = BinLookupService.extractBin6(digits)
+                    val cached = _localState.value.binLookupMap[bin6] ?: BinLookupService.getCached(bin6)
+                    if (cached == null || !cached.isNetworkVerified) {
+                        lookupInspectedBin(bin6, forceRefresh = false)
+                    } else {
+                        _localState.update { it.copy(inspectedBinInfo = cached) }
+                    }
                 }
-            }
         }
+    }
+
+    private val debouncedHistoryQueryFlow = _historyQuery
+        .map { it.trim() }
+        .debounce(220L)
+        .distinctUntilChanged()
+
+    private val pagedHistoryQueryParams = combine(
+        _historyFilter,
+        debouncedHistoryQueryFlow,
+        _historyPageLimit
+    ) { filter, query, limit ->
+        Triple(filter, query, limit)
+    }
+
+    private val pagedHistoryFlow = pagedHistoryQueryParams.flatMapLatest { (filter, query, limit) ->
+        historyRepository.observePagedHistory(filter = filter, query = query, limit = limit)
+    }
+
+    private val filteredHistoryCountFlow = combine(
+        _historyFilter,
+        debouncedHistoryQueryFlow
+    ) { filter, query -> filter to query }.flatMapLatest { (filter, query) ->
+        historyRepository.observeFilteredCount(filter = filter, query = query)
+    }
 
     private val historySummaryFlow = combine(
         historyRepository.totalHistoryCount,
@@ -147,22 +197,54 @@ class ValidatorViewModel(
     val uiState: StateFlow<ValidatorUiState> = combine(
         _localState,
         preferencesRepository.settingsFlow,
-        filteredHistoryFlow,
+        combine(pagedHistoryFlow, filteredHistoryCountFlow) { entries, filteredTotal -> entries to filteredTotal },
         historySummaryFlow,
         combine(_historyFilter, _historyQuery) { f, q -> f to q }
-    ) { state, prefs, historyList, summary, filterPair ->
+    ) { state, prefs, pagedPair, summary, filterPair ->
+        val entries = pagedPair.first
+        val filteredTotal = pagedPair.second
         state.copy(
             settings = prefs,
-            historyEntries = historyList,
+            historyEntries = entries,
+            historyFilteredTotalCount = filteredTotal,
+            hasMoreHistory = entries.size < filteredTotal,
             historySummary = summary,
             historyFilter = filterPair.first,
-            historySearchQuery = filterPair.second
+            historySearchQuery = filterPair.second,
+            networkStats = NetworkClientProvider.telemetry.snapshot()
         )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = ValidatorUiState()
     )
+
+    fun refreshDeviceAndNetworkTelemetry() {
+        val deviceStatus = NetworkClientProvider.inspectDeviceNetworkStatus(getApplication())
+        _localState.update {
+            it.copy(
+                deviceNetworkStatus = deviceStatus,
+                networkStats = NetworkClientProvider.telemetry.snapshot()
+            )
+        }
+    }
+
+    fun clearNetworkAndBinCaches() {
+        viewModelScope.launch {
+            BinLookupService.clearAllCaches()
+            ValidationApiProviders.clearCache()
+            CustomHttpClient.clearCache()
+            NetworkClientProvider.clearDiskHttpCache()
+            NetworkClientProvider.circuitBreaker.resetAll()
+            NetworkClientProvider.telemetry.reset()
+            _localState.update {
+                it.copy(
+                    networkStats = NetworkClientProvider.telemetry.snapshot(),
+                    statusBannerMessage = "Network, BIN, and circuit caches cleared"
+                )
+            }
+        }
+    }
 
     fun onInputTextChanged(newText: String) {
         _localState.update {
@@ -179,6 +261,7 @@ class ValidatorViewModel(
     }
 
     fun openSettings() {
+        refreshDeviceAndNetworkTelemetry()
         _localState.update {
             it.copy(
                 isSettingsOpen = true,
@@ -199,10 +282,6 @@ class ValidatorViewModel(
         }
     }
 
-    fun clearHttpProbeResult() {
-        _localState.update { it.copy(httpProbeResult = null) }
-    }
-
     fun testHttpEndpoint(config: CustomHttpConfig) {
         if (_localState.value.isTestingEndpoint) return
         _localState.update { it.copy(isTestingEndpoint = true, httpProbeResult = null) }
@@ -211,7 +290,8 @@ class ValidatorViewModel(
             _localState.update {
                 it.copy(
                     isTestingEndpoint = false,
-                    httpProbeResult = probe
+                    httpProbeResult = probe,
+                    networkStats = NetworkClientProvider.telemetry.snapshot()
                 )
             }
         }
@@ -225,7 +305,8 @@ class ValidatorViewModel(
             _localState.update {
                 it.copy(
                     isTestingTelegram = false,
-                    telegramProbeResult = probe
+                    telegramProbeResult = probe,
+                    networkStats = NetworkClientProvider.telemetry.snapshot()
                 )
             }
         }
@@ -239,7 +320,8 @@ class ValidatorViewModel(
             _localState.update {
                 it.copy(
                     isTestingTelegram = false,
-                    telegramProbeResult = probe
+                    telegramProbeResult = probe,
+                    networkStats = NetworkClientProvider.telemetry.snapshot()
                 )
             }
         }
@@ -265,11 +347,19 @@ class ValidatorViewModel(
     }
 
     fun openHistory() {
+        _historyPageLimit.value = ValidationHistoryRepository.DEFAULT_PAGE_SIZE
         _localState.update { it.copy(isHistoryOpen = true, statusBannerMessage = null) }
     }
 
     fun closeHistory() {
         _localState.update { it.copy(isHistoryOpen = false) }
+    }
+
+    fun loadMoreHistory() {
+        _historyPageLimit.update { current ->
+            (current + ValidationHistoryRepository.DEFAULT_PAGE_SIZE)
+                .coerceAtMost(ValidationHistoryRepository.MAX_HISTORY_ROWS)
+        }
     }
 
     fun openBinInspector(initialPanOrBin: String = "") {
@@ -299,6 +389,7 @@ class ValidatorViewModel(
     fun onInspectedBinInputChanged(newInput: String) {
         val digitsOnly = newInput.filter { it.isDigit() }.take(8)
         _localState.update { it.copy(inspectedBinInput = digitsOnly) }
+        _binInputStream.value = digitsOnly
     }
 
     fun lookupInspectedBin(panOrBin: String = _localState.value.inspectedBinInput, forceRefresh: Boolean = true) {
@@ -324,14 +415,21 @@ class ValidatorViewModel(
                     isInspectingBin = false,
                     inspectedBinInfo = info,
                     binLookupMap = updatedMap,
-                    loadingBins = prev.loadingBins - bin6
+                    loadingBins = prev.loadingBins - bin6,
+                    networkStats = NetworkClientProvider.telemetry.snapshot()
                 )
             }
         }
     }
 
     private fun enrichLiveRecords(liveRecords: List<ValidationRecord>) {
-        if (!uiState.value.settings.autoBinLookupForLive || liveRecords.isEmpty()) return
+        val settings = uiState.value.settings
+        val deviceStatus = NetworkClientProvider.inspectDeviceNetworkStatus(getApplication())
+        if (!settings.autoBinLookupForLive || liveRecords.isEmpty()) return
+        if ((settings.batterySaverMode || deviceStatus.shouldThrottleForBatteryOrData) && deviceStatus.isMetered) {
+            return
+        }
+
         val distinctBins = liveRecords
             .map { BinLookupService.extractBin6(it.pan) }
             .filter { it.length == 6 }
@@ -350,7 +448,8 @@ class ValidatorViewModel(
                     val nextMap = if (info != null) prev.binLookupMap + (bin6 to info) else prev.binLookupMap
                     prev.copy(
                         binLookupMap = nextMap,
-                        loadingBins = prev.loadingBins - bin6
+                        loadingBins = prev.loadingBins - bin6,
+                        networkStats = NetworkClientProvider.telemetry.snapshot()
                     )
                 }
             }
@@ -358,10 +457,12 @@ class ValidatorViewModel(
     }
 
     fun setHistoryFilter(filter: HistoryFilter) {
+        _historyPageLimit.value = ValidationHistoryRepository.DEFAULT_PAGE_SIZE
         _historyFilter.value = filter
     }
 
     fun setHistorySearchQuery(query: String) {
+        _historyPageLimit.value = ValidationHistoryRepository.DEFAULT_PAGE_SIZE
         _historyQuery.value = query
     }
 
@@ -511,6 +612,16 @@ class ValidatorViewModel(
         batchResultsObserverJob?.cancel()
 
         val settings = currentState.settings
+        val deviceStatus = NetworkClientProvider.inspectDeviceNetworkStatus(getApplication())
+        val isNetworkEngine = settings.validationMode != ValidationMode.LOCAL_DETERMINISTIC ||
+            (settings.telegramWebhookEnabled && settings.telegramChatId.isNotBlank())
+
+        val effectiveConcurrency = if (settings.batterySaverMode || deviceStatus.shouldThrottleForBatteryOrData) {
+            settings.concurrency.coerceAtMost(2)
+        } else {
+            settings.concurrency
+        }
+
         val batchId = UUID.randomUUID().toString()
         val sourceName = currentState.loadedFileName ?: "Console"
 
@@ -533,8 +644,10 @@ class ValidatorViewModel(
                 BatchValidationWorker.KEY_HTTP_MAX_RETRIES to settings.httpMaxRetries,
                 BatchValidationWorker.KEY_HTTP_LIVE_KEYWORDS to settings.httpLiveKeywords,
                 BatchValidationWorker.KEY_HTTP_DIE_KEYWORDS to settings.httpDieKeywords,
+                BatchValidationWorker.KEY_GZIP_REQUESTS to settings.gzipCustomRequests,
+                BatchValidationWorker.KEY_DEDUPLICATE_INPUTS to settings.deduplicateBatchInputs,
                 BatchValidationWorker.KEY_AUTO_RESOLVE_WILDCARDS to settings.autoResolveWildcards,
-                BatchValidationWorker.KEY_CONCURRENCY to settings.concurrency,
+                BatchValidationWorker.KEY_CONCURRENCY to effectiveConcurrency,
                 BatchValidationWorker.KEY_BATCH_DELAY_MS to effectiveDelayMs,
                 BatchValidationWorker.KEY_SOURCE_NAME to sourceName,
                 BatchValidationWorker.KEY_TELEGRAM_ENABLED to settings.telegramWebhookEnabled,
@@ -542,17 +655,34 @@ class ValidatorViewModel(
                 BatchValidationWorker.KEY_TELEGRAM_LIVE_ONLY to settings.telegramNotifyLiveOnly
             )
 
+            val constraintsBuilder = Constraints.Builder()
+            if (isNetworkEngine) {
+                constraintsBuilder.setRequiredNetworkType(
+                    if (settings.wifiOnlyBatch) NetworkType.UNMETERED else NetworkType.CONNECTED
+                )
+            }
+            if (settings.batterySaverMode) {
+                constraintsBuilder.setRequiresBatteryNotLow(true)
+            }
+
             val workRequest = OneTimeWorkRequestBuilder<BatchValidationWorker>()
                 .setInputData(inputData)
+                .setConstraints(constraintsBuilder.build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
                 .addTag("batch:$batchId")
                 .build()
 
             activeWorkId = workRequest.id
 
-            val runningStatus = if (settings.validationMode.hasFixedDelay) {
-                "Worker running (${settings.validationMode.badgeLabel} • ${effectiveDelayMs / 1000L}s delay)..."
-            } else {
-                "Worker running (${settings.concurrency}x concurrent • ${effectiveDelayMs}ms delay)..."
+            val runningStatus = when {
+                isNetworkEngine && settings.wifiOnlyBatch && deviceStatus.isMetered ->
+                    "Queued for Wi-Fi (Wi-Fi Only mode active)..."
+                settings.validationMode.hasFixedDelay ->
+                    "Worker running (${settings.validationMode.badgeLabel} • ${effectiveDelayMs / 1000L}s delay)..."
+                settings.batterySaverMode || deviceStatus.shouldThrottleForBatteryOrData ->
+                    "Eco Worker (${effectiveConcurrency}x • ${effectiveDelayMs}ms delay)..."
+                else ->
+                    "Worker running (${effectiveConcurrency}x concurrent • ${effectiveDelayMs}ms delay)..."
             }
 
             _localState.update {
@@ -560,6 +690,7 @@ class ValidatorViewModel(
                     isRunning = true,
                     processedCount = 0,
                     totalBatchCount = lines.size,
+                    deviceNetworkStatus = deviceStatus,
                     statusBannerMessage = runningStatus
                 )
             }
@@ -622,7 +753,6 @@ class ValidatorViewModel(
         workerObserverJob?.cancel()
         batchResultsObserverJob?.cancel()
 
-        // Delta-stream completed records from Room without overwriting user removals
         batchResultsObserverJob = viewModelScope.launch {
             val seenIds = HashSet<String>()
             historyRepository.observeBatchResults(batchId).collect { batchEntities ->
@@ -689,7 +819,8 @@ class ValidatorViewModel(
                                 prev.copy(
                                     isRunning = true,
                                     totalBatchCount = resolvedTotal,
-                                    processedCount = processedFromProgress.coerceAtMost(resolvedTotal.coerceAtLeast(processedFromProgress))
+                                    processedCount = processedFromProgress.coerceAtMost(resolvedTotal.coerceAtLeast(processedFromProgress)),
+                                    networkStats = NetworkClientProvider.telemetry.snapshot()
                                 )
                             }
                         }
@@ -704,6 +835,7 @@ class ValidatorViewModel(
                                 processedCount = finalCount,
                                 rawInputText = "",
                                 loadedFileName = null,
+                                networkStats = NetworkClientProvider.telemetry.snapshot(),
                                 statusBannerMessage = "Worker completed $finalCount item(s) • Saved to History"
                             )
                         }
@@ -716,6 +848,7 @@ class ValidatorViewModel(
                         _localState.update { prev ->
                             prev.copy(
                                 isRunning = false,
+                                networkStats = NetworkClientProvider.telemetry.snapshot(),
                                 statusBannerMessage = "Batch worker cancelled (${prev.processedCount}/${prev.totalBatchCount})"
                             )
                         }
@@ -728,6 +861,7 @@ class ValidatorViewModel(
                         _localState.update { prev ->
                             prev.copy(
                                 isRunning = false,
+                                networkStats = NetworkClientProvider.telemetry.snapshot(),
                                 statusBannerMessage = "Batch worker encountered an error"
                             )
                         }
@@ -807,7 +941,10 @@ class ValidatorViewModel(
         patternTemplate: String,
         generateQuantity: Int,
         themeMode: AppThemeMode,
-        useDynamicColor: Boolean
+        useDynamicColor: Boolean,
+        deduplicateBatchInputs: Boolean = true,
+        wifiOnlyBatch: Boolean = false,
+        batterySaverMode: Boolean = false
     ) {
         viewModelScope.launch {
             preferencesRepository.updateSettings(
@@ -830,7 +967,11 @@ class ValidatorViewModel(
                 useDynamicColor = useDynamicColor,
                 telegramWebhookEnabled = telegramConfig.enabled,
                 telegramChatId = telegramConfig.chatId,
-                telegramNotifyLiveOnly = telegramConfig.notifyLiveOnly
+                telegramNotifyLiveOnly = telegramConfig.notifyLiveOnly,
+                deduplicateBatchInputs = deduplicateBatchInputs,
+                gzipCustomRequests = httpConfig.compressBodyGzip,
+                wifiOnlyBatch = wifiOnlyBatch,
+                batterySaverMode = batterySaverMode
             )
             val effectiveDelay = validationMode.resolveDelayMs(batchDelayMs)
             val savedMsg = if (validationMode.hasFixedDelay) {
@@ -872,7 +1013,11 @@ class ValidatorViewModel(
                 useDynamicColor = s.useDynamicColor,
                 telegramWebhookEnabled = s.telegramWebhookEnabled,
                 telegramChatId = s.telegramChatId,
-                telegramNotifyLiveOnly = s.telegramNotifyLiveOnly
+                telegramNotifyLiveOnly = s.telegramNotifyLiveOnly,
+                deduplicateBatchInputs = s.deduplicateBatchInputs,
+                gzipCustomRequests = s.gzipCustomRequests,
+                wifiOnlyBatch = s.wifiOnlyBatch,
+                batterySaverMode = s.batterySaverMode
             )
             val switchMsg = mode.fixedDelayMs?.let { fixedMs ->
                 "Engine switched to ${mode.badgeLabel} (${fixedMs / 1000L}s delay)"
@@ -906,7 +1051,11 @@ class ValidatorViewModel(
                 useDynamicColor = s.useDynamicColor,
                 telegramWebhookEnabled = s.telegramWebhookEnabled,
                 telegramChatId = s.telegramChatId,
-                telegramNotifyLiveOnly = s.telegramNotifyLiveOnly
+                telegramNotifyLiveOnly = s.telegramNotifyLiveOnly,
+                deduplicateBatchInputs = s.deduplicateBatchInputs,
+                gzipCustomRequests = s.gzipCustomRequests,
+                wifiOnlyBatch = s.wifiOnlyBatch,
+                batterySaverMode = s.batterySaverMode
             )
         }
     }
@@ -934,7 +1083,11 @@ class ValidatorViewModel(
                 useDynamicColor = enabled,
                 telegramWebhookEnabled = s.telegramWebhookEnabled,
                 telegramChatId = s.telegramChatId,
-                telegramNotifyLiveOnly = s.telegramNotifyLiveOnly
+                telegramNotifyLiveOnly = s.telegramNotifyLiveOnly,
+                deduplicateBatchInputs = s.deduplicateBatchInputs,
+                gzipCustomRequests = s.gzipCustomRequests,
+                wifiOnlyBatch = s.wifiOnlyBatch,
+                batterySaverMode = s.batterySaverMode
             )
         }
     }
@@ -974,8 +1127,10 @@ class ValidatorViewModel(
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val app = (this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as Application)
+                NetworkClientProvider.init(app.applicationContext)
                 val prefsRepo = ValidatorPreferencesRepository(app.applicationContext)
                 val db = AppDatabase.getInstance(app.applicationContext)
+                BinLookupService.attachDao(db.binCacheDao())
                 val historyRepo = ValidationHistoryRepository(db.validationHistoryDao())
                 val workManager = WorkManager.getInstance(app.applicationContext)
                 ValidatorViewModel(app, prefsRepo, historyRepo, workManager)

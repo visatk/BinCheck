@@ -5,10 +5,17 @@ import com.example.domain.CardValidatorEngine
 import com.example.domain.CustomHttpClient
 import com.example.domain.CustomHttpConfig
 import com.example.domain.FileTextExtractor
+import com.example.domain.HostCircuitBreaker
 import com.example.domain.HttpRequestMethod
+import com.example.domain.RequestDeduplicator
 import com.example.domain.ResultBucket
+import com.example.domain.RetryAndBackoffPolicy
 import com.example.domain.SupportedFileType
+import com.example.domain.TtlLruCache
 import com.example.domain.ValidationMode
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import okio.Buffer
 import org.junit.Assert.assertEquals
@@ -16,6 +23,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayInputStream
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.zip.GZIPInputStream
+import kotlin.random.Random
 
 class ExampleUnitTest {
 
@@ -257,5 +268,140 @@ class ExampleUnitTest {
         assertTrue(bodyStr.contains("\"bin\":\"453225\""))
         assertTrue(bodyStr.contains("\"lista\":\"4532250055360003|08|2028|113\""))
         assertTrue(bodyStr.contains("\"scheme\":\"VISA\""))
+    }
+
+    @Test
+    fun ttlLruCache_evictsLeastRecentlyUsedAndExpiresByTtl() {
+        var now = 1_000L
+        val cache = TtlLruCache<String, String>(maxEntries = 2, timeProvider = { now })
+
+        cache.put("a", "val-a", ttlMillis = 500L)
+        cache.put("b", "val-b", ttlMillis = 500L)
+        assertEquals("val-a", cache.get("a")) // touch 'a' so 'b' becomes LRU
+
+        cache.put("c", "val-c", ttlMillis = 500L) // evicts 'b'
+        assertNull(cache.get("b"))
+        assertEquals("val-a", cache.get("a"))
+        assertEquals("val-c", cache.get("c"))
+
+        now = 1_600L // past 1_000 + 500 TTL
+        assertNull(cache.get("a"))
+        assertNull(cache.get("c"))
+        assertEquals(0, cache.size())
+    }
+
+    @Test
+    fun requestDeduplicator_coalescesConcurrentCallsAndCleansUp() = runTest {
+        val dedup = RequestDeduplicator<String, String>()
+        val executionCount = AtomicInteger(0)
+
+        val results = (1..10).map {
+            async {
+                dedup.getOrExecute("453225") {
+                    executionCount.incrementAndGet()
+                    delay(25)
+                    "BIN_RESULT"
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(1, executionCount.get())
+        assertEquals(1, results.count { !it.second }) // 1 primary execution
+        assertEquals(9, results.count { it.second })  // 9 coalesced callers
+        assertTrue(results.all { it.first == "BIN_RESULT" })
+        assertEquals(0, dedup.activeInFlightCount())
+    }
+
+    @Test
+    fun hostCircuitBreaker_transitionsClosedOpenHalfOpenAndRecovers() {
+        var now = 10_000L
+        val breaker = HostCircuitBreaker(
+            failureThreshold = 3,
+            openCooldownMs = 20_000L,
+            timeProvider = { now }
+        )
+        val host = "api.example.com"
+
+        assertEquals(HostCircuitBreaker.State.CLOSED, breaker.currentState(host))
+        assertTrue(breaker.isRequestAllowed(host))
+
+        assertFalse(breaker.recordTransientFailure(host))
+        assertFalse(breaker.recordTransientFailure(host))
+        assertTrue(breaker.recordTransientFailure(host))
+
+        assertEquals(HostCircuitBreaker.State.OPEN, breaker.currentState(host))
+        assertFalse(breaker.isRequestAllowed(host))
+        assertTrue(breaker.remainingCooldownMs(host) > 0L)
+
+        now = 31_000L // after 20s cooldown
+        assertEquals(HostCircuitBreaker.State.HALF_OPEN, breaker.currentState(host))
+        assertTrue(breaker.isRequestAllowed(host)) // single probe allowed
+        assertFalse(breaker.isRequestAllowed(host)) // second concurrent probe blocked
+
+        breaker.recordSuccess(host)
+        assertEquals(HostCircuitBreaker.State.CLOSED, breaker.currentState(host))
+        assertTrue(breaker.isRequestAllowed(host))
+    }
+
+    @Test
+    fun retryAndBackoffPolicy_computesExponentialBackoffAndParsesRetryAfter() {
+        val d1 = RetryAndBackoffPolicy.computeBackoffDelayMs(
+            attempt = 1,
+            baseDelayMs = 400L,
+            maxDelayMs = 5_000L,
+            random = Random(1)
+        )
+        val d2 = RetryAndBackoffPolicy.computeBackoffDelayMs(
+            attempt = 2,
+            baseDelayMs = 400L,
+            maxDelayMs = 5_000L,
+            random = Random(1)
+        )
+        val d3 = RetryAndBackoffPolicy.computeBackoffDelayMs(
+            attempt = 3,
+            baseDelayMs = 400L,
+            maxDelayMs = 5_000L,
+            random = Random(1)
+        )
+        assertTrue(d1 in 400L..533L)
+        assertTrue(d2 in 800L..1_066L)
+        assertTrue(d3 in 1_600L..2_133L)
+
+        assertEquals(12_000L, RetryAndBackoffPolicy.parseRetryAfterMs("12"))
+        assertEquals(
+            7_000L,
+            RetryAndBackoffPolicy.parseRetryAfterMs(
+                retryAfterHeader = null,
+                responseBody = """{"ok":false,"error_code":429,"parameters":{"retry_after":7}}"""
+            )
+        )
+    }
+
+    @Test
+    fun customHttpClient_compressesJsonPayloadWithGzipWhenEnabled() {
+        val gzipConfig = CustomHttpConfig(
+            url = "https://api.example.com/v2/batch",
+            method = HttpRequestMethod.POST_JSON,
+            bodyTemplate = """{"lista":"{lista}","bin":"{bin}"}""",
+            compressBodyGzip = true
+        )
+        val req = CustomHttpClient.buildRequest(
+            normalizedLine = "4532250055360003|08|2028|113",
+            pan = "4532250055360003",
+            mm = "08",
+            yyyy = "2028",
+            cvv = "113",
+            scheme = CardScheme.VISA,
+            config = gzipConfig
+        )
+        assertEquals("gzip", req?.header("Content-Encoding"))
+        val compressedBuf = Buffer()
+        req!!.body!!.writeTo(compressedBuf)
+        val compressedBytes = compressedBuf.readByteArray()
+
+        val decompressed = GZIPInputStream(ByteArrayInputStream(compressedBytes))
+            .bufferedReader(Charsets.UTF_8)
+            .readText()
+        assertEquals("""{"lista":"4532250055360003|08|2028|113","bin":"453225"}""", decompressed)
     }
 }

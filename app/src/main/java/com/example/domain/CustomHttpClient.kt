@@ -1,27 +1,14 @@
 package com.example.domain
 
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.suspendCancellableCoroutine
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.ConnectionPool
-import okhttp3.Dispatcher
 import okhttp3.FormBody
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
 import org.json.JSONObject
-import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 enum class HttpRequestMethod(val label: String) {
     AUTO("Auto"),
@@ -38,7 +25,8 @@ data class CustomHttpConfig(
     val timeoutSeconds: Int = 12,
     val maxRetries: Int = 1,
     val liveKeywords: String = DEFAULT_LIVE_KEYWORDS,
-    val dieKeywords: String = DEFAULT_DIE_KEYWORDS
+    val dieKeywords: String = DEFAULT_DIE_KEYWORDS,
+    val compressBodyGzip: Boolean = false
 ) {
     companion object {
         const val DEFAULT_LIVE_KEYWORDS = "live,approved,charged,succeeded,valid"
@@ -65,26 +53,75 @@ object CustomHttpClient {
         "{lista}", "{card}", "{pan}", "{mm}", "{yy}", "{yyyy}", "{cvv}", "{scheme}", "{bin}"
     )
 
-    private val TRANSIENT_HTTP_CODES = setOf(408, 429, 500, 502, 503, 504)
+    private val CACHE_TTL_MS = TimeUnit.MINUTES.toMillis(5)
+    private val responseCache = TtlLruCache<String, ValidationRecord>(maxEntries = 1_000)
+    private val deduplicator = RequestDeduplicator<String, ValidationRecord>()
 
-    private val baseOkHttpClient: OkHttpClient by lazy {
-        val dispatcher = Dispatcher().apply {
-            maxRequests = 64
-            maxRequestsPerHost = 16
-        }
-        OkHttpClient.Builder()
-            .dispatcher(dispatcher)
-            .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
-            .followRedirects(true)
-            .followSslRedirects(true)
-            .connectTimeout(12, TimeUnit.SECONDS)
-            .readTimeout(12, TimeUnit.SECONDS)
-            .writeTimeout(12, TimeUnit.SECONDS)
-            .callTimeout(18, TimeUnit.SECONDS)
-            .build()
+    fun clearCache() {
+        responseCache.clear()
     }
 
     suspend fun executeValidation(
+        rawLine: String,
+        normalizedLine: String,
+        pan: String,
+        mm: String,
+        yyyy: String,
+        cvv: String,
+        scheme: CardScheme,
+        config: CustomHttpConfig,
+        startNanos: Long,
+        useCacheAndDedup: Boolean = true
+    ): ValidationRecord {
+        val cacheKey = "${config.url.trim()}|${config.method.name}|${config.bodyTemplate.hashCode()}|$normalizedLine"
+        if (useCacheAndDedup) {
+            responseCache.get(cacheKey)?.let { cached ->
+                NetworkClientProvider.telemetry.recordCacheHit()
+                return cached.copy(
+                    id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
+                    rawLine = rawLine,
+                    latencyMs = 1L,
+                    message = "${cached.message} (Cached)"
+                )
+            }
+
+            val (record, wasCoalesced) = deduplicator.getOrExecute(cacheKey) {
+                executeFreshValidation(
+                    rawLine = rawLine,
+                    normalizedLine = normalizedLine,
+                    pan = pan,
+                    mm = mm,
+                    yyyy = yyyy,
+                    cvv = cvv,
+                    scheme = scheme,
+                    config = config,
+                    startNanos = startNanos
+                ).also { fresh ->
+                    if (fresh.bucket != ResultBucket.UNKNOWN) {
+                        responseCache.put(cacheKey, fresh, CACHE_TTL_MS)
+                    }
+                }
+            }
+            if (wasCoalesced) {
+                NetworkClientProvider.telemetry.recordDeduplicatedSaved()
+            }
+            return record
+        }
+
+        return executeFreshValidation(
+            rawLine = rawLine,
+            normalizedLine = normalizedLine,
+            pan = pan,
+            mm = mm,
+            yyyy = yyyy,
+            cvv = cvv,
+            scheme = scheme,
+            config = config,
+            startNanos = startNanos
+        )
+    }
+
+    private suspend fun executeFreshValidation(
         rawLine: String,
         normalizedLine: String,
         pan: String,
@@ -121,6 +158,20 @@ object CustomHttpClient {
                 latencyMs = elapsed
             )
 
+            is RequestOutcome.CircuitOpen -> ValidationRecord(
+                id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
+                rawLine = rawLine,
+                normalizedLine = normalizedLine,
+                pan = pan,
+                month = mm,
+                year = yyyy,
+                cvv = cvv,
+                scheme = scheme,
+                bucket = ResultBucket.UNKNOWN,
+                message = "Endpoint paused (${(outcome.remainingMs / 1000L).coerceAtLeast(1L)}s server overload cooldown)",
+                latencyMs = elapsed
+            )
+
             is RequestOutcome.Failure -> ValidationRecord(
                 id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
                 rawLine = rawLine,
@@ -142,10 +193,11 @@ object CustomHttpClient {
                     config = config
                 )
                 val retrySuffix = if (outcome.attempts > 1) " • ${outcome.attempts}x" else ""
+                val cacheSuffix = if (outcome.fromCache) " • DiskCache" else ""
                 val summary = when (bucket) {
-                    ResultBucket.LIVE -> "HTTP ${outcome.statusCode} • Live ($reasonTag)$retrySuffix"
-                    ResultBucket.DIE -> "HTTP ${outcome.statusCode} • Die ($reasonTag)$retrySuffix"
-                    ResultBucket.UNKNOWN -> "HTTP ${outcome.statusCode} • Unknown ($reasonTag)$retrySuffix"
+                    ResultBucket.LIVE -> "HTTP ${outcome.statusCode} • Live ($reasonTag)$retrySuffix$cacheSuffix"
+                    ResultBucket.DIE -> "HTTP ${outcome.statusCode} • Die ($reasonTag)$retrySuffix$cacheSuffix"
+                    ResultBucket.UNKNOWN -> "HTTP ${outcome.statusCode} • Unknown ($reasonTag)$retrySuffix$cacheSuffix"
                 }
                 ValidationRecord(
                     id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
@@ -196,6 +248,15 @@ object CustomHttpClient {
                 responsePreview = ""
             )
 
+            is RequestOutcome.CircuitOpen -> HttpProbeResult(
+                isReachable = false,
+                statusCode = null,
+                detectedBucket = ResultBucket.UNKNOWN,
+                latencyMs = latencyMs,
+                summary = "Circuit breaker active (${(outcome.remainingMs / 1000L).coerceAtLeast(1L)}s cooldown)",
+                responsePreview = ""
+            )
+
             is RequestOutcome.Failure -> HttpProbeResult(
                 isReachable = false,
                 statusCode = null,
@@ -225,7 +286,8 @@ object CustomHttpClient {
 
     private sealed class RequestOutcome {
         data class InvalidUrl(val reason: String) : RequestOutcome()
-        data class Success(val statusCode: Int, val body: String, val attempts: Int) : RequestOutcome()
+        data class CircuitOpen(val remainingMs: Long) : RequestOutcome()
+        data class Success(val statusCode: Int, val body: String, val attempts: Int, val fromCache: Boolean = false) : RequestOutcome()
         data class Failure(val reason: String, val attempts: Int) : RequestOutcome()
     }
 
@@ -248,42 +310,27 @@ object CustomHttpClient {
             config = config
         ) ?: return RequestOutcome.InvalidUrl("Invalid HTTP URL (must start with http:// or https://)")
 
-        val timeoutSec = config.timeoutSeconds.coerceIn(5, 60).toLong()
-        val client = baseOkHttpClient.newBuilder()
-            .connectTimeout(timeoutSec, TimeUnit.SECONDS)
-            .readTimeout(timeoutSec, TimeUnit.SECONDS)
-            .writeTimeout(timeoutSec, TimeUnit.SECONDS)
-            .callTimeout(timeoutSec + 5L, TimeUnit.SECONDS)
-            .build()
+        val client = NetworkClientProvider.clientWithTimeout(config.timeoutSeconds)
+        val host = request.url.host
 
-        val maxAttempts = 1 + config.maxRetries.coerceIn(0, 3)
-        var lastError = "Unknown network error"
-
-        for (attempt in 1..maxAttempts) {
-            currentCoroutineContext().ensureActive()
-            try {
-                val (code, body) = awaitCall(client, request)
-                if (code in TRANSIENT_HTTP_CODES && attempt < maxAttempts) {
-                    lastError = "HTTP $code"
-                    delay(250L * attempt)
-                    continue
-                }
-                return RequestOutcome.Success(statusCode = code, body = body, attempts = attempt)
-            } catch (e: IOException) {
-                lastError = e.localizedMessage ?: e.javaClass.simpleName
-                if (attempt < maxAttempts) {
-                    delay(250L * attempt)
-                }
-            } catch (e: Exception) {
-                currentCoroutineContext().ensureActive()
-                return RequestOutcome.Failure(
-                    reason = e.localizedMessage ?: e.javaClass.simpleName,
-                    attempts = attempt
-                )
+        return RetryAndBackoffPolicy.executeWithExponentialBackoff(
+            host = host,
+            maxRetries = config.maxRetries,
+            baseDelayMs = 450L,
+            maxDelayMs = 8_000L,
+            circuitBreaker = NetworkClientProvider.circuitBreaker,
+            telemetry = NetworkClientProvider.telemetry,
+            callBlock = { NetworkClientProvider.awaitRawCall(client, request) },
+            onResult = { code, body, attempts ->
+                RequestOutcome.Success(statusCode = code, body = body, attempts = attempts)
+            },
+            onCircuitOpen = { remainingMs ->
+                RequestOutcome.CircuitOpen(remainingMs)
+            },
+            onFailure = { reason, attempts ->
+                RequestOutcome.Failure(reason = reason, attempts = attempts)
             }
-        }
-
-        return RequestOutcome.Failure(reason = lastError, attempts = maxAttempts)
+        )
     }
 
     internal fun buildRequest(
@@ -364,12 +411,18 @@ object CustomHttpClient {
                         append('}')
                     }
                 }
-                builder.post(jsonPayload.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                val mediaType = "application/json; charset=utf-8".toMediaType()
+                if (config.compressBodyGzip) {
+                    builder.header("Content-Encoding", "gzip")
+                    builder.post(NetworkClientProvider.createGzipRequestBody(jsonPayload, mediaType))
+                } else {
+                    builder.post(jsonPayload.toRequestBody(mediaType))
+                }
             }
 
             HttpRequestMethod.POST_FORM -> {
                 if (config.bodyTemplate.isNotBlank()) {
-                    val formBody = substitutePlaceholders(
+                    val formBodyStr = substitutePlaceholders(
                         template = config.bodyTemplate,
                         normalizedLine = normalizedLine,
                         pan = pan,
@@ -379,7 +432,13 @@ object CustomHttpClient {
                         scheme = scheme,
                         urlEncodeValues = true
                     )
-                    builder.post(formBody.toRequestBody("application/x-www-form-urlencoded; charset=utf-8".toMediaType()))
+                    val mediaType = "application/x-www-form-urlencoded; charset=utf-8".toMediaType()
+                    if (config.compressBodyGzip) {
+                        builder.header("Content-Encoding", "gzip")
+                        builder.post(NetworkClientProvider.createGzipRequestBody(formBodyStr, mediaType))
+                    } else {
+                        builder.post(formBodyStr.toRequestBody(mediaType))
+                    }
                 } else {
                     val form = FormBody.Builder()
                         .add("raw", normalizedLine)
@@ -536,7 +595,6 @@ object CustomHttpClient {
 
         val lower = trimmed.lowercase()
 
-        // Check negative / Die phrases first (including "not <liveKeyword>")
         for (term in liveTerms) {
             if (lower.contains("not $term") || lower.contains("not_$term")) {
                 return ResultBucket.DIE to "not $term"
@@ -581,34 +639,5 @@ object CustomHttpClient {
     private fun matchesWordOrPhrase(lowerText: String, term: String): Boolean {
         val escaped = Regex.escape(term)
         return Regex("\\b$escaped\\b").containsMatchIn(lowerText)
-    }
-
-    private suspend fun awaitCall(
-        client: OkHttpClient,
-        request: Request
-    ): Pair<Int, String> = suspendCancellableCoroutine { continuation ->
-        val call = client.newCall(request)
-        continuation.invokeOnCancellation { call.cancel() }
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                if (continuation.isActive) {
-                    continuation.resumeWithException(e)
-                }
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                response.use { res ->
-                    if (continuation.isActive) {
-                        try {
-                            val code = res.code
-                            val body = res.body?.string().orEmpty()
-                            continuation.resume(code to body)
-                        } catch (t: Throwable) {
-                            continuation.resumeWithException(t)
-                        }
-                    }
-                }
-            }
-        })
     }
 }

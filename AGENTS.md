@@ -41,9 +41,14 @@
    - Sends Live-only or All-checked validation alerts via the Telegram Bot API (`/sendMessage`) using `BuildConfig.TELEGRAM_BOT_TOKEN` injected from AI Studio **Secrets** (never hardcoded), with `/getMe` + `/getUpdates` Chat ID auto-detection and one-tap test alert verification.
 5. **Concurrent Batch Worker (`BatchValidationWorker`)**:
    - Uses `WorkManager` (`CoroutineWorker`) with bounded `Semaphore` concurrency (`1x`–`8x`, configurable in Settings) and `async`/`awaitAll` to validate uploaded `.txt`/`.html` or console entries simultaneously against the configured API/engine and dispatch Telegram webhook alerts, streaming progress via `setProgress`.
-6. **Local Persistence (`DataStore` + `Room` SQLite)**:
-   - Uses Jetpack `DataStore` (`preferences`) to persist validation settings, concurrency, custom HTTP payload configuration, Telegram webhook Chat ID & filters, batch delay, and pattern templates.
-   - Uses `Room` (`AppDatabase`, `ValidationHistoryDao`, `ValidationHistoryRepository`) to queue large batches safely and persist a local **Validation History Log** viewable and filterable by `All`, `Success`, and `Failure` status (`HistoryLogBottomSheet.kt`).
-7. **CI/CD & GitHub Release Automation (`.github/workflows/release.yml`)**:
+6. **Local Persistence & SQLite Pagination (`DataStore` + `Room` v2 WAL)**:
+   - Uses Jetpack `DataStore` (`preferences`) to persist validation settings, concurrency, custom HTTP payload & GZIP configuration, Telegram webhook Chat ID & filters, batch delay, pattern templates, and high-traffic toggles (`deduplicateBatchInputs`, `wifiOnlyBatch`, `batterySaverMode`).
+   - Uses `Room` (`AppDatabase` v2 with `JournalMode.WRITE_AHEAD_LOGGING`, `MIGRATION_1_2` for `bin_cache`, `ValidationHistoryDao`, `ValidationHistoryRepository`) for 7-day persistent BIN caching, chunked batch queueing (`500`/txn), 5,000-row retention trimming, and SQLite `LIMIT`/`OFFSET` paginated history filtering (`DEFAULT_PAGE_SIZE = 40`).
+7. **High-Traffic Network, Caching & Resilience (`NetworkClientProvider`, `NetworkResilience`)**:
+   - **Shared HTTP Pool & Disk Cache**: Single `OkHttpClient` with `ConnectionPool(16, 5m)`, `Dispatcher(64/12)`, and 10 MiB disk `Cache` + transparent `gzip` response handling and optional `Content-Encoding: gzip` request compression via `GzipSink`.
+   - **Caching, Debounce & Single-Flight Deduplication**: Bounded `TtlLruCache`, `RequestDeduplicator` (`CompletableDeferred` coalescing), debounced BIN auto-lookup (`400ms`) & history SQLite search (`220ms`), plus intra-batch line deduplication in `BatchValidationWorker`.
+   - **Backoff & Circuit Breaker**: `RetryAndBackoffPolicy` (exponential backoff with jitter + HTTP `Retry-After` / Telegram `retry_after` parsing) and `HostCircuitBreaker` (`CLOSED -> OPEN -> HALF_OPEN`, 5 failures / 20s cooldown) for automatic fail-fast and Multi-API failover.
+   - **Battery & Data Saver**: `WorkManager` `UNMETERED` / `CONNECTED` + `RequiresBatteryNotLow` constraints, `BackoffPolicy.EXPONENTIAL`, auto concurrency cap (`<= 2x`) on Power Save / Background Data Restriction, throttled `setProgress` updates, and Telegram hit digest batching.
+8. **CI/CD & GitHub Release Automation (`.github/workflows/release.yml`)**:
    - Triggers automatically on version tags (`v*`) or manually via `workflow_dispatch`.
    - Sets up JDK 21, Android SDK, and Gradle 9.3.1, prepares signing keystores (supporting repository secrets `KEYSTORE_BASE64`, `STORE_PASSWORD`, `KEY_PASSWORD` with automatic fallback generation), runs unit tests, builds signed release APK & AAB artifacts with `SHA256SUMS.txt`, and publishes directly to GitHub Releases.

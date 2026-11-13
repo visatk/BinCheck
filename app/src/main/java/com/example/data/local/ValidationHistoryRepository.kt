@@ -20,6 +20,39 @@ class ValidationHistoryRepository(private val dao: ValidationHistoryDao) {
         }
     }
 
+    fun observePagedHistory(
+        filter: HistoryFilter,
+        query: String,
+        limit: Int
+    ): Flow<List<ValidationHistoryEntity>> {
+        return dao.observePagedHistory(
+            filterSuccess = filter.toSqlFlag(),
+            query = query.trim(),
+            limit = limit.coerceAtLeast(1)
+        )
+    }
+
+    fun observeFilteredCount(filter: HistoryFilter, query: String): Flow<Int> {
+        return dao.observeFilteredCount(
+            filterSuccess = filter.toSqlFlag(),
+            query = query.trim()
+        )
+    }
+
+    suspend fun getHistoryPage(
+        filter: HistoryFilter,
+        query: String,
+        limit: Int,
+        offset: Int
+    ): List<ValidationHistoryEntity> {
+        return dao.getHistoryPage(
+            filterSuccess = filter.toSqlFlag(),
+            query = query.trim(),
+            limit = limit.coerceAtLeast(1),
+            offset = offset.coerceAtLeast(0)
+        )
+    }
+
     fun observeBatchResults(batchId: String): Flow<List<ValidationHistoryEntity>> {
         return dao.observeHistoryByBatchId(batchId)
     }
@@ -37,7 +70,7 @@ class ValidationHistoryRepository(private val dao: ValidationHistoryDao) {
                 sourceName = sourceName
             )
         }
-        dao.insertQueueItems(items)
+        dao.insertQueueItemsChunked(items, chunkSize = 500)
     }
 
     suspend fun getQueuedBatch(batchId: String): List<BatchQueueItemEntity> {
@@ -55,26 +88,60 @@ class ValidationHistoryRepository(private val dao: ValidationHistoryDao) {
         endpointUsed: String
     ) {
         dao.insertHistory(
-            ValidationHistoryEntity(
+            toEntity(
                 batchId = batchId,
                 sourceName = sourceName,
-                rawLine = record.rawLine,
-                normalizedLine = record.normalizedLine,
-                pan = record.pan,
-                month = record.month,
-                year = record.year,
-                cvv = record.cvv,
-                scheme = record.scheme.displayName,
-                status = record.bucket.name,
-                isSuccess = record.bucket == ResultBucket.LIVE,
-                message = record.message,
-                latencyMs = record.latencyMs,
+                record = record,
                 endpointUsed = endpointUsed
             )
         )
     }
 
+    suspend fun recordResultBatch(entries: List<ValidationHistoryEntity>) {
+        if (entries.isEmpty()) return
+        entries.chunked(250).forEach { chunk ->
+            dao.insertHistoryBatch(chunk)
+        }
+    }
+
+    fun toEntity(
+        batchId: String,
+        sourceName: String,
+        record: ValidationRecord,
+        endpointUsed: String
+    ): ValidationHistoryEntity = ValidationHistoryEntity(
+        batchId = batchId,
+        sourceName = sourceName,
+        rawLine = record.rawLine,
+        normalizedLine = record.normalizedLine,
+        pan = record.pan,
+        month = record.month,
+        year = record.year,
+        cvv = record.cvv,
+        scheme = record.scheme.displayName,
+        status = record.bucket.name,
+        isSuccess = record.bucket == ResultBucket.LIVE,
+        message = record.message,
+        latencyMs = record.latencyMs,
+        endpointUsed = endpointUsed
+    )
+
+    suspend fun trimExcessHistory(maxKeep: Int = MAX_HISTORY_ROWS): Int {
+        return dao.trimOldHistory(maxKeep.coerceAtLeast(100))
+    }
+
     suspend fun deleteEntry(id: Long) = dao.deleteHistoryById(id)
 
     suspend fun clearAllHistory() = dao.clearAllHistory()
+
+    private fun HistoryFilter.toSqlFlag(): Int = when (this) {
+        HistoryFilter.ALL -> -1
+        HistoryFilter.SUCCESS -> 1
+        HistoryFilter.FAILURE -> 0
+    }
+
+    companion object {
+        const val DEFAULT_PAGE_SIZE = 40
+        const val MAX_HISTORY_ROWS = 5_000
+    }
 }
