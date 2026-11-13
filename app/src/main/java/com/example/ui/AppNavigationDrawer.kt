@@ -67,6 +67,7 @@ fun BinCheckNavigationShell(
     channelUrl: String,
     onSelectPane: (CompactWorkspacePane) -> Unit,
     onOpenBinLookup: () -> Unit,
+    onOpenListToolkit: () -> Unit = {},
     onOpenFileImport: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -94,6 +95,7 @@ fun BinCheckNavigationShell(
                         channelUrl = channelUrl,
                         onSelectPane = onSelectPane,
                         onOpenBinLookup = onOpenBinLookup,
+                        onOpenListToolkit = onOpenListToolkit,
                         onOpenFileImport = onOpenFileImport,
                         onOpenHistory = onOpenHistory,
                         onOpenSettings = onOpenSettings,
@@ -129,6 +131,7 @@ fun BinCheckNavigationShell(
                         channelUrl = channelUrl,
                         onSelectPane = onSelectPane,
                         onOpenBinLookup = onOpenBinLookup,
+                        onOpenListToolkit = onOpenListToolkit,
                         onOpenFileImport = onOpenFileImport,
                         onOpenHistory = onOpenHistory,
                         onOpenSettings = onOpenSettings,
@@ -153,6 +156,7 @@ private fun DrawerSheetContent(
     channelUrl: String,
     onSelectPane: (CompactWorkspacePane) -> Unit,
     onOpenBinLookup: () -> Unit,
+    onOpenListToolkit: () -> Unit,
     onOpenFileImport: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -371,6 +375,33 @@ private fun DrawerSheetContent(
             modifier = Modifier
                 .height(48.dp)
                 .testTag("drawer_item_bin_lookup")
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        NavigationDrawerItem(
+            selected = uiState.isToolkitOpen,
+            onClick = {
+                onCloseDrawer()
+                onOpenListToolkit()
+            },
+            icon = {
+                Icon(
+                    imageVector = AppIcons.CleaningServices,
+                    contentDescription = null
+                )
+            },
+            label = {
+                Text(
+                    text = stringResource(R.string.nav_list_toolkit),
+                    style = MaterialTheme.typography.labelLarge
+                )
+            },
+            shape = MaterialTheme.shapes.medium,
+            colors = itemColors,
+            modifier = Modifier
+                .height(48.dp)
+                .testTag("drawer_item_toolkit")
         )
 
         Spacer(modifier = Modifier.height(4.dp))

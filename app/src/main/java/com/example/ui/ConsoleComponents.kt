@@ -98,6 +98,7 @@ fun ConsoleInputCard(
     onPasteOrFill: () -> Unit,
     onClearInput: () -> Unit,
     onClearBanner: () -> Unit,
+    onOpenListToolkit: () -> Unit = {},
     onQuickSwitchMode: (ValidationMode) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -278,6 +279,15 @@ fun ConsoleInputCard(
                                 contentColor = colorScheme.onSurface,
                                 onClick = onOpenFileImport,
                                 testTag = "open_file_picker_button"
+                            )
+
+                            ConsoleMiniActionPill(
+                                label = stringResource(R.string.toolkit_chip),
+                                icon = AppIcons.CleaningServices,
+                                containerColor = colorScheme.surfaceContainerHigh,
+                                contentColor = colorScheme.secondary,
+                                onClick = onOpenListToolkit,
+                                testTag = "open_list_toolkit_button"
                             )
 
                             ConsoleMiniActionPill(

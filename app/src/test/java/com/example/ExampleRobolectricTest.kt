@@ -32,10 +32,15 @@ import com.example.domain.CardValidatorEngine
 import com.example.domain.CustomHttpConfig
 import com.example.domain.DeviceNetworkStatus
 import com.example.domain.HttpRequestMethod
+import com.example.domain.ListSortOrder
+import com.example.domain.ListToolkitEngine
+import com.example.domain.ListToolkitOptions
 import com.example.domain.NetworkTelemetrySnapshot
+import com.example.domain.OutputFormat
 import com.example.domain.ResultBucket
 import com.example.domain.TelegramWebhookClient
 import com.example.domain.TelegramWebhookConfig
+import com.example.domain.ToolkitTransformResult
 import com.example.domain.ValidationApiProviders
 import com.example.domain.ValidationMode
 import com.example.domain.ValidationRecord
@@ -45,6 +50,7 @@ import com.example.ui.ConsoleInputCard
 import com.example.ui.CustomHttpSectionCard
 import com.example.ui.HistoryLogBottomSheet
 import com.example.ui.HistoryUiSummary
+import com.example.ui.ListToolkitBottomSheet
 import com.example.ui.NetworkOptimizationSectionCard
 import com.example.ui.ResultsCard
 import com.example.ui.TelegramWebhookSectionCard
@@ -470,8 +476,9 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("permanent_navigation_drawer").assertIsDisplayed()
         composeTestRule.onNodeWithTag("drawer_item_workspace").assertIsDisplayed()
         composeTestRule.onNodeWithTag("drawer_item_bin_lookup").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("drawer_item_history").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("drawer_item_settings").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("drawer_item_toolkit").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("drawer_item_history").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("drawer_item_settings").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -898,5 +905,128 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("network_telemetry_strip").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("theme_mode_dark").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("settings_developer_channel_card").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun `listToolkitEngine cleans messy dumps deduplicates prunes expired and bad Luhn`() {
+        val validVisa = CardValidatorEngine.resolveWildcardPan("45322500553600x3")
+        val validVisaDashed = validVisa.chunked(4).joinToString("-")
+        val validMc = CardValidatorEngine.resolveWildcardPan("51546200211116x2")
+        val badLuhnPan = if (validVisa.endsWith("0")) validVisa.dropLast(1) + "1" else validVisa.dropLast(1) + "0"
+
+        val messyInput = """
+            # Header noise line
+            <div><b style='color:#008000'>Live</b> | $validVisa | 10/2031 | 113</div>
+            $validVisaDashed / 10/31 / 113
+            $validMc:05:2024:564
+            $badLuhnPan|08|2029|321
+            $validMc|09|2029|999
+        """.trimIndent()
+
+        val result = ListToolkitEngine.transform(
+            rawInput = messyInput,
+            options = ListToolkitOptions(
+                outputFormat = OutputFormat.PIPE_YYYY
+            ),
+            referenceYear = 2026,
+            referenceMonth = 11
+        )
+
+        assertEquals(6, result.totalInputLines)
+        assertEquals(2, result.outputCount)
+        assertEquals(1, result.removedUnparseable)
+        assertEquals(1, result.removedDuplicates)
+        assertEquals(1, result.removedExpired)
+        assertEquals(1, result.removedInvalidLuhn)
+        assertEquals(
+            "$validVisa|10|2031|113\n$validMc|09|2029|999",
+            result.outputText
+        )
+    }
+
+    @Test
+    fun `listToolkitEngine filters by scheme BIN prefix minExpiryYear and extracts BIN6`() {
+        val visa = CardValidatorEngine.resolveWildcardPan("45322500553600x3")
+        val amex = CardValidatorEngine.resolveWildcardPan("3793630374713x7")
+        val mc = CardValidatorEngine.resolveWildcardPan("51546200211116x2")
+
+        val input = """
+            $visa|08|2027|113
+            $amex|07|2034|3204
+            $mc|12|2030|564
+        """.trimIndent()
+
+        val filtered = ListToolkitEngine.transform(
+            rawInput = input,
+            options = ListToolkitOptions(
+                selectedSchemes = setOf(CardScheme.AMEX, CardScheme.MASTERCARD),
+                excludeBinPrefixes = "5154",
+                minExpiryYear = 2030,
+                outputFormat = OutputFormat.PIPE_YY
+            ),
+            referenceYear = 2026,
+            referenceMonth = 11
+        )
+        assertEquals("$amex|07|34|3204", filtered.outputText)
+
+        val binOnly = ListToolkitEngine.transform(
+            rawInput = input,
+            options = ListToolkitOptions(
+                removeExpired = false,
+                removeInvalidLuhn = false,
+                dropIncomplete = false,
+                outputFormat = OutputFormat.BIN_ONLY,
+                sortOrder = ListSortOrder.BY_EXPIRY_DESC
+            ),
+            referenceYear = 2026,
+            referenceMonth = 11
+        )
+        assertEquals("379363\n515462\n453225", binOnly.outputText)
+    }
+
+    @Test
+    fun `listToolkitBottomSheet switches tabs formats output and applies to console`() {
+        val validVisa = CardValidatorEngine.resolveWildcardPan("45322500553600x3")
+        var appliedOutput = ""
+        var appliedResult: ToolkitTransformResult? = null
+
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                ListToolkitBottomSheet(
+                    initialInputText = "$validVisa|08|2029|113\n$validVisa|08|2029|113\nnoise_line",
+                    liveResultsText = "",
+                    allResultsText = "",
+                    liveResultsCount = 0,
+                    allResultsCount = 0,
+                    onPasteFromClipboard = { null },
+                    onCopyOutput = {},
+                    onApplyToConsole = { out, res ->
+                        appliedOutput = out
+                        appliedResult = res
+                    },
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("toolkit_stat_io").assertIsDisplayed()
+        composeTestRule.onNodeWithText("3 in → 1 out").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("toolkit_tab_format").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("toolkit_format_colon").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("toolkit_tab_filter").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("toolkit_scheme_visa").performScrollTo().assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("toolkit_apply_console_button").performClick()
+        composeTestRule.waitForIdle()
+
+        assertEquals("$validVisa:08:2029:113", appliedOutput)
+        assertEquals(1, appliedResult?.outputCount)
+        assertEquals(1, appliedResult?.removedDuplicates)
+        assertEquals(1, appliedResult?.removedUnparseable)
     }
 }

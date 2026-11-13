@@ -1212,4 +1212,27 @@ object AppIcons {
             close()
         }
     }
+
+    val FilterList: ImageVector by lazy {
+        icon("FilterList") {
+            moveTo(10f, 18f)
+            horizontalLineToRelative(4f)
+            verticalLineToRelative(-2f)
+            horizontalLineToRelative(-4f)
+            verticalLineToRelative(2f)
+            close()
+            moveTo(3f, 6f)
+            verticalLineToRelative(2f)
+            horizontalLineToRelative(18f)
+            verticalLineTo(6f)
+            horizontalLineTo(3f)
+            close()
+            moveTo(6f, 13f)
+            horizontalLineToRelative(12f)
+            verticalLineToRelative(-2f)
+            horizontalLineTo(6f)
+            verticalLineToRelative(2f)
+            close()
+        }
+    }
 }

@@ -79,4 +79,10 @@
     <string name="network_optimizer_subtitle">Caching, single-flight deduplication, exponential backoff &amp; data/battery constraints</string>
     <string name="history_load_more">Load More History</string>
     <string name="http_gzip_body_label">Gzip Compress Request Body</string>
+    <string name="toolkit_chip">Toolkit</string>
+    <string name="nav_list_toolkit">List &amp; Format Toolkit</string>
+    <string name="toolkit_title">List &amp; Format Toolkit</string>
+    <string name="toolkit_subtitle">Clean messy dumps, remove duplicates &amp; expired cards, reformat &amp; filter</string>
+    <string name="toolkit_copy_output">Copy Output</string>
+    <string name="toolkit_apply_console">Apply to Console</string>
 </resources>

@@ -39,6 +39,7 @@ import com.example.domain.ResultBucket
 import com.example.domain.TelegramProbeResult
 import com.example.domain.TelegramWebhookClient
 import com.example.domain.TelegramWebhookConfig
+import com.example.domain.ToolkitTransformResult
 import com.example.domain.ValidationApiProviders
 import com.example.domain.ValidationMode
 import com.example.domain.ValidationRecord
@@ -81,6 +82,7 @@ data class ValidatorUiState(
     val isSettingsOpen: Boolean = false,
     val isFileImportOpen: Boolean = false,
     val isHistoryOpen: Boolean = false,
+    val isToolkitOpen: Boolean = false,
     val historyFilter: HistoryFilter = HistoryFilter.ALL,
     val historySearchQuery: String = "",
     val historyEntries: List<ValidationHistoryEntity> = emptyList(),
@@ -353,6 +355,30 @@ class ValidatorViewModel(
 
     fun closeHistory() {
         _localState.update { it.copy(isHistoryOpen = false) }
+    }
+
+    fun openListToolkit() {
+        _localState.update { it.copy(isToolkitOpen = true, statusBannerMessage = null) }
+    }
+
+    fun closeListToolkit() {
+        _localState.update { it.copy(isToolkitOpen = false) }
+    }
+
+    fun applyToolkitOutput(outputText: String, result: ToolkitTransformResult) {
+        val banner = if (result.totalRemoved > 0) {
+            "Toolkit: ${result.outputCount} kept (${result.totalRemoved} removed)"
+        } else {
+            "Toolkit applied ${result.outputCount} formatted record(s)"
+        }
+        _localState.update {
+            it.copy(
+                rawInputText = outputText,
+                loadedFileName = if (outputText.isBlank()) null else it.loadedFileName,
+                isToolkitOpen = false,
+                statusBannerMessage = banner
+            )
+        }
     }
 
     fun loadMoreHistory() {

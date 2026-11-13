@@ -186,6 +186,31 @@ fun ValidatorScreen(
         )
     }
 
+    if (uiState.isToolkitOpen) {
+        val liveText = remember(uiState.liveRecords) {
+            uiState.liveRecords.joinToString("\n") { it.normalizedLine }
+        }
+        val allRecordsList = remember(uiState.liveRecords, uiState.dieRecords, uiState.unknownRecords) {
+            uiState.liveRecords + uiState.dieRecords + uiState.unknownRecords
+        }
+        val allText = remember(allRecordsList) {
+            allRecordsList.joinToString("\n") { it.normalizedLine }
+        }
+        ListToolkitBottomSheet(
+            initialInputText = uiState.rawInputText,
+            liveResultsText = liveText,
+            allResultsText = allText,
+            liveResultsCount = uiState.liveRecords.size,
+            allResultsCount = allRecordsList.size,
+            onPasteFromClipboard = ::pasteFromClipboard,
+            onCopyOutput = { cleaned ->
+                copyToClipboard("Cleaned List", cleaned)
+            },
+            onApplyToConsole = viewModel::applyToolkitOutput,
+            onDismiss = viewModel::closeListToolkit
+        )
+    }
+
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val isExpandedNavigation = maxWidth >= 840.dp
 
@@ -197,6 +222,7 @@ fun ValidatorScreen(
             channelUrl = channelUrl,
             onSelectPane = { activeCompactPane = it },
             onOpenBinLookup = { viewModel.openBinInspector() },
+            onOpenListToolkit = viewModel::openListToolkit,
             onOpenFileImport = viewModel::openFileImport,
             onOpenHistory = viewModel::openHistory,
             onOpenSettings = viewModel::openSettings,
@@ -289,6 +315,7 @@ fun ValidatorScreen(
                                 },
                                 onClearInput = { viewModel.onInputTextChanged("") },
                                 onClearBanner = viewModel::clearStatusBanner,
+                                onOpenListToolkit = viewModel::openListToolkit,
                                 onQuickSwitchMode = viewModel::setValidationModeQuick,
                                 modifier = cardModifier
                             )

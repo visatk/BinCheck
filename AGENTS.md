@@ -17,10 +17,11 @@
 1. **Parser & Mathematical Luhn Wildcard Solver**:
    - Parses multi-line pipe/slash/colon separated entries: `PAN|MM|YY(YY)|CVV`.
    - Mathematically solves `x` or `X` wildcards at any position in the PAN (e.g., `453225005536xxx3|08|2028|113`) so the generated 16-digit PAN strictly satisfies the ISO/IEC 7812 Luhn Mod-10 checksum.
-2. **Deterministic Local Engine**:
+2. **Deterministic Local Engine & List Toolkit (`ListToolkitEngine` + `ListToolkitBottomSheet`)**:
    - **Live**: Passes Luhn Mod-10 checksum, valid network IIN/BIN prefix & length (Visa, Mastercard, Amex, Discover, JCB, Diners, UnionPay, Maestro), non-expired `MM|YYYY` date against current system clock, and network-accurate CVV length.
    - **Die**: Fails Luhn checksum, invalid PAN length for network, expired `MM|YYYY`, or invalid CVV digits.
    - **Unknown**: Incomplete format, unexpanded wildcard in strict mode, or HTTP timeout/unreachable in Webhook mode.
+   - **List & Format Toolkit**: 3-tab Studio (`Clean`, `Format`, `Filter`) with 1-tap recipes (`Full Clean`, `Dedupe & Format`, `Extract PANs`, `Unique BINs`), messy HTML/log extraction, PAN/exact deduplication, expired & invalid-Luhn pruning, wildcard solving, separator/format conversion (`|`, `:`, `/`, CSV, `MM/YY`, PAN-only, unique BIN6), sorting, and scheme/BIN/expiry filtering with live diff telemetry.
 3. **Multiple Validation APIs & Custom HTTP Payload Builder**:
    - **External APIs with Enforced Rate-Limit Delays**: `Chkr.cc` (`10s` fixed delay), `Payate` (`3s` fixed delay), and `Multi-API Failover` (`5s` fixed delay) run sequentially (`1x`) to respect endpoint rate limits; `LUHN` and `Custom HTTP` support user-configurable delays (`0ms`–`10s` UI slider/presets) and `1x`–`8x` concurrency.
    - **Custom HTTP Payload Templates**: Supports one-tap `JSON Card`, `Lista JSON`, and `Form Body` presets plus `{lista}`, `{card}`, `{mm}`, `{yy}`, `{yyyy}`, `{cvv}`, `{scheme}`, and `{bin}` substitution in URL, headers, and request body (`HttpRequestMethod.AUTO` automatically selects `POST_JSON` when a payload template is present).
