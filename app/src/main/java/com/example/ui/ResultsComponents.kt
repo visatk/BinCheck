@@ -7,15 +7,16 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -27,12 +28,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -41,40 +48,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.domain.ResultBucket
 import com.example.domain.ValidationRecord
-import com.example.ui.theme.ActionButtonBorder
-import com.example.ui.theme.ActionButtonSurface
-import com.example.ui.theme.BadgeNeutralBg
-import com.example.ui.theme.CardContainerBorder
-import com.example.ui.theme.CardContainerSurface
-import com.example.ui.theme.CardSpecularHighlight
-import com.example.ui.theme.DieCrimson
-import com.example.ui.theme.DieCrimsonBadgeBg
-import com.example.ui.theme.InputConsoleSurface
-import com.example.ui.theme.InputPlaceholderColor
-import com.example.ui.theme.InterFontFamily
-import com.example.ui.theme.JetBrainsMonoFamily
-import com.example.ui.theme.PlayEmerald
-import com.example.ui.theme.PlayEmeraldBadgeBg
-import com.example.ui.theme.TabActiveSurface
-import com.example.ui.theme.TabInactiveSurface
-import com.example.ui.theme.TextPrimaryLight
-import com.example.ui.theme.TextSecondaryMuted
-import com.example.ui.theme.UnknownAmber
-import com.example.ui.theme.UnknownAmberBadgeBg
+import com.example.ui.theme.LocalConsoleColors
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -88,24 +73,16 @@ fun ResultsCard(
     onRemoveRecord: (ValidationRecord) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
+    val colorScheme = MaterialTheme.colorScheme
+    val consoleColors = LocalConsoleColors.current
+
+    ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
-            .shadow(
-                elevation = 18.dp,
-                shape = RoundedCornerShape(6.dp),
-                ambientColor = Color.Black,
-                spotColor = Color.Black
-            )
             .border(
                 width = 1.dp,
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        CardSpecularHighlight.copy(alpha = 0.65f),
-                        CardContainerBorder.copy(alpha = 0.45f)
-                    )
-                ),
-                shape = RoundedCornerShape(6.dp)
+                color = colorScheme.outlineVariant.copy(alpha = 0.85f),
+                shape = MaterialTheme.shapes.medium
             )
             .animateContentSize(
                 animationSpec = spring(
@@ -113,26 +90,29 @@ fun ResultsCard(
                     stiffness = Spring.StiffnessMediumLow
                 )
             ),
-        color = CardContainerSurface,
-        shape = RoundedCornerShape(6.dp)
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = colorScheme.surfaceContainerLow
+        ),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 4.dp)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // 3-Tab Header Row
+            // M3 3-Tab Header with Tonal Container Elevation
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
-                    .background(TabInactiveSurface),
+                    .background(colorScheme.surfaceContainer),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 ResultTabItem(
                     label = stringResource(R.string.tab_live),
                     count = uiState.liveRecords.size,
                     selected = uiState.selectedTab == ResultBucket.LIVE,
-                    labelColor = PlayEmerald,
-                    badgeBackgroundColor = PlayEmeraldBadgeBg,
-                    badgeTextColor = PlayEmerald,
-                    topAccentColor = PlayEmerald,
+                    labelColor = consoleColors.liveAccent,
+                    badgeBackgroundColor = consoleColors.liveContainer,
+                    badgeTextColor = consoleColors.liveAccent,
+                    topAccentColor = consoleColors.liveAccent,
                     onClick = { onSelectTab(ResultBucket.LIVE) },
                     modifier = Modifier
                         .weight(1f)
@@ -144,10 +124,22 @@ fun ResultsCard(
                     label = stringResource(R.string.tab_die),
                     count = uiState.dieRecords.size,
                     selected = uiState.selectedTab == ResultBucket.DIE,
-                    labelColor = TextPrimaryLight,
-                    badgeBackgroundColor = if (uiState.dieRecords.isNotEmpty()) DieCrimsonBadgeBg else BadgeNeutralBg,
-                    badgeTextColor = if (uiState.dieRecords.isNotEmpty()) DieCrimson else TextPrimaryLight,
-                    topAccentColor = DieCrimson,
+                    labelColor = if (uiState.dieRecords.isNotEmpty() || uiState.selectedTab == ResultBucket.DIE) {
+                        consoleColors.dieAccent
+                    } else {
+                        colorScheme.onSurface
+                    },
+                    badgeBackgroundColor = if (uiState.dieRecords.isNotEmpty()) {
+                        consoleColors.dieContainer
+                    } else {
+                        colorScheme.surfaceContainerHighest
+                    },
+                    badgeTextColor = if (uiState.dieRecords.isNotEmpty()) {
+                        consoleColors.dieAccent
+                    } else {
+                        colorScheme.onSurfaceVariant
+                    },
+                    topAccentColor = consoleColors.dieAccent,
                     onClick = { onSelectTab(ResultBucket.DIE) },
                     modifier = Modifier
                         .weight(1f)
@@ -159,10 +151,22 @@ fun ResultsCard(
                     label = stringResource(R.string.tab_unknown),
                     count = uiState.unknownRecords.size,
                     selected = uiState.selectedTab == ResultBucket.UNKNOWN,
-                    labelColor = TextPrimaryLight,
-                    badgeBackgroundColor = if (uiState.unknownRecords.isNotEmpty()) UnknownAmberBadgeBg else BadgeNeutralBg,
-                    badgeTextColor = if (uiState.unknownRecords.isNotEmpty()) UnknownAmber else TextPrimaryLight,
-                    topAccentColor = UnknownAmber,
+                    labelColor = if (uiState.unknownRecords.isNotEmpty() || uiState.selectedTab == ResultBucket.UNKNOWN) {
+                        consoleColors.unknownAccent
+                    } else {
+                        colorScheme.onSurface
+                    },
+                    badgeBackgroundColor = if (uiState.unknownRecords.isNotEmpty()) {
+                        consoleColors.unknownContainer
+                    } else {
+                        colorScheme.surfaceContainerHighest
+                    },
+                    badgeTextColor = if (uiState.unknownRecords.isNotEmpty()) {
+                        consoleColors.unknownAccent
+                    } else {
+                        colorScheme.onSurfaceVariant
+                    },
+                    topAccentColor = consoleColors.unknownAccent,
                     onClick = { onSelectTab(ResultBucket.UNKNOWN) },
                     modifier = Modifier
                         .weight(1f)
@@ -173,7 +177,7 @@ fun ResultsCard(
 
             HorizontalDivider(
                 thickness = 1.dp,
-                color = Color(0xFF13151A)
+                color = colorScheme.outlineVariant.copy(alpha = 0.85f)
             )
 
             val activeList = uiState.activeTabRecords
@@ -185,23 +189,22 @@ fun ResultsCard(
                 } else {
                     Modifier
                         .fillMaxWidth()
-                        .height(48.dp)
+                        .height(54.dp)
                 }
                 Box(
                     modifier = emptyBoxModifier
-                        .background(ActionButtonSurface)
+                        .background(colorScheme.surfaceContainerLow)
                         .padding(horizontal = 16.dp),
                     contentAlignment = if (fillRemainingHeight) Alignment.Center else Alignment.CenterStart
                 ) {
                     Text(
                         text = when (uiState.selectedTab) {
-                            ResultBucket.LIVE -> "No Live records yet — press ▷ to validate batch"
+                            ResultBucket.LIVE -> "No Live records yet — tap Play to validate batch"
                             ResultBucket.DIE -> "No declined / invalid records"
                             ResultBucket.UNKNOWN -> "No unknown format records"
                         },
-                        fontFamily = JetBrainsMonoFamily,
-                        fontSize = 11.sp,
-                        color = InputPlaceholderColor.copy(alpha = 0.75f)
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colorScheme.onSurfaceVariant.copy(alpha = 0.78f)
                     )
                 }
             } else {
@@ -214,15 +217,15 @@ fun ResultsCard(
                 }
                 Column(
                     modifier = bodyModifier
-                        .background(ActionButtonSurface)
+                        .background(colorScheme.surfaceContainerLow)
                         .padding(horizontal = 14.dp, vertical = 12.dp)
                 ) {
                     FlowRow(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 8.dp),
+                            .padding(bottom = 10.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         val tabTitle = when (uiState.selectedTab) {
                             ResultBucket.LIVE -> "LIVE RECORDS (${activeList.size})"
@@ -231,65 +234,64 @@ fun ResultsCard(
                         }
                         Text(
                             text = tabTitle,
-                            fontFamily = JetBrainsMonoFamily,
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
-                            color = TextSecondaryMuted,
+                            color = colorScheme.onSurfaceVariant,
                             modifier = Modifier.align(Alignment.CenterVertically)
                         )
 
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Box(
+                            FilledTonalButton(
+                                onClick = {
+                                    val joined = activeList.joinToString("\n") { it.normalizedLine }
+                                    onCopyAll(tabTitle, joined)
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                shape = MaterialTheme.shapes.small,
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = colorScheme.primaryContainer,
+                                    contentColor = colorScheme.onPrimaryContainer
+                                ),
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(InputConsoleSurface)
-                                    .border(1.dp, ActionButtonBorder, RoundedCornerShape(4.dp))
-                                    .clickable {
-                                        val joined = activeList.joinToString("\n") { it.normalizedLine }
-                                        onCopyAll(tabTitle, joined)
-                                    }
-                                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                                    .height(36.dp)
                                     .testTag("copy_all_records_button")
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.ContentCopy,
-                                        contentDescription = stringResource(R.string.copy_all),
-                                        tint = PlayEmerald,
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = stringResource(R.string.copy_all),
-                                        fontSize = 11.sp,
-                                        color = TextPrimaryLight
-                                    )
-                                }
+                                Icon(
+                                    imageVector = Icons.Outlined.ContentCopy,
+                                    contentDescription = stringResource(R.string.copy_all),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.copy_all),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                             }
 
-                            Box(
+                            OutlinedButton(
+                                onClick = onClearTab,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                shape = MaterialTheme.shapes.small,
+                                border = BorderStroke(1.dp, colorScheme.outlineVariant),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = colorScheme.error
+                                ),
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(InputConsoleSurface)
-                                    .border(1.dp, ActionButtonBorder, RoundedCornerShape(4.dp))
-                                    .clickable(onClick = onClearTab)
-                                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                                    .height(36.dp)
                                     .testTag("clear_tab_records_button")
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.DeleteOutline,
-                                        contentDescription = stringResource(R.string.clear_tab),
-                                        tint = DieCrimson,
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = stringResource(R.string.clear_tab),
-                                        fontSize = 11.sp,
-                                        color = TextSecondaryMuted
-                                    )
-                                }
+                                Icon(
+                                    imageVector = Icons.Outlined.DeleteOutline,
+                                    contentDescription = stringResource(R.string.clear_tab),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = stringResource(R.string.clear_tab),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                             }
                         }
                     }
@@ -306,7 +308,7 @@ fun ResultsCard(
 
                     LazyColumn(
                         modifier = listModifier,
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(
                             items = activeList,
@@ -337,71 +339,64 @@ private fun ResultTabItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val containerModifier = if (selected) {
-        modifier
-            .shadow(
-                elevation = 10.dp,
-                shape = RoundedCornerShape(3.dp),
-                ambientColor = Color.Black,
-                spotColor = Color.Black
-            )
-            .background(TabActiveSurface)
-            .border(
-                width = 1.dp,
-                color = Color(0xFF2B303C),
-                shape = RoundedCornerShape(3.dp)
-            )
-            .drawWithContent {
-                drawContent()
-                drawRect(
-                    color = topAccentColor.copy(alpha = 0.85f),
-                    topLeft = Offset(0f, 0f),
-                    size = Size(size.width, 2.dp.toPx())
-                )
-            }
-    } else {
-        modifier.background(TabInactiveSurface)
-    }
+    val colorScheme = MaterialTheme.colorScheme
 
-    Box(
-        modifier = containerModifier
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.extraSmall,
+        color = if (selected) colorScheme.surfaceContainerHighest else colorScheme.surfaceContainer,
+        shadowElevation = if (selected) 3.dp else 0.dp,
+        border = if (selected) BorderStroke(1.dp, colorScheme.outlineVariant) else null,
+        modifier = modifier
             .minimumInteractiveComponentSize()
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = label,
-                fontFamily = InterFontFamily,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                fontSize = 13.5.sp,
-                color = labelColor,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+            .then(
+                if (selected) {
+                    Modifier.drawWithContent {
+                        drawContent()
+                        drawRect(
+                            color = topAccentColor,
+                            topLeft = Offset(0f, 0f),
+                            size = Size(size.width, 2.5.dp.toPx())
+                        )
+                    }
+                } else {
+                    Modifier
+                }
             )
-            Spacer(modifier = Modifier.width(6.dp))
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(badgeBackgroundColor)
-                    .padding(horizontal = 6.5.dp, vertical = 2.dp),
-                contentAlignment = Alignment.Center
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
             ) {
-                AnimatedContent(
-                    targetState = count,
-                    transitionSpec = { fadeIn() togetherWith fadeOut() },
-                    label = "badge_count_$label"
-                ) { targetCount ->
-                    Text(
-                        text = targetCount.toString(),
-                        fontFamily = InterFontFamily,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 11.5.sp,
-                        color = badgeTextColor
-                    )
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    color = labelColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(MaterialTheme.shapes.extraSmall)
+                        .background(badgeBackgroundColor)
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AnimatedContent(
+                        targetState = count,
+                        transitionSpec = { fadeIn() togetherWith fadeOut() },
+                        label = "badge_count_$label"
+                    ) { targetCount ->
+                        Text(
+                            text = targetCount.toString(),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = badgeTextColor
+                        )
+                    }
                 }
             }
         }
@@ -414,110 +409,102 @@ private fun ValidationRecordRow(
     onCopy: () -> Unit,
     onRemove: () -> Unit
 ) {
+    val colorScheme = MaterialTheme.colorScheme
+    val consoleColors = LocalConsoleColors.current
     val accentColor = when (record.bucket) {
-        ResultBucket.LIVE -> PlayEmerald
-        ResultBucket.DIE -> DieCrimson
-        ResultBucket.UNKNOWN -> UnknownAmber
+        ResultBucket.LIVE -> consoleColors.liveAccent
+        ResultBucket.DIE -> consoleColors.dieAccent
+        ResultBucket.UNKNOWN -> consoleColors.unknownAccent
+    }
+    val containerAccent = when (record.bucket) {
+        ResultBucket.LIVE -> consoleColors.liveContainer
+        ResultBucket.DIE -> consoleColors.dieContainer
+        ResultBucket.UNKNOWN -> consoleColors.unknownContainer
     }
 
-    Row(
+    Surface(
+        onClick = onCopy,
+        shape = MaterialTheme.shapes.small,
+        color = colorScheme.surfaceContainerLowest,
+        border = BorderStroke(1.dp, colorScheme.outlineVariant),
         modifier = Modifier
             .fillMaxWidth()
-            .height(IntrinsicSize.Min)
-            .clip(RoundedCornerShape(5.dp))
-            .background(InputConsoleSurface)
-            .border(1.dp, ActionButtonBorder, RoundedCornerShape(5.dp))
-            .clickable(onClick = onCopy)
-            .testTag("record_row_${record.pan}"),
-        verticalAlignment = Alignment.CenterVertically
+            .testTag("record_row_${record.pan}")
     ) {
-        Box(
-            modifier = Modifier
-                .width(3.dp)
-                .fillMaxHeight()
-                .background(accentColor)
-        )
-
         Row(
             modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+                .fillMaxWidth()
+                .height(IntrinsicSize.Min),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = record.normalizedLine,
-                    fontFamily = JetBrainsMonoFamily,
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = TextPrimaryLight,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(3.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(accentColor.copy(alpha = 0.16f))
-                            .padding(horizontal = 5.dp, vertical = 1.dp)
-                    ) {
-                        Text(
-                            text = record.scheme.displayName,
-                            fontFamily = JetBrainsMonoFamily,
-                            fontSize = 9.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = accentColor
-                        )
-                    }
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .fillMaxHeight()
+                    .background(accentColor)
+            )
+
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 10.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "${record.message} (${record.latencyMs}ms)",
-                        fontFamily = InterFontFamily,
-                        fontSize = 11.sp,
-                        color = TextSecondaryMuted,
+                        text = record.normalizedLine,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .clip(MaterialTheme.shapes.extraSmall)
+                                .background(containerAccent)
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = record.scheme.displayName,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = accentColor
+                            )
+                        }
+                        Text(
+                            text = "${record.message} (${record.latencyMs}ms)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
-            }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable(onClick = onCopy)
-                        .padding(6.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.ContentCopy,
-                        contentDescription = "Copy line",
-                        tint = TextSecondaryMuted,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable(onClick = onRemove)
-                        .padding(6.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.DeleteOutline,
-                        contentDescription = "Remove line",
-                        tint = TextSecondaryMuted,
-                        modifier = Modifier.size(16.dp)
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onCopy) {
+                        Icon(
+                            imageVector = Icons.Outlined.ContentCopy,
+                            contentDescription = "Copy line",
+                            tint = colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(onClick = onRemove) {
+                        Icon(
+                            imageVector = Icons.Outlined.DeleteOutline,
+                            contentDescription = "Remove line",
+                            tint = colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
         }

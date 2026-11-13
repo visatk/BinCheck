@@ -37,4 +37,9 @@
     <string name="filter_success">Success</string>
     <string name="filter_failure">Failure</string>
     <string name="clear_history">Clear All</string>
+    <string name="appearance_section_title">Appearance &amp; Material You</string>
+    <string name="theme_mode_label">Theme Mode</string>
+    <string name="dynamic_color_title">Dynamic Color (Material You)</string>
+    <string name="dynamic_color_subtitle_supported">Adapts colors from your Android 12+ device wallpaper</string>
+    <string name="dynamic_color_subtitle_fallback">Requires Android 12+ (using curated BinCheck palette)</string>
 </resources>

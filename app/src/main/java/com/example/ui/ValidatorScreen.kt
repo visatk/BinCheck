@@ -17,21 +17,22 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -44,12 +45,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.domain.CardValidatorEngine
-import com.example.ui.theme.ConsoleBackground
-import com.example.ui.theme.ConsoleBackgroundBottom
-import com.example.ui.theme.GearRoyalBlue
-import com.example.ui.theme.PlayEmerald
-import com.example.ui.theme.TopDividerColor
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -60,7 +55,8 @@ fun ValidatorScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var copiedFeedback by remember { mutableStateOf<String?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val colorScheme = MaterialTheme.colorScheme
 
     val channelUrl = stringResource(R.string.developer_channel_url)
 
@@ -78,10 +74,9 @@ fun ValidatorScreen(
     fun copyToClipboard(label: String, text: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
-        copiedFeedback = "Copied to clipboard"
         scope.launch {
-            delay(1800)
-            copiedFeedback = null
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar("Copied $label to clipboard")
         }
     }
 
@@ -138,67 +133,72 @@ fun ValidatorScreen(
         )
     }
 
-    Box(
+    val topBg = colorScheme.background
+    val bottomBg = colorScheme.surfaceContainerLowest
+    val primaryGlow = colorScheme.primary.copy(alpha = 0.08f)
+    val secondaryGlow = colorScheme.tertiary.copy(alpha = 0.065f)
+
+    Scaffold(
         modifier = modifier
             .fillMaxSize()
             .background(
-                Brush.verticalGradient(
-                    colors = listOf(ConsoleBackground, ConsoleBackgroundBottom)
-                )
+                Brush.verticalGradient(colors = listOf(topBg, bottomBg))
             )
             .drawBehind {
                 drawCircle(
                     brush = Brush.radialGradient(
-                        colors = listOf(
-                            PlayEmerald.copy(alpha = 0.055f),
-                            Color.Transparent
-                        ),
+                        colors = listOf(primaryGlow, Color.Transparent),
                         center = Offset(size.width * 0.25f, size.height * 0.18f),
-                        radius = size.minDimension * 0.65f
+                        radius = size.minDimension * 0.68f
                     ),
                     center = Offset(size.width * 0.25f, size.height * 0.18f),
-                    radius = size.minDimension * 0.65f
+                    radius = size.minDimension * 0.68f
                 )
                 drawCircle(
                     brush = Brush.radialGradient(
-                        colors = listOf(
-                            GearRoyalBlue.copy(alpha = 0.05f),
-                            Color.Transparent
-                        ),
-                        center = Offset(size.width * 0.78f, size.height * 0.55f),
-                        radius = size.minDimension * 0.65f
+                        colors = listOf(secondaryGlow, Color.Transparent),
+                        center = Offset(size.width * 0.78f, size.height * 0.58f),
+                        radius = size.minDimension * 0.68f
                     ),
-                    center = Offset(size.width * 0.78f, size.height * 0.55f),
-                    radius = size.minDimension * 0.65f
+                    center = Offset(size.width * 0.78f, size.height * 0.58f),
+                    radius = size.minDimension * 0.68f
+                )
+            },
+        containerColor = Color.Transparent,
+        contentWindowInsets = WindowInsets.safeDrawing,
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState) { data ->
+                Snackbar(
+                    snackbarData = data,
+                    containerColor = colorScheme.inverseSurface,
+                    contentColor = colorScheme.inverseOnSurface,
+                    shape = MaterialTheme.shapes.small
                 )
             }
-            .windowInsetsPadding(WindowInsets.statusBars)
-            .windowInsetsPadding(WindowInsets.navigationBars)
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
             HorizontalDivider(
                 modifier = Modifier.fillMaxWidth(),
                 thickness = 1.dp,
-                color = TopDividerColor
+                color = colorScheme.outlineVariant.copy(alpha = 0.6f)
             )
 
-            // Responsive layout driven by actual available container dimensions
-            BoxWithConstraints(
-                modifier = Modifier
-                    .fillMaxSize()
-            ) {
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val isTwoPaneLayout = maxWidth >= 680.dp && maxHeight >= 360.dp
                 val horizontalPadding = when {
                     maxWidth < 380.dp -> 14.dp
                     maxWidth < 600.dp -> 20.dp
                     else -> 28.dp
                 }
-                val innerCardPadding = if (maxWidth < 380.dp) 16.dp else 22.dp
-
+                val innerCardPadding = if (maxWidth < 380.dp) 16.dp else 20.dp
                 val (binDigits, scheme) = detectedPreviewInfo
 
                 if (isTwoPaneLayout) {
-                    // Canonical Two-Pane Supporting-Pane / Side-by-Side Layout for Tablets, Foldables & Landscape
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
@@ -232,7 +232,6 @@ fun ValidatorScreen(
                             ) {
                                 ConsoleInputCard(
                                     uiState = uiState,
-                                    copiedFeedback = copiedFeedback,
                                     consoleHeight = null,
                                     cardPadding = innerCardPadding,
                                     onInputChanged = viewModel::onInputTextChanged,
@@ -281,7 +280,6 @@ fun ValidatorScreen(
                         }
                     }
                 } else {
-                    // Adaptive Single-Column Layout for Compact & Medium Portrait Screens
                     val adaptiveConsoleHeight = (maxHeight * 0.30f).coerceIn(175.dp, 260.dp)
 
                     Column(
@@ -315,7 +313,6 @@ fun ValidatorScreen(
 
                             ConsoleInputCard(
                                 uiState = uiState,
-                                copiedFeedback = copiedFeedback,
                                 consoleHeight = adaptiveConsoleHeight,
                                 cardPadding = innerCardPadding,
                                 onInputChanged = viewModel::onInputTextChanged,
@@ -341,7 +338,7 @@ fun ValidatorScreen(
                                 onClearBanner = viewModel::clearStatusBanner
                             )
 
-                            Spacer(modifier = Modifier.height(22.dp))
+                            Spacer(modifier = Modifier.height(20.dp))
 
                             ResultsCard(
                                 uiState = uiState,
@@ -353,7 +350,7 @@ fun ValidatorScreen(
                                 onRemoveRecord = { record -> viewModel.removeRecord(record.id, record.bucket) }
                             )
 
-                            Spacer(modifier = Modifier.height(18.dp))
+                            Spacer(modifier = Modifier.height(16.dp))
 
                             DeveloperChannelFooter(
                                 channelUrl = channelUrl,
@@ -361,7 +358,7 @@ fun ValidatorScreen(
                                 onCopyChannelUrl = { copyToClipboard("Developer Channel", channelUrl) }
                             )
 
-                            Spacer(modifier = Modifier.height(28.dp))
+                            Spacer(modifier = Modifier.height(24.dp))
                         }
                     }
                 }

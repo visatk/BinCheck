@@ -7,6 +7,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,23 +30,21 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.Bolt
-import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.UploadFile
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
@@ -57,13 +56,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
@@ -77,198 +73,17 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
-import com.example.domain.CardScheme
-import com.example.domain.ValidationMode
-import com.example.ui.theme.ActionButtonBorder
-import com.example.ui.theme.ActionButtonHoverSurface
-import com.example.ui.theme.ActionButtonSurface
-import com.example.ui.theme.CardContainerBorder
-import com.example.ui.theme.CardContainerSurface
-import com.example.ui.theme.CardSpecularHighlight
-import com.example.ui.theme.GearRoyalBlue
-import com.example.ui.theme.InputConsoleBorderInner
-import com.example.ui.theme.InputConsoleBorderOuter
-import com.example.ui.theme.InputConsoleGutterSurface
-import com.example.ui.theme.InputConsoleSurface
-import com.example.ui.theme.InputPlaceholderColor
-import com.example.ui.theme.InputTextColor
-import com.example.ui.theme.InterFontFamily
 import com.example.ui.theme.JetBrainsMonoFamily
-import com.example.ui.theme.PlayEmerald
-import com.example.ui.theme.PlayEmeraldBadgeBg
-import com.example.ui.theme.TelegramSkyBlue
-import com.example.ui.theme.TextPrimaryLight
-import com.example.ui.theme.TextSecondaryMuted
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun TopTelemetryStrip(
-    isRunning: Boolean,
-    validationMode: ValidationMode,
-    concurrency: Int,
-    binDigits: String,
-    detectedScheme: CardScheme,
-    loadedFileName: String?,
-    historyCount: Int,
-    onOpenHistory: () -> Unit,
-    onOpenDeveloperChannel: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    FlowRow(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(5.dp))
-                    .background(CardContainerSurface)
-                    .border(1.dp, CardContainerBorder, RoundedCornerShape(5.dp))
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .clip(CircleShape)
-                            .background(if (isRunning) PlayEmerald else GearRoyalBlue)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (validationMode == ValidationMode.LOCAL_DETERMINISTIC) {
-                            "LUHN • ${concurrency}x"
-                        } else {
-                            "WEBHOOK • ${concurrency}x"
-                        },
-                        fontFamily = JetBrainsMonoFamily,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = TextSecondaryMuted
-                    )
-                }
-            }
-
-            if (detectedScheme != CardScheme.UNKNOWN) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(5.dp))
-                        .background(PlayEmeraldBadgeBg.copy(alpha = 0.7f))
-                        .border(1.dp, PlayEmerald.copy(alpha = 0.35f), RoundedCornerShape(5.dp))
-                        .padding(horizontal = 7.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = "BIN $binDigits • ${detectedScheme.displayName}",
-                        fontFamily = JetBrainsMonoFamily,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = PlayEmerald
-                    )
-                }
-            }
-
-            if (!loadedFileName.isNullOrBlank()) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(5.dp))
-                        .background(GearRoyalBlue.copy(alpha = 0.14f))
-                        .border(1.dp, GearRoyalBlue.copy(alpha = 0.35f), RoundedCornerShape(5.dp))
-                        .padding(horizontal = 7.dp, vertical = 4.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Outlined.Description,
-                            contentDescription = null,
-                            tint = GearRoyalBlue,
-                            modifier = Modifier.size(11.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = loadedFileName,
-                            fontFamily = JetBrainsMonoFamily,
-                            fontSize = 10.sp,
-                            color = TextPrimaryLight,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-        }
-
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            // Interactive Local History Log Pill
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(5.dp))
-                    .background(CardContainerSurface)
-                    .border(1.dp, CardContainerBorder, RoundedCornerShape(5.dp))
-                    .clickable(onClick = onOpenHistory)
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .testTag("open_history_button")
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Outlined.History,
-                        contentDescription = stringResource(R.string.history_chip),
-                        tint = TextPrimaryLight,
-                        modifier = Modifier.size(12.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "${stringResource(R.string.history_chip)} ($historyCount)",
-                        fontFamily = JetBrainsMonoFamily,
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = TextPrimaryLight
-                    )
-                }
-            }
-
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(5.dp))
-                    .background(TelegramSkyBlue.copy(alpha = 0.14f))
-                    .border(1.dp, TelegramSkyBlue.copy(alpha = 0.4f), RoundedCornerShape(5.dp))
-                    .clickable(onClick = onOpenDeveloperChannel)
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .testTag("header_developer_channel_button")
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TelegramPaperPlaneIcon(
-                        color = TelegramSkyBlue,
-                        modifier = Modifier.size(11.dp)
-                    )
-                    Spacer(modifier = Modifier.width(5.dp))
-                    Text(
-                        text = stringResource(R.string.developer_channel_handle),
-                        fontFamily = JetBrainsMonoFamily,
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = TelegramSkyBlue
-                    )
-                }
-            }
-        }
-    }
-}
+import com.example.ui.theme.LocalConsoleColors
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ConsoleInputCard(
     uiState: ValidatorUiState,
-    copiedFeedback: String?,
     consoleHeight: Dp?,
     cardPadding: Dp,
     onInputChanged: (String) -> Unit,
@@ -282,27 +97,22 @@ fun ConsoleInputCard(
     onClearBanner: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
+    val colorScheme = MaterialTheme.colorScheme
+    val consoleColors = LocalConsoleColors.current
+
+    ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
-            .shadow(
-                elevation = 18.dp,
-                shape = RoundedCornerShape(6.dp),
-                ambientColor = Color.Black,
-                spotColor = Color.Black
-            )
             .border(
                 width = 1.dp,
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        CardSpecularHighlight.copy(alpha = 0.7f),
-                        CardContainerBorder.copy(alpha = 0.45f)
-                    )
-                ),
-                shape = RoundedCornerShape(6.dp)
+                color = colorScheme.outlineVariant.copy(alpha = 0.85f),
+                shape = MaterialTheme.shapes.medium
             ),
-        color = CardContainerSurface,
-        shape = RoundedCornerShape(6.dp)
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = colorScheme.surfaceContainerLow
+        ),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 4.dp)
     ) {
         Column(
             modifier = Modifier
@@ -312,7 +122,11 @@ fun ConsoleInputCard(
             val inputInteractionSource = remember { MutableInteractionSource() }
             val isInputFocused by inputInteractionSource.collectIsFocusedAsState()
             val outerBorderColor by animateColorAsState(
-                targetValue = if (isInputFocused) PlayEmerald.copy(alpha = 0.55f) else InputConsoleBorderOuter,
+                targetValue = if (isInputFocused) {
+                    colorScheme.primary.copy(alpha = 0.78f)
+                } else {
+                    colorScheme.outlineVariant
+                },
                 animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
                 label = "console_border"
             )
@@ -328,35 +142,16 @@ fun ConsoleInputCard(
                     .heightIn(min = 150.dp)
             }
 
-            // Recessed Dark Console Input Box with Inner Shadow & Line Number Gutter
-            Box(
-                modifier = consoleBoxModifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(InputConsoleSurface)
-                    .border(
-                        width = 1.dp,
-                        color = outerBorderColor,
-                        shape = RoundedCornerShape(4.dp)
-                    )
-                    .padding(1.dp)
-                    .border(
-                        width = 1.dp,
-                        color = InputConsoleBorderInner,
-                        shape = RoundedCornerShape(3.dp)
-                    )
-                    .drawWithContent {
-                        drawContent()
-                        drawRect(
-                            brush = Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.Black.copy(alpha = 0.45f),
-                                    Color.Transparent
-                                ),
-                                startY = 0f,
-                                endY = 18.dp.toPx()
-                            )
-                        )
-                    }
+            // Recessed IDE Console Editor using M3 surfaceContainerLowest
+            Surface(
+                modifier = consoleBoxModifier,
+                shape = MaterialTheme.shapes.small,
+                color = colorScheme.surfaceContainerLowest,
+                border = BorderStroke(
+                    width = if (isInputFocused) 1.5.dp else 1.dp,
+                    color = outerBorderColor
+                ),
+                tonalElevation = 0.dp
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     Row(
@@ -370,8 +165,8 @@ fun ConsoleInputCard(
                         Column(
                             modifier = Modifier
                                 .fillMaxHeight()
-                                .background(InputConsoleGutterSurface)
-                                .padding(horizontal = 8.dp, vertical = 12.dp),
+                                .background(colorScheme.surfaceContainer)
+                                .padding(horizontal = 9.dp, vertical = 12.dp),
                             horizontalAlignment = Alignment.End
                         ) {
                             for (lineNum in 1..displayLineCount) {
@@ -380,14 +175,14 @@ fun ConsoleInputCard(
                                     fontFamily = JetBrainsMonoFamily,
                                     fontSize = 11.sp,
                                     lineHeight = 20.sp,
-                                    color = InputPlaceholderColor.copy(alpha = 0.55f)
+                                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                                 )
                             }
                         }
 
                         VerticalDivider(
                             thickness = 1.dp,
-                            color = Color(0xFF1A1E26)
+                            color = colorScheme.outlineVariant.copy(alpha = 0.65f)
                         )
 
                         BasicTextField(
@@ -405,9 +200,9 @@ fun ConsoleInputCard(
                                 fontSize = 13.sp,
                                 lineHeight = 20.sp,
                                 letterSpacing = 0.4.sp,
-                                color = InputTextColor
+                                color = colorScheme.onSurface
                             ),
-                            cursorBrush = SolidColor(PlayEmerald),
+                            cursorBrush = SolidColor(colorScheme.primary),
                             decorationBox = { innerTextField ->
                                 Box(modifier = Modifier.fillMaxSize()) {
                                     if (uiState.rawInputText.isEmpty()) {
@@ -418,7 +213,7 @@ fun ConsoleInputCard(
                                             fontSize = 13.sp,
                                             lineHeight = 20.sp,
                                             letterSpacing = 0.5.sp,
-                                            color = InputPlaceholderColor
+                                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                                         )
                                     }
                                     innerTextField()
@@ -427,13 +222,16 @@ fun ConsoleInputCard(
                         )
                     }
 
-                    // Responsive Bottom Console Quick-Action Bar with File Picker Trigger
-                    HorizontalDivider(thickness = 1.dp, color = Color(0xFF181B22))
+                    HorizontalDivider(
+                        thickness = 1.dp,
+                        color = colorScheme.outlineVariant.copy(alpha = 0.7f)
+                    )
+
                     FlowRow(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(InputConsoleGutterSurface.copy(alpha = 0.9f))
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                            .background(colorScheme.surfaceContainer.copy(alpha = 0.85f))
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
@@ -443,9 +241,8 @@ fun ConsoleInputCard(
                             } else {
                                 "PAN|MM|YYYY|CVV or .txt/.html"
                             },
-                            fontFamily = JetBrainsMonoFamily,
-                            fontSize = 10.sp,
-                            color = InputPlaceholderColor,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant,
                             modifier = Modifier.align(Alignment.CenterVertically)
                         )
 
@@ -456,7 +253,8 @@ fun ConsoleInputCard(
                             ConsoleMiniActionPill(
                                 label = stringResource(R.string.import_file_chip),
                                 icon = Icons.Outlined.UploadFile,
-                                tint = GearRoyalBlue,
+                                containerColor = colorScheme.secondaryContainer,
+                                contentColor = colorScheme.onSecondaryContainer,
                                 onClick = onOpenFileImport,
                                 testTag = "open_file_picker_button"
                             )
@@ -464,7 +262,8 @@ fun ConsoleInputCard(
                             ConsoleMiniActionPill(
                                 label = "Gen 10x",
                                 icon = Icons.Outlined.Bolt,
-                                tint = PlayEmerald,
+                                containerColor = colorScheme.primaryContainer,
+                                contentColor = colorScheme.onPrimaryContainer,
                                 onClick = onQuickGen10x,
                                 testTag = "quick_gen_10x_button"
                             )
@@ -473,7 +272,8 @@ fun ConsoleInputCard(
                                 ConsoleMiniActionPill(
                                     label = "Solve x",
                                     icon = Icons.Outlined.AutoFixHigh,
-                                    tint = PlayEmerald,
+                                    containerColor = colorScheme.tertiaryContainer,
+                                    contentColor = colorScheme.onTertiaryContainer,
                                     onClick = onExpandWildcards,
                                     testTag = "quick_expand_wildcards_button"
                                 )
@@ -483,7 +283,8 @@ fun ConsoleInputCard(
                                 ConsoleMiniActionPill(
                                     label = "Paste",
                                     icon = Icons.Outlined.ContentPaste,
-                                    tint = TextSecondaryMuted,
+                                    containerColor = colorScheme.surfaceContainerHigh,
+                                    contentColor = colorScheme.onSurfaceVariant,
                                     onClick = onPasteOrFill,
                                     testTag = "paste_or_fill_button"
                                 )
@@ -491,7 +292,8 @@ fun ConsoleInputCard(
                                 ConsoleMiniActionPill(
                                     label = "Clear",
                                     icon = Icons.Outlined.DeleteOutline,
-                                    tint = TextSecondaryMuted,
+                                    containerColor = colorScheme.errorContainer.copy(alpha = 0.7f),
+                                    contentColor = colorScheme.onErrorContainer,
                                     onClick = onClearInput,
                                     testTag = "clear_console_button"
                                 )
@@ -503,277 +305,187 @@ fun ConsoleInputCard(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Stacked Dual Action Bars (Play & Settings)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(
-                        elevation = 6.dp,
-                        shape = RoundedCornerShape(4.dp),
-                        ambientColor = Color.Black,
-                        spotColor = Color.Black
-                    )
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(ActionButtonSurface)
-                    .border(
-                        width = 1.dp,
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                CardSpecularHighlight.copy(alpha = 0.5f),
-                                ActionButtonBorder
-                            )
-                        ),
-                        shape = RoundedCornerShape(4.dp)
-                    )
+            // Stacked Dual M3 Action Bars (Play/Stop & Settings)
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.small,
+                color = colorScheme.surfaceContainerHigh,
+                border = BorderStroke(1.dp, colorScheme.outlineVariant),
+                shadowElevation = 2.dp
             ) {
-                val playInteraction = remember { MutableInteractionSource() }
-                val isPlayPressed by playInteraction.collectIsPressedAsState()
-                val playScale by animateFloatAsState(
-                    targetValue = if (isPlayPressed) 0.98f else 1f,
-                    animationSpec = spring(stiffness = Spring.StiffnessMedium),
-                    label = "play_scale"
-                )
-                val playDescription = if (uiState.isRunning) {
-                    stringResource(R.string.action_stop_validation)
-                } else {
-                    stringResource(R.string.action_start_validation)
-                }
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    val playInteraction = remember { MutableInteractionSource() }
+                    val isPlayPressed by playInteraction.collectIsPressedAsState()
+                    val playScale by animateFloatAsState(
+                        targetValue = if (isPlayPressed) 0.97f else 1f,
+                        animationSpec = spring(stiffness = Spring.StiffnessMedium),
+                        label = "play_scale"
+                    )
+                    val playDescription = if (uiState.isRunning) {
+                        stringResource(R.string.action_stop_validation)
+                    } else {
+                        stringResource(R.string.action_start_validation)
+                    }
+                    val playAccent = if (uiState.isRunning) consoleColors.liveAccent else colorScheme.primary
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .minimumInteractiveComponentSize()
-                        .background(if (isPlayPressed) ActionButtonHoverSurface else ActionButtonSurface)
-                        .clickable(
-                            interactionSource = playInteraction,
-                            indication = null,
-                            onClick = onToggleRun
-                        )
-                        .semantics { contentDescription = playDescription }
-                        .testTag("play_validation_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(
-                        modifier = Modifier.scale(playScale),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .minimumInteractiveComponentSize()
+                            .background(
+                                if (uiState.isRunning) {
+                                    colorScheme.primaryContainer.copy(alpha = 0.45f)
+                                } else {
+                                    Color.Transparent
+                                }
+                            )
+                            .clickable(
+                                interactionSource = playInteraction,
+                                indication = androidx.compose.material3.ripple(color = playAccent),
+                                onClick = onToggleRun
+                            )
+                            .semantics { contentDescription = playDescription }
+                            .testTag("play_validation_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            modifier = Modifier.scale(playScale),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(30.dp)
+                                    .drawBehind {
+                                        drawCircle(
+                                            color = playAccent.copy(alpha = 0.16f),
+                                            radius = size.minDimension * 0.52f
+                                        )
+                                    }
+                            ) {
+                                OutlinedPlayOrStopGlyph(
+                                    isRunning = uiState.isRunning,
+                                    color = playAccent,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                            }
+                            if (uiState.isRunning && uiState.totalBatchCount > 0) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "${uiState.processedCount}/${uiState.totalBatchCount}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = playAccent
+                                )
+                            }
+                        }
+
+                        if (uiState.isRunning && uiState.totalBatchCount > 0) {
+                            val progress = (uiState.processedCount.toFloat() / uiState.totalBatchCount.toFloat())
+                                .coerceIn(0f, 1f)
+                            LinearProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(2.5.dp)
+                                    .align(Alignment.BottomCenter),
+                                color = playAccent,
+                                trackColor = colorScheme.surfaceVariant
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(
+                        thickness = 1.dp,
+                        color = colorScheme.outlineVariant.copy(alpha = 0.85f)
+                    )
+
+                    val gearInteraction = remember { MutableInteractionSource() }
+                    val isGearPressed by gearInteraction.collectIsPressedAsState()
+                    val gearScale by animateFloatAsState(
+                        targetValue = if (isGearPressed) 0.97f else 1f,
+                        animationSpec = spring(stiffness = Spring.StiffnessMedium),
+                        label = "gear_scale"
+                    )
+                    val settingsDescription = stringResource(R.string.action_open_settings)
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .minimumInteractiveComponentSize()
+                            .clickable(
+                                interactionSource = gearInteraction,
+                                indication = androidx.compose.material3.ripple(color = colorScheme.secondary),
+                                onClick = onOpenSettings
+                            )
+                            .semantics { contentDescription = settingsDescription }
+                            .testTag("settings_button"),
+                        contentAlignment = Alignment.Center
                     ) {
                         Box(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
-                                .size(28.dp)
+                                .scale(gearScale)
+                                .size(30.dp)
                                 .drawBehind {
                                     drawCircle(
-                                        color = PlayEmerald.copy(alpha = 0.12f),
+                                        color = colorScheme.secondary.copy(alpha = 0.16f),
                                         radius = size.minDimension * 0.52f
                                     )
                                 }
                         ) {
-                            OutlinedPlayOrStopGlyph(
-                                isRunning = uiState.isRunning,
-                                color = PlayEmerald,
-                                modifier = Modifier.size(16.dp)
+                            Icon(
+                                imageVector = Icons.Outlined.Settings,
+                                contentDescription = null,
+                                tint = colorScheme.secondary,
+                                modifier = Modifier.size(19.dp)
                             )
                         }
-                        if (uiState.isRunning && uiState.totalBatchCount > 0) {
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "${uiState.processedCount}/${uiState.totalBatchCount}",
-                                fontFamily = JetBrainsMonoFamily,
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = PlayEmerald
-                            )
-                        }
-                    }
-
-                    if (uiState.isRunning && uiState.totalBatchCount > 0) {
-                        val progress = (uiState.processedCount.toFloat() / uiState.totalBatchCount.toFloat())
-                            .coerceIn(0f, 1f)
-                        LinearProgressIndicator(
-                            progress = { progress },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(2.dp)
-                                .align(Alignment.BottomCenter),
-                            color = PlayEmerald,
-                            trackColor = Color.Transparent
-                        )
-                    }
-                }
-
-                HorizontalDivider(
-                    thickness = 1.dp,
-                    color = Color(0xFF13151A)
-                )
-
-                val gearInteraction = remember { MutableInteractionSource() }
-                val isGearPressed by gearInteraction.collectIsPressedAsState()
-                val gearScale by animateFloatAsState(
-                    targetValue = if (isGearPressed) 0.98f else 1f,
-                    animationSpec = spring(stiffness = Spring.StiffnessMedium),
-                    label = "gear_scale"
-                )
-                val settingsDescription = stringResource(R.string.action_open_settings)
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .minimumInteractiveComponentSize()
-                        .background(if (isGearPressed) ActionButtonHoverSurface else ActionButtonSurface)
-                        .clickable(
-                            interactionSource = gearInteraction,
-                            indication = null,
-                            onClick = onOpenSettings
-                        )
-                        .semantics { contentDescription = settingsDescription }
-                        .testTag("settings_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .scale(gearScale)
-                            .size(28.dp)
-                            .drawBehind {
-                                drawCircle(
-                                    color = GearRoyalBlue.copy(alpha = 0.12f),
-                                    radius = size.minDimension * 0.52f
-                                )
-                            }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Settings,
-                            contentDescription = null,
-                            tint = GearRoyalBlue,
-                            modifier = Modifier.size(18.dp)
-                        )
                     }
                 }
             }
 
             AnimatedVisibility(
-                visible = (copiedFeedback != null || uiState.statusBannerMessage != null),
+                visible = uiState.statusBannerMessage != null,
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
-                val msg = copiedFeedback ?: uiState.statusBannerMessage.orEmpty()
+                val msg = uiState.statusBannerMessage.orEmpty()
                 if (msg.isNotEmpty()) {
-                    Row(
+                    Surface(
+                        onClick = onClearBanner,
+                        shape = MaterialTheme.shapes.small,
+                        color = colorScheme.secondaryContainer.copy(alpha = 0.5f),
+                        border = BorderStroke(1.dp, colorScheme.outlineVariant),
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 10.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(InputConsoleSurface)
-                            .border(1.dp, ActionButtonBorder, RoundedCornerShape(4.dp))
-                            .clickable(onClick = onClearBanner)
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = msg,
-                            fontFamily = InterFontFamily,
-                            fontSize = 11.5.sp,
-                            color = TextSecondaryMuted,
-                            modifier = Modifier.weight(1f)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = msg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colorScheme.onSecondaryContainer,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Icon(
+                                imageVector = Icons.Outlined.Close,
+                                contentDescription = "Dismiss status",
+                                tint = colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-fun DeveloperChannelFooter(
-    channelUrl: String,
-    onOpenChannel: () -> Unit,
-    onCopyChannelUrl: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .background(CardContainerSurface.copy(alpha = 0.85f))
-            .border(
-                width = 1.dp,
-                color = CardContainerBorder.copy(alpha = 0.7f),
-                shape = RoundedCornerShape(6.dp)
-            )
-            .clickable(onClick = onOpenChannel)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
-            .testTag("footer_developer_channel_card"),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(TelegramSkyBlue.copy(alpha = 0.16f))
-                    .border(1.dp, TelegramSkyBlue.copy(alpha = 0.45f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                TelegramPaperPlaneIcon(
-                    color = TelegramSkyBlue,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
-            Spacer(modifier = Modifier.width(10.dp))
-            Column {
-                Text(
-                    text = "Developer Channel • @drkingbd",
-                    fontFamily = InterFontFamily,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = TextPrimaryLight,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = channelUrl,
-                    fontFamily = JetBrainsMonoFamily,
-                    fontSize = 10.5.sp,
-                    color = TelegramSkyBlue,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .minimumInteractiveComponentSize()
-                    .clip(RoundedCornerShape(4.dp))
-                    .clickable(onClick = onCopyChannelUrl)
-                    .padding(6.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.ContentCopy,
-                    contentDescription = "Copy channel URL",
-                    tint = TextSecondaryMuted,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-            Icon(
-                imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
-                contentDescription = "Open Telegram Channel",
-                tint = TelegramSkyBlue,
-                modifier = Modifier.size(16.dp)
-            )
         }
     }
 }
@@ -782,33 +494,36 @@ fun DeveloperChannelFooter(
 private fun ConsoleMiniActionPill(
     label: String,
     icon: ImageVector,
-    tint: Color,
+    containerColor: Color,
+    contentColor: Color,
     onClick: () -> Unit,
     testTag: String
 ) {
-    Box(
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.extraSmall,
+        color = containerColor,
+        border = BorderStroke(1.dp, contentColor.copy(alpha = 0.25f)),
         modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(CardContainerSurface)
-            .border(1.dp, ActionButtonBorder, RoundedCornerShape(4.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 7.dp, vertical = 4.dp)
+            .clip(MaterialTheme.shapes.extraSmall)
             .testTag(testTag)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = tint,
-                modifier = Modifier.size(12.dp)
+                tint = contentColor,
+                modifier = Modifier.size(13.dp)
             )
-            Spacer(modifier = Modifier.width(3.5.dp))
+            Spacer(modifier = Modifier.width(4.dp))
             Text(
                 text = label,
-                fontFamily = JetBrainsMonoFamily,
-                fontSize = 10.5.sp,
-                fontWeight = FontWeight.Medium,
-                color = tint
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = contentColor
             )
         }
     }
@@ -821,7 +536,7 @@ private fun OutlinedPlayOrStopGlyph(
     modifier: Modifier = Modifier
 ) {
     Canvas(modifier = modifier) {
-        val strokeWidth = 1.75.dp.toPx()
+        val strokeWidth = 1.9.dp.toPx()
         if (isRunning) {
             val side = size.minDimension * 0.68f
             val offset = (size.minDimension - side) / 2f
@@ -829,7 +544,7 @@ private fun OutlinedPlayOrStopGlyph(
                 color = color,
                 topLeft = Offset(offset, offset),
                 size = Size(side, side),
-                cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
+                cornerRadius = CornerRadius(2.5.dp.toPx(), 2.5.dp.toPx()),
                 style = Stroke(width = strokeWidth)
             )
         } else {
@@ -855,31 +570,5 @@ private fun OutlinedPlayOrStopGlyph(
                 )
             )
         }
-    }
-}
-
-@Composable
-fun TelegramPaperPlaneIcon(
-    color: Color,
-    modifier: Modifier = Modifier
-) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val path = Path().apply {
-            moveTo(w * 0.08f, h * 0.48f)
-            lineTo(w * 0.92f, h * 0.14f)
-            lineTo(w * 0.74f, h * 0.88f)
-            lineTo(w * 0.46f, h * 0.64f)
-            lineTo(w * 0.32f, h * 0.78f)
-            lineTo(w * 0.35f, h * 0.56f)
-            lineTo(w * 0.76f, h * 0.26f)
-            lineTo(w * 0.28f, h * 0.53f)
-            close()
-        }
-        drawPath(
-            path = path,
-            color = color
-        )
     }
 }

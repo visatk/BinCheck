@@ -6,6 +6,8 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.work.ListenableWorker
 import androidx.work.testing.TestListenableWorkerBuilder
 import androidx.work.workDataOf
+import com.example.data.AppThemeMode
+import com.example.data.ValidatorPreferencesRepository
 import com.example.data.local.AppDatabase
 import com.example.data.local.HistoryFilter
 import com.example.data.local.ValidationHistoryRepository
@@ -123,5 +125,26 @@ class ExampleRobolectricTest {
         assertEquals(3, savedHistory.size)
         assertTrue(appRepo.getQueuedBatch(batchId).isEmpty())
         appRepo.clearAllHistory()
+    }
+
+    @Test
+    fun `preferences repository persists theme mode and dynamic color`() = runTest {
+        val prefsRepo = ValidatorPreferencesRepository(context)
+        prefsRepo.updateSettings(
+            validationMode = ValidationMode.LOCAL_DETERMINISTIC,
+            webhookUrl = "",
+            autoResolveWildcards = true,
+            batchDelayMs = 40L,
+            concurrency = 6,
+            patternTemplate = "453225005536xxx3|08|2028|113",
+            generateQuantity = 25,
+            themeMode = AppThemeMode.LIGHT,
+            useDynamicColor = false
+        )
+
+        val stored = prefsRepo.settingsFlow.first()
+        assertEquals(AppThemeMode.LIGHT, stored.themeMode)
+        assertEquals(false, stored.useDynamicColor)
+        assertEquals(6, stored.concurrency)
     }
 }

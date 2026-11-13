@@ -3,23 +3,26 @@
 ## Overview
 - **App Name**: BinCheck (`com.aistudio.bincheck.vqxkpm`)
 - **Developer Channel**: `https://t.me/drkingbd` (`@drkingbd`)
-- **Target / Compile SDK**: Android 36 (minSdk 24), Edge-to-Edge enabled, Jetpack Compose + Material 3 Expressive Dark Console.
+- **Target / Compile SDK**: Android 36 (minSdk 24), Edge-to-Edge enabled (`SystemBarStyle.dark`/`light` adaptive), Jetpack Compose + Material 3 Expressive with Material You Dynamic Color.
 - **Core Purpose**: Production-grade batch pipe-delimited card/token format validator (`NUMBER|MM|YYYY|CVV`), mathematical `x` wildcard Luhn-compliant generator, real-time IIN/BIN scheme inspector, and optional HTTP Webhook/Gateway batch verifier.
 
-## UI & Visual Architecture (Refined Dark Console Luxury)
-- **Atmospheric Depth & Surface Hierarchy**:
-  - Deep obsidian-slate canvas (`#14161B` to `#17191E`) with subtle radial ambient lighting (`Modifier.drawBehind`) and top specular border hairline (`#2C303A`).
-  - **Top Telemetry & Developer Bar**: Displays real-time engine mode badge (`LUHN ENGINE` / `WEBHOOK`), live BIN/IIN brand detection chip (`VISA`, `MASTERCARD`, `AMEX`, etc.), and an interactive **Developer Channel (`@drkingbd`)** pill linking directly to `https://t.me/drkingbd`.
-  - **Elevated Main Console Card (`#1D2026`)**:
-    - **Recessed IDE-Style Monospace Console (`#111317`)**: Features a dynamic line-number gutter (`01`, `02`...), `JetBrains Mono` typography, exact `453225005536xxx3|08|2028|113` placeholder hint, animated focus border, and responsive `FlowRow` quick-action utility chips (`File`, `Gen 10x`, `Solve x`, `Paste`, `Clear`).
+## UI & Visual Architecture (Material 3 Expressive + Dynamic Color)
+- **Material 3 Theme System (`Color.kt`, `Shape.kt`, `Type.kt`, `Theme.kt`)**:
+  - **Dynamic Color (Android 12+)**: Uses `dynamicDarkColorScheme` and `dynamicLightColorScheme` with curated obsidian-emerald dark & crisp light tonal surface container fallbacks (`surfaceContainerLowest` through `surfaceContainerHighest`) for Android < 12 or when toggled off.
+  - **Appearance Preferences**: User-selectable `System` / `Dark` / `Light` theme mode (`SingleChoiceSegmentedButtonRow`) and Material You Dynamic Color `Switch` in Settings, persisted via Jetpack `DataStore`.
+  - **Semantic Status Provider (`LocalConsoleColors`)**: Harmonized high-contrast accents for `Live`, `Die`, `Unknown`, and `@drkingbd` Telegram brand surfaces across both dark and light themes.
+  - **Top Telemetry & Developer Bar (`TelemetryComponents.kt`)**: Displays real-time engine mode badge (`LUHN` / `WEBHOOK`), live BIN/IIN brand detection chip, Room History counter pill, and interactive **Developer Channel (`@drkingbd`)** pill linking directly to `https://t.me/drkingbd`.
+  - **Elevated Main Console Card (`ConsoleComponents.kt`)**:
+    - **Recessed IDE-Style Monospace Console (`surfaceContainerLowest`)**: Dynamic line-number gutter (`01`, `02`...), `JetBrains Mono` typography, exact `453225005536xxx3|08|2028|113` placeholder hint, animated focus border, and quick-action M3 tonal pills (`File`, `Gen 10x`, `Solve x`, `Paste`, `Clear`).
     - **Zero-Permission File Picker (`FileImportBottomSheet.kt` + `FileTextExtractor.kt`)**: Uses Android Storage Access Framework (`ActivityResultContracts.OpenDocument`) to select `.txt` and `.html`/`.htm` files from device storage, strips HTML tags/scripts/entities, previews extracted lines, and supports Append/Replace + Smart Delimited Record filtering.
-    - **Adaptive Responsive Layout (`BoxWithConstraints`)**: Switches dynamically between a centered single-column layout on compact portrait screens and a side-by-side two-pane layout (`Console` left / `Results` right) on landscape, foldables, and tablets (`maxWidth >= 680.dp`).
-    - **Dual Full-Width Action Bars (`#1A1D23`)**:
-      1. **Run / Stop Bar**: Crisp outlined Emerald Play Triangle (`#10B981`) with subtle glow halo when idle; live progress bar + processed counter + Stop square when active.
-      2. **Settings / Tools Bar**: Crisp outlined Royal Blue Gear (`#2563EB`) with subtle glow halo to open the Pattern Generator & Gateway Configuration sheet.
-  - **Bottom 3D Results Card (`#1D2026`)**:
-    - **3-Tab Header**: `Live` (`#10B981` + animated badge), `Die` (`#E8ECF2` + animated badge), `Unknown` (`#E8ECF2` + animated badge), where the active tab sits on a raised 3D surface (`#22262F`) with a subtle top accent line and elevation shadow.
-    - **Results Viewport**: Expandable list of validated records with scheme badge, diagnostic breakdown, latency (`ms`), Copy All, Copy Single Row, and Clear actions.
+    - **Adaptive Responsive Layout (`BoxWithConstraints` + M3 `Scaffold` + `SnackbarHost`)**: Switches dynamically between a centered single-column layout on compact portrait screens and a side-by-side two-pane layout (`Console` left / `Results` right) on landscape, foldables, and tablets (`maxWidth >= 680.dp`).
+    - **Dual Full-Width M3 Action Bars (`surfaceContainerHigh`)**:
+      1. **Run / Stop Bar**: Crisp outlined Play Triangle (`colorScheme.primary`) with Material ripple feedback when idle; live `LinearProgressIndicator` + processed counter + Stop square when active.
+      2. **Settings / Tools Bar**: Crisp outlined Gear (`colorScheme.secondary`) opening the Pattern Generator, Appearance & Gateway Configuration sheet.
+  - **Bottom 3D Results Card (`ResultsComponents.kt`)**:
+    - **3-Tab Header**: `Live`, `Die`, `Unknown` with tonal container elevation (`surfaceContainerHighest`), top semantic accent stripe, and animated count badges.
+    - **Results Viewport**: Expandable list of validated records with scheme badge, diagnostic breakdown, latency (`ms`), M3 `FilledTonalButton` Copy All, Clear, and single-row copy/remove actions.
+  - **History Log (`HistoryLogBottomSheet.kt`)**: M3 `FilterChip` filters (`All`, `Success`, `Failure`), live search, and local Room audit trail.
   - **Developer Channel Footer & Settings Integration**:
     - Direct one-tap intent launcher (`Intent.ACTION_VIEW`) for `https://t.me/drkingbd` on the main screen footer and inside the Settings bottom sheet.
 

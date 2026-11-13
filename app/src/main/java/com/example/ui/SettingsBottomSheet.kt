@@ -3,9 +3,8 @@ package com.example.ui
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -39,11 +37,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -57,29 +56,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.AppThemeMode
 import com.example.data.ValidatorSettings
 import com.example.domain.ValidationMode
-import com.example.ui.theme.ActionButtonBorder
-import com.example.ui.theme.ActionButtonSurface
-import com.example.ui.theme.CardContainerSurface
-import com.example.ui.theme.DieCrimson
-import com.example.ui.theme.GearRoyalBlue
-import com.example.ui.theme.InputConsoleSurface
-import com.example.ui.theme.JetBrainsMonoFamily
-import com.example.ui.theme.PlayEmerald
-import com.example.ui.theme.TelegramSkyBlue
-import com.example.ui.theme.TextPrimaryLight
-import com.example.ui.theme.TextSecondaryMuted
+import com.example.ui.theme.LocalConsoleColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -93,7 +80,9 @@ fun SettingsBottomSheet(
         batchDelayMs: Long,
         concurrency: Int,
         patternTemplate: String,
-        generateQuantity: Int
+        generateQuantity: Int,
+        themeMode: AppThemeMode,
+        useDynamicColor: Boolean
     ) -> Unit,
     onGenerateBatchToConsole: (pattern: String, quantity: Int) -> Unit,
     onClearAllBuckets: () -> Unit
@@ -102,6 +91,8 @@ fun SettingsBottomSheet(
 
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val colorScheme = MaterialTheme.colorScheme
+    val consoleColors = LocalConsoleColors.current
 
     var selectedMode by remember(settings) { mutableStateOf(settings.validationMode) }
     var webhookUrl by remember(settings) { mutableStateOf(settings.webhookUrl) }
@@ -110,15 +101,16 @@ fun SettingsBottomSheet(
     var concurrency by remember(settings) { mutableIntStateOf(settings.concurrency) }
     var patternTemplate by remember(settings) { mutableStateOf(settings.patternTemplate) }
     var generateQty by remember(settings) { mutableIntStateOf(settings.generateQuantity) }
+    var selectedThemeMode by remember(settings) { mutableStateOf(settings.themeMode) }
+    var useDynamicColor by remember(settings) { mutableStateOf(settings.useDynamicColor) }
 
     val channelUrl = stringResource(R.string.developer_channel_url)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = CardContainerSurface,
-        contentColor = TextPrimaryLight,
-        scrimColor = Color.Black.copy(alpha = 0.72f)
+        containerColor = colorScheme.surfaceContainerLow,
+        contentColor = colorScheme.onSurface
     ) {
         Column(
             modifier = Modifier
@@ -132,17 +124,16 @@ fun SettingsBottomSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = stringResource(R.string.settings_title),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = TextPrimaryLight,
-                        fontWeight = FontWeight.Bold
+                        style = MaterialTheme.typography.titleLarge,
+                        color = colorScheme.onSurface
                     )
                     Text(
-                        text = "ISO/IEC 7812 Luhn, BIN/IIN, Expiry & Pattern Engine",
-                        fontSize = 12.sp,
-                        color = TextSecondaryMuted
+                        text = "ISO/IEC 7812 Luhn, BIN/IIN, Dynamic Theme & Engine",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurfaceVariant
                     )
                 }
                 IconButton(
@@ -152,154 +143,162 @@ fun SettingsBottomSheet(
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Close settings",
-                        tint = TextSecondaryMuted
+                        tint = colorScheme.onSurfaceVariant
                     )
                 }
             }
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Developer Channel Highlight Card (https://t.me/drkingbd)
-            Box(
+            // Developer Channel Card
+            Surface(
+                onClick = {
+                    runCatching {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(channelUrl)).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(intent)
+                    }
+                },
+                shape = MaterialTheme.shapes.medium,
+                color = consoleColors.telegramContainer,
+                border = BorderStroke(1.dp, consoleColors.telegramAccent.copy(alpha = 0.45f)),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(
-                        Brush.horizontalGradient(
-                            colors = listOf(
-                                TelegramSkyBlue.copy(alpha = 0.16f),
-                                GearRoyalBlue.copy(alpha = 0.10f)
-                            )
-                        )
-                    )
-                    .border(
-                        width = 1.dp,
-                        color = TelegramSkyBlue.copy(alpha = 0.42f),
-                        shape = RoundedCornerShape(10.dp)
-                    )
-                    .clickable {
-                        runCatching {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(channelUrl)).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            context.startActivity(intent)
-                        }
-                    }
-                    .padding(horizontal = 14.dp, vertical = 12.dp)
                     .testTag("settings_developer_channel_card")
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(
+                                    consoleColors.telegramAccent.copy(alpha = 0.10f),
+                                    colorScheme.secondary.copy(alpha = 0.06f)
+                                )
+                            )
+                        )
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(TelegramSkyBlue.copy(alpha = 0.22f))
-                                .border(1.dp, TelegramSkyBlue.copy(alpha = 0.55f), CircleShape),
-                            contentAlignment = Alignment.Center
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = consoleColors.telegramAccent.copy(alpha = 0.2f),
+                            border = BorderStroke(1.dp, consoleColors.telegramAccent.copy(alpha = 0.55f)),
+                            modifier = Modifier.size(36.dp)
                         ) {
-                            TelegramPaperPlaneIcon(
-                                color = TelegramSkyBlue,
-                                modifier = Modifier.size(17.dp)
-                            )
+                            Box(contentAlignment = Alignment.Center) {
+                                TelegramPaperPlaneIcon(
+                                    color = consoleColors.telegramAccent,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                            }
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     text = stringResource(R.string.developer_channel_title),
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimaryLight
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = colorScheme.onSurface
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Box(
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(TelegramSkyBlue.copy(alpha = 0.2f))
-                                        .padding(horizontal = 6.dp, vertical = 1.dp)
+                                        .clip(MaterialTheme.shapes.extraSmall)
+                                        .background(consoleColors.telegramAccent.copy(alpha = 0.18f))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
                                     Text(
                                         text = stringResource(R.string.developer_channel_handle),
-                                        fontFamily = JetBrainsMonoFamily,
-                                        fontSize = 10.5.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = TelegramSkyBlue
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = consoleColors.telegramAccent
                                     )
                                 }
                             }
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = channelUrl,
-                                fontFamily = JetBrainsMonoFamily,
-                                fontSize = 11.5.sp,
-                                color = TextSecondaryMuted
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colorScheme.onSurfaceVariant
                             )
                         }
                     }
 
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(TelegramSkyBlue)
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = consoleColors.telegramAccent
                     ) {
-                        Text(
-                            text = stringResource(R.string.open_telegram),
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF06131C)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
-                            contentDescription = null,
-                            tint = Color(0xFF06131C),
-                            modifier = Modifier.size(13.dp)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = stringResource(R.string.open_telegram),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = consoleColors.onTelegramAccent
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
+                                contentDescription = null,
+                                tint = consoleColors.onTelegramAccent,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // Section 1: Wildcard Pattern Batch Generator
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(InputConsoleSurface)
-                    .border(1.dp, ActionButtonBorder, RoundedCornerShape(10.dp))
-                    .padding(14.dp)
+            // Material 3 Appearance & Dynamic Color Card
+            AppearanceSectionCard(
+                selectedThemeMode = selectedThemeMode,
+                useDynamicColor = useDynamicColor,
+                onSelectThemeMode = { selectedThemeMode = it },
+                onToggleDynamicColor = { useDynamicColor = it }
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Wildcard Pattern Batch Generator Card
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.medium,
+                color = colorScheme.surfaceContainerLowest,
+                border = BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
-                Column {
+                Column(modifier = Modifier.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.AutoFixHigh,
                             contentDescription = null,
-                            tint = PlayEmerald,
+                            tint = colorScheme.primary,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = stringResource(R.string.generator_section_title),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = TextPrimaryLight
+                            style = MaterialTheme.typography.titleSmall,
+                            color = colorScheme.onSurface
                         )
                     }
 
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Use 'x' for wildcard digits. The mathematical solver computes exact Luhn Mod-10 check digits automatically.",
-                        fontSize = 11.5.sp,
-                        color = TextSecondaryMuted,
-                        lineHeight = 16.sp
+                        text = "Use 'x' for wildcard digits. Computes exact Luhn Mod-10 check digits automatically.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurfaceVariant
                     )
 
                     Spacer(modifier = Modifier.height(10.dp))
@@ -310,56 +309,37 @@ fun SettingsBottomSheet(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("pattern_template_input"),
-                        label = { Text("Pattern (PAN|MM|YYYY|CVV)", fontSize = 12.sp) },
-                        placeholder = { Text("453225005536xxx3|08|2028|113", fontSize = 12.sp) },
-                        textStyle = TextStyle(
-                            fontFamily = JetBrainsMonoFamily,
-                            fontSize = 13.sp,
-                            color = TextPrimaryLight
-                        ),
+                        label = { Text("Pattern (PAN|MM|YYYY|CVV)") },
+                        placeholder = { Text("453225005536xxx3|08|2028|113") },
+                        textStyle = MaterialTheme.typography.labelMedium,
                         singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = PlayEmerald,
-                            unfocusedBorderColor = ActionButtonBorder,
-                            focusedLabelColor = PlayEmerald,
-                            unfocusedLabelColor = TextSecondaryMuted,
-                            cursorColor = PlayEmerald
-                        )
+                        shape = MaterialTheme.shapes.small
                     )
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Quantity:",
-                            fontSize = 12.sp,
-                            color = TextSecondaryMuted
-                        )
-                        listOf(5, 10, 25, 50).forEach { countOption ->
-                            val isSelected = generateQty == countOption
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (isSelected) PlayEmerald.copy(alpha = 0.2f) else ActionButtonSurface)
-                                    .border(
-                                        width = 1.dp,
-                                        color = if (isSelected) PlayEmerald else ActionButtonBorder,
-                                        shape = RoundedCornerShape(6.dp)
-                                    )
-                                    .clickable { generateQty = countOption }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                                    .testTag("qty_chip_$countOption")
+                    Text(
+                        text = "Batch Quantity",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    val qtyOptions = listOf(5, 10, 25, 50)
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        qtyOptions.forEachIndexed { index, countOption ->
+                            SegmentedButton(
+                                selected = generateQty == countOption,
+                                onClick = { generateQty = countOption },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = qtyOptions.size
+                                ),
+                                modifier = Modifier.testTag("qty_chip_$countOption")
                             ) {
                                 Text(
                                     text = "$countOption",
-                                    fontFamily = JetBrainsMonoFamily,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = if (isSelected) PlayEmerald else TextPrimaryLight
+                                    style = MaterialTheme.typography.labelMedium
                                 )
                             }
                         }
@@ -368,18 +348,12 @@ fun SettingsBottomSheet(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Button(
-                        onClick = {
-                            onGenerateBatchToConsole(patternTemplate, generateQty)
-                        },
+                        onClick = { onGenerateBatchToConsole(patternTemplate, generateQty) },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(48.dp)
                             .testTag("generate_batch_to_console_button"),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = PlayEmerald,
-                            contentColor = Color(0xFF071712)
-                        )
+                        shape = MaterialTheme.shapes.small
                     ) {
                         Icon(
                             imageVector = Icons.Default.AutoFixHigh,
@@ -389,23 +363,20 @@ fun SettingsBottomSheet(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = stringResource(R.string.generate_batch_button),
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
+                            style = MaterialTheme.typography.labelLarge
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
-            HorizontalDivider(color = ActionButtonBorder)
             Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider(color = colorScheme.outlineVariant)
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // Section 2: Validation Engine Mode
             Text(
                 text = "Validation Engine Mode",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = TextPrimaryLight
+                style = MaterialTheme.typography.titleSmall,
+                color = colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -437,166 +408,134 @@ fun SettingsBottomSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("webhook_url_input"),
-                    label = { Text(stringResource(R.string.endpoint_url_label), fontSize = 11.5.sp) },
-                    placeholder = { Text("https://api.example.com/verify?lista={lista}", fontSize = 12.sp) },
-                    textStyle = TextStyle(
-                        fontFamily = JetBrainsMonoFamily,
-                        fontSize = 12.5.sp,
-                        color = TextPrimaryLight
-                    ),
+                    label = { Text(stringResource(R.string.endpoint_url_label)) },
+                    placeholder = { Text("https://api.example.com/verify?lista={lista}") },
+                    textStyle = MaterialTheme.typography.labelMedium,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = GearRoyalBlue,
-                        unfocusedBorderColor = ActionButtonBorder,
-                        focusedLabelColor = GearRoyalBlue,
-                        unfocusedLabelColor = TextSecondaryMuted,
-                        cursorColor = GearRoyalBlue
-                    )
-                )
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Auto-resolve wildcards switch
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(InputConsoleSurface)
-                    .border(1.dp, ActionButtonBorder, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Auto-Solve 'x' Wildcards on Play",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = TextPrimaryLight
-                    )
-                    Text(
-                        text = "Automatically resolves 'x' digits to Luhn-valid numbers when running",
-                        fontSize = 11.5.sp,
-                        color = TextSecondaryMuted
-                    )
-                }
-                Switch(
-                    checked = autoResolveWildcards,
-                    onCheckedChange = { autoResolveWildcards = it },
-                    modifier = Modifier.testTag("auto_resolve_wildcards_switch"),
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = PlayEmerald
-                    )
+                    shape = MaterialTheme.shapes.small
                 )
             }
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Batch Delay Slider
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(InputConsoleSurface)
-                    .border(1.dp, ActionButtonBorder, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.medium,
+                color = colorScheme.surfaceContainerLowest,
+                border = BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "Batch Stream Delay",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = TextPrimaryLight
-                    )
-                    Text(
-                        text = "${delayMs.toLong()} ms / item",
-                        fontFamily = JetBrainsMonoFamily,
-                        fontSize = 12.sp,
-                        color = PlayEmerald
-                    )
-                }
-                Slider(
-                    value = delayMs,
-                    onValueChange = { delayMs = it },
-                    valueRange = 0f..400f,
-                    steps = 7,
-                    colors = SliderDefaults.colors(
-                        thumbColor = GearRoyalBlue,
-                        activeTrackColor = GearRoyalBlue
-                    )
-                )
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Simultaneous Worker Concurrency Selector
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(InputConsoleSurface)
-                    .border(1.dp, ActionButtonBorder, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 14.dp, vertical = 12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Simultaneous Worker Concurrency",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = TextPrimaryLight
-                    )
-                    Text(
-                        text = "${concurrency}x parallel",
-                        fontFamily = JetBrainsMonoFamily,
-                        fontSize = 12.sp,
-                        color = GearRoyalBlue
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Auto-Solve 'x' Wildcards on Play",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Automatically resolves 'x' digits to Luhn-valid numbers when running",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Switch(
+                        checked = autoResolveWildcards,
+                        onCheckedChange = { autoResolveWildcards = it },
+                        modifier = Modifier.testTag("auto_resolve_wildcards_switch")
                     )
                 }
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Number of entries validated concurrently against the webhook/API endpoint.",
-                    fontSize = 11.5.sp,
-                    color = TextSecondaryMuted
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    listOf(1, 2, 4, 6, 8).forEach { workers ->
-                        val isSelected = concurrency == workers
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (isSelected) GearRoyalBlue.copy(alpha = 0.2f) else ActionButtonSurface)
-                                .border(
-                                    width = 1.dp,
-                                    color = if (isSelected) GearRoyalBlue else ActionButtonBorder,
-                                    shape = RoundedCornerShape(6.dp)
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.medium,
+                color = colorScheme.surfaceContainerLowest,
+                border = BorderStroke(1.dp, colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Batch Stream Delay",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = colorScheme.onSurface
+                        )
+                        Text(
+                            text = "${delayMs.toLong()} ms / item",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colorScheme.primary
+                        )
+                    }
+                    Slider(
+                        value = delayMs,
+                        onValueChange = { delayMs = it },
+                        valueRange = 0f..400f,
+                        steps = 7
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.medium,
+                color = colorScheme.surfaceContainerLowest,
+                border = BorderStroke(1.dp, colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Simultaneous Worker Concurrency",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = colorScheme.onSurface
+                        )
+                        Text(
+                            text = "${concurrency}x parallel",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colorScheme.secondary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Entries validated concurrently against the webhook/API endpoint.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    val workerOptions = listOf(1, 2, 4, 6, 8)
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        workerOptions.forEachIndexed { index, workers ->
+                            SegmentedButton(
+                                selected = concurrency == workers,
+                                onClick = { concurrency = workers },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = workerOptions.size
+                                ),
+                                modifier = Modifier.testTag("concurrency_chip_$workers")
+                            ) {
+                                Text(
+                                    text = "${workers}x",
+                                    style = MaterialTheme.typography.labelMedium
                                 )
-                                .clickable { concurrency = workers }
-                                .padding(vertical = 8.dp)
-                                .testTag("concurrency_chip_$workers"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "${workers}x",
-                                fontFamily = JetBrainsMonoFamily,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (isSelected) GearRoyalBlue else TextPrimaryLight
-                            )
+                            }
                         }
                     }
                 }
@@ -614,8 +553,8 @@ fun SettingsBottomSheet(
                         .weight(1f)
                         .height(48.dp)
                         .testTag("clear_all_buckets_button"),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = DieCrimson)
+                    shape = MaterialTheme.shapes.small,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.error)
                 ) {
                     Icon(
                         imageVector = Icons.Default.DeleteSweep,
@@ -623,7 +562,7 @@ fun SettingsBottomSheet(
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Reset Counts", fontSize = 13.sp)
+                    Text("Reset Counts", style = MaterialTheme.typography.labelLarge)
                 }
 
                 Button(
@@ -635,18 +574,16 @@ fun SettingsBottomSheet(
                             delayMs.toLong(),
                             concurrency,
                             patternTemplate,
-                            generateQty
+                            generateQty,
+                            selectedThemeMode,
+                            useDynamicColor
                         )
                     },
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
                         .testTag("save_settings_button"),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = GearRoyalBlue,
-                        contentColor = Color.White
-                    )
+                    shape = MaterialTheme.shapes.small
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.CheckCircle,
@@ -656,58 +593,10 @@ fun SettingsBottomSheet(
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = stringResource(R.string.save_close),
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp
+                        style = MaterialTheme.typography.labelLarge
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun ModeOptionCard(
-    title: String,
-    subtitle: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    selected: Boolean,
-    onClick: () -> Unit,
-    testTag: String
-) {
-    val borderColor = if (selected) GearRoyalBlue else ActionButtonBorder
-    val bgColor = if (selected) GearRoyalBlue.copy(alpha = 0.12f) else InputConsoleSurface
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(bgColor)
-            .border(1.dp, borderColor, RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-            .padding(12.dp)
-            .testTag(testTag),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = if (selected) GearRoyalBlue else TextSecondaryMuted,
-            modifier = Modifier.size(22.dp)
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = TextPrimaryLight
-            )
-            Text(
-                text = subtitle,
-                fontSize = 11.5.sp,
-                color = TextSecondaryMuted,
-                lineHeight = 15.sp
-            )
         }
     }
 }

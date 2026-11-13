@@ -12,6 +12,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.example.data.AppThemeMode
 import com.example.data.ValidatorPreferencesRepository
 import com.example.data.ValidatorSettings
 import com.example.data.local.AppDatabase
@@ -553,7 +554,9 @@ class ValidatorViewModel(
         batchDelayMs: Long,
         concurrency: Int,
         patternTemplate: String,
-        generateQuantity: Int
+        generateQuantity: Int,
+        themeMode: AppThemeMode,
+        useDynamicColor: Boolean
     ) {
         viewModelScope.launch {
             preferencesRepository.updateSettings(
@@ -563,7 +566,9 @@ class ValidatorViewModel(
                 batchDelayMs = batchDelayMs,
                 concurrency = concurrency,
                 patternTemplate = patternTemplate,
-                generateQuantity = generateQuantity
+                generateQuantity = generateQuantity,
+                themeMode = themeMode,
+                useDynamicColor = useDynamicColor
             )
             _localState.update {
                 it.copy(
