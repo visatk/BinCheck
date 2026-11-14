@@ -117,7 +117,7 @@ fun ValidatorScreen(
     }
 
     StartupPermissionsPromptEffect(
-        enabled = requestStartupPermissions,
+        enabled = requestStartupPermissions && uiState.settingsLoaded,
         alreadyPrompted = uiState.settings.hasPromptedNotifications,
         onPromptAttempted = viewModel::markNotificationPermissionPrompted,
         onResult = { granted ->

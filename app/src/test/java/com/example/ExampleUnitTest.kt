@@ -423,8 +423,8 @@ class ExampleUnitTest {
         val host = "probe-cancel.example.com"
         val breaker = HostCircuitBreaker(
             failureThreshold = 1,
-            openDurationMs = 1_000L,
-            clock = { now }
+            openCooldownMs = 1_000L,
+            timeProvider = { now }
         )
         breaker.recordTransientFailure(host)
         assertEquals(HostCircuitBreaker.State.OPEN, breaker.currentState(host))

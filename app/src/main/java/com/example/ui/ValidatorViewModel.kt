@@ -44,6 +44,7 @@ import com.example.domain.ValidationApiProviders
 import com.example.domain.ValidationMode
 import com.example.domain.ValidationRecord
 import com.example.worker.BatchValidationWorker
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -62,6 +63,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -97,6 +99,7 @@ data class ValidatorUiState(
     val importedFilePreview: ImportedFilePreview? = null,
     val loadedFileName: String? = null,
     val settings: ValidatorSettings = ValidatorSettings(),
+    val settingsLoaded: Boolean = false,
     val isTestingEndpoint: Boolean = false,
     val httpProbeResult: HttpProbeResult? = null,
     val isTestingTelegram: Boolean = false,
@@ -160,9 +163,11 @@ class ValidatorViewModel(
     private var batchResultsObserverJob: Job? = null
 
     init {
-        NetworkClientProvider.init(application)
-        BinLookupService.attachDao(AppDatabase.getInstance(application).binCacheDao())
-        refreshDeviceAndNetworkTelemetry()
+        viewModelScope.launch(Dispatchers.IO) {
+            NetworkClientProvider.init(application)
+            BinLookupService.attachDao(AppDatabase.getInstance(application).binCacheDao())
+            refreshDeviceAndNetworkTelemetry()
+        }
         observeDebouncedBinInput()
         reconnectOngoingBatchWork()
     }
@@ -246,6 +251,7 @@ class ValidatorViewModel(
         val filteredTotal = pagedPair.second
         state.copy(
             settings = prefs,
+            settingsLoaded = true,
             historyEntries = entries,
             historyFilteredTotalCount = filteredTotal,
             hasMoreHistory = entries.size < filteredTotal,
@@ -661,12 +667,8 @@ class ValidatorViewModel(
 
     private fun startBatchRun() {
         val currentState = uiState.value
-        val lines = currentState.rawInputText
-            .lines()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-
-        if (lines.isEmpty()) {
+        val rawInput = currentState.rawInputText
+        if (rawInput.isBlank()) {
             _localState.update {
                 it.copy(
                     statusBannerMessage = "Your console is empty — paste cards, import a file, or generate a quick batch."
@@ -675,6 +677,8 @@ class ValidatorViewModel(
             return
         }
 
+        activeWorkId?.let { workManager.cancelWorkById(it) }
+        activeWorkId = null
         workerObserverJob?.cancel()
         batchResultsObserverJob?.cancel()
 
@@ -693,6 +697,21 @@ class ValidatorViewModel(
         val sourceName = currentState.loadedFileName ?: "Console"
 
         viewModelScope.launch {
+            val lines = withContext(Dispatchers.Default) {
+                rawInput.lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .toList()
+            }
+            if (lines.isEmpty()) {
+                _localState.update {
+                    it.copy(
+                        statusBannerMessage = "Your console is empty — paste cards, import a file, or generate a quick batch."
+                    )
+                }
+                return@launch
+            }
+
             historyRepository.enqueueBatch(
                 batchId = batchId,
                 lines = lines,
@@ -840,8 +859,7 @@ class ValidatorViewModel(
             for (entity in deltaEntities.asReversed()) {
                 val bucket = runCatching { ResultBucket.valueOf(entity.status) }
                     .getOrDefault(ResultBucket.UNKNOWN)
-                val scheme = runCatching { CardScheme.valueOf(entity.scheme) }
-                    .getOrDefault(CardScheme.UNKNOWN)
+                val scheme = CardScheme.fromNameOrDisplayName(entity.scheme)
                 val record = ValidationRecord(
                     id = "hist_${entity.id}",
                     rawLine = entity.rawLine,
@@ -941,6 +959,7 @@ class ValidatorViewModel(
                     }
 
                     WorkInfo.State.FAILED -> {
+                        syncBatchResults()
                         activeWorkId = null
                         _localState.update { prev ->
                             prev.copy(
@@ -993,24 +1012,30 @@ class ValidatorViewModel(
             return
         }
 
-        val lines = currentText.lines().map { it.trim() }.filter { it.isNotEmpty() }
-        val expandedLines = if (lines.size == 1 && lines[0].any { it.equals('x', ignoreCase = true) }) {
-            CardValidatorEngine.expandPatternBatch(lines[0], uiState.value.settings.generateQuantity)
-        } else {
-            lines.flatMap { line ->
-                if (line.any { it.equals('x', ignoreCase = true) }) {
-                    CardValidatorEngine.expandPatternBatch(line, 1)
+        viewModelScope.launch {
+            val generateQty = uiState.value.settings.generateQuantity
+            val (expandedLines, joinedText) = withContext(Dispatchers.Default) {
+                val lines = currentText.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+                val expanded = if (lines.size == 1 && lines[0].any { it.equals('x', ignoreCase = true) }) {
+                    CardValidatorEngine.expandPatternBatch(lines[0], generateQty)
                 } else {
-                    listOf(line)
+                    lines.flatMap { line ->
+                        if (line.any { it.equals('x', ignoreCase = true) }) {
+                            CardValidatorEngine.expandPatternBatch(line, 1)
+                        } else {
+                            listOf(line)
+                        }
+                    }
                 }
+                expanded to expanded.joinToString("\n")
             }
-        }
 
-        _localState.update {
-            it.copy(
-                rawInputText = expandedLines.joinToString("\n"),
-                statusBannerMessage = "Solved wildcards for ${expandedLines.size} record(s)."
-            )
+            _localState.update {
+                it.copy(
+                    rawInputText = joinedText,
+                    statusBannerMessage = "Solved wildcards for ${expandedLines.size} record(s)."
+                )
+            }
         }
     }
 

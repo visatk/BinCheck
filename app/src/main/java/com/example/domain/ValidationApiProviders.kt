@@ -37,20 +37,23 @@ object ValidationApiProviders {
         cvv: String,
         scheme: CardScheme,
         timeoutSeconds: Int = 15,
-        startNanos: Long
+        startNanos: Long,
+        useCacheAndDedup: Boolean = true
     ): ValidationRecord {
         val cacheKey = "payate|$normalizedLine"
-        responseCache.get(cacheKey)?.let { cached ->
-            NetworkClientProvider.telemetry.recordCacheHit()
-            return cached.copy(
-                id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
-                rawLine = rawLine,
-                latencyMs = 1L,
-                message = "${cached.message} (Cached)"
-            )
+        if (useCacheAndDedup) {
+            responseCache.get(cacheKey)?.let { cached ->
+                NetworkClientProvider.telemetry.recordCacheHit()
+                return cached.copy(
+                    id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
+                    rawLine = rawLine,
+                    latencyMs = 1L,
+                    message = "${cached.message} (Cached)"
+                )
+            }
         }
 
-        val (record, wasCoalesced) = deduplicator.getOrExecute(cacheKey) {
+        suspend fun runNetworkCall(): ValidationRecord {
             val request = buildPayateRequest(normalizedLine)
             val fresh = executeSingleProvider(
                 providerName = "Payate",
@@ -67,10 +70,18 @@ object ValidationApiProviders {
                 startNanos = startNanos,
                 parser = { statusCode, body -> parsePayateResponse(statusCode, body) }
             )
-            if (fresh.bucket != ResultBucket.UNKNOWN) {
+            if (useCacheAndDedup && fresh.bucket != ResultBucket.UNKNOWN) {
                 responseCache.put(cacheKey, fresh, VERDICT_CACHE_TTL_MS)
             }
-            fresh
+            return fresh
+        }
+
+        if (!useCacheAndDedup) {
+            return runNetworkCall()
+        }
+
+        val (record, wasCoalesced) = deduplicator.getOrExecute(cacheKey) {
+            runNetworkCall()
         }
         if (wasCoalesced) {
             NetworkClientProvider.telemetry.recordDeduplicatedSaved()
@@ -87,20 +98,23 @@ object ValidationApiProviders {
         cvv: String,
         scheme: CardScheme,
         timeoutSeconds: Int = 15,
-        startNanos: Long
+        startNanos: Long,
+        useCacheAndDedup: Boolean = true
     ): ValidationRecord {
         val cacheKey = "chkr|$normalizedLine"
-        responseCache.get(cacheKey)?.let { cached ->
-            NetworkClientProvider.telemetry.recordCacheHit()
-            return cached.copy(
-                id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
-                rawLine = rawLine,
-                latencyMs = 1L,
-                message = "${cached.message} (Cached)"
-            )
+        if (useCacheAndDedup) {
+            responseCache.get(cacheKey)?.let { cached ->
+                NetworkClientProvider.telemetry.recordCacheHit()
+                return cached.copy(
+                    id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
+                    rawLine = rawLine,
+                    latencyMs = 1L,
+                    message = "${cached.message} (Cached)"
+                )
+            }
         }
 
-        val (record, wasCoalesced) = deduplicator.getOrExecute(cacheKey) {
+        suspend fun runNetworkCall(): ValidationRecord {
             val request = buildChkrRequest(normalizedLine)
             val fresh = executeSingleProvider(
                 providerName = "Chkr.cc",
@@ -121,10 +135,18 @@ object ValidationApiProviders {
                     parsed
                 }
             )
-            if (fresh.bucket != ResultBucket.UNKNOWN) {
+            if (useCacheAndDedup && fresh.bucket != ResultBucket.UNKNOWN) {
                 responseCache.put(cacheKey, fresh, VERDICT_CACHE_TTL_MS)
             }
-            fresh
+            return fresh
+        }
+
+        if (!useCacheAndDedup) {
+            return runNetworkCall()
+        }
+
+        val (record, wasCoalesced) = deduplicator.getOrExecute(cacheKey) {
+            runNetworkCall()
         }
         if (wasCoalesced) {
             NetworkClientProvider.telemetry.recordDeduplicatedSaved()
@@ -141,7 +163,8 @@ object ValidationApiProviders {
         cvv: String,
         scheme: CardScheme,
         timeoutSeconds: Int = 15,
-        startNanos: Long
+        startNanos: Long,
+        useCacheAndDedup: Boolean = true
     ): ValidationRecord {
         val primary = executeChkr(
             rawLine = rawLine,
@@ -152,7 +175,8 @@ object ValidationApiProviders {
             cvv = cvv,
             scheme = scheme,
             timeoutSeconds = timeoutSeconds,
-            startNanos = startNanos
+            startNanos = startNanos,
+            useCacheAndDedup = useCacheAndDedup
         )
         if (primary.bucket != ResultBucket.UNKNOWN) {
             return primary
@@ -168,7 +192,8 @@ object ValidationApiProviders {
             cvv = cvv,
             scheme = scheme,
             timeoutSeconds = timeoutSeconds,
-            startNanos = startNanos
+            startNanos = startNanos,
+            useCacheAndDedup = useCacheAndDedup
         )
         return if (secondary.bucket != ResultBucket.UNKNOWN) {
             secondary.copy(message = "${secondary.message} (Failover)")

@@ -299,7 +299,10 @@ fun ConsoleInputCard(
                                 testTag = "quick_gen_10x_button"
                             )
 
-                            if (uiState.rawInputText.any { it.equals('x', ignoreCase = true) }) {
+                            val hasWildcard = remember(uiState.rawInputText) {
+                                uiState.rawInputText.any { it.equals('x', ignoreCase = true) }
+                            }
+                            if (hasWildcard) {
                                 ConsoleMiniActionPill(
                                     label = "Solve x",
                                     icon = AppIcons.AutoFixHigh,

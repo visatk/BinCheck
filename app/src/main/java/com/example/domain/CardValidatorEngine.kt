@@ -44,7 +44,16 @@ enum class CardScheme(
     DINERS("DINERS", setOf(14, 16, 19), 3),
     UNIONPAY("UNIONPAY", setOf(16, 17, 18, 19), 3),
     MAESTRO("MAESTRO", setOf(12, 13, 14, 15, 16, 17, 18, 19), 3),
-    UNKNOWN("UNKNOWN", setOf(13, 14, 15, 16, 17, 18, 19), 3)
+    UNKNOWN("UNKNOWN", setOf(13, 14, 15, 16, 17, 18, 19), 3);
+
+    companion object {
+        fun fromNameOrDisplayName(raw: String): CardScheme {
+            val normalized = raw.trim().uppercase()
+            return entries.firstOrNull {
+                it.name == normalized || it.displayName.uppercase() == normalized
+            } ?: UNKNOWN
+        }
+    }
 }
 
 data class ValidationRecord(
@@ -407,7 +416,8 @@ object CardValidatorEngine {
                 cvv = cvv,
                 scheme = scheme,
                 timeoutSeconds = timeoutSec,
-                startNanos = startNanos
+                startNanos = startNanos,
+                useCacheAndDedup = useCacheAndDedup
             )
 
             ValidationMode.PAYATE_MOCK -> ValidationApiProviders.executePayate(
@@ -419,7 +429,8 @@ object CardValidatorEngine {
                 cvv = cvv,
                 scheme = scheme,
                 timeoutSeconds = timeoutSec,
-                startNanos = startNanos
+                startNanos = startNanos,
+                useCacheAndDedup = useCacheAndDedup
             )
 
             ValidationMode.MULTI_API_AUTO -> ValidationApiProviders.executeMultiApiFailover(
@@ -431,7 +442,8 @@ object CardValidatorEngine {
                 cvv = cvv,
                 scheme = scheme,
                 timeoutSeconds = timeoutSec,
-                startNanos = startNanos
+                startNanos = startNanos,
+                useCacheAndDedup = useCacheAndDedup
             )
 
             ValidationMode.REMOTE_WEBHOOK -> {
