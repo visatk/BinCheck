@@ -5,6 +5,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +17,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.AppThemeMode
@@ -60,6 +64,15 @@ class MainActivity : ComponentActivity() {
                 onDispose {}
             }
 
+            val workspaceScale by animateFloatAsState(
+                targetValue = if (showSplash) 0.985f else 1f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                ),
+                label = "workspace_launch_scale"
+            )
+
             MyApplicationTheme(
                 darkTheme = darkTheme,
                 dynamicColor = uiState.settings.useDynamicColor
@@ -68,7 +81,12 @@ class MainActivity : ComponentActivity() {
                     ValidatorScreen(
                         viewModel = validatorViewModel,
                         requestStartupPermissions = !showSplash,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                scaleX = workspaceScale
+                                scaleY = workspaceScale
+                            }
                     )
 
                     BinCheckSplashOverlay(

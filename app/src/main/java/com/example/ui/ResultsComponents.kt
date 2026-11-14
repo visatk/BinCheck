@@ -1,6 +1,7 @@
 package com.example.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
@@ -169,6 +170,42 @@ fun ResultsCard(
                 thickness = 0.5.dp,
                 color = colorScheme.outlineVariant.copy(alpha = 0.45f)
             )
+
+            AnimatedVisibility(visible = totalProcessedInSession > 0) {
+                val liveWeight = (uiState.liveRecords.size.toFloat() / totalProcessedInSession.coerceAtLeast(1)).coerceAtLeast(0.001f)
+                val dieWeight = (uiState.dieRecords.size.toFloat() / totalProcessedInSession.coerceAtLeast(1)).coerceAtLeast(0.001f)
+                val unknownWeight = (uiState.unknownRecords.size.toFloat() / totalProcessedInSession.coerceAtLeast(1)).coerceAtLeast(0.001f)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                ) {
+                    if (uiState.liveRecords.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .weight(liveWeight)
+                                .height(3.dp)
+                                .background(consoleColors.liveAccent)
+                        )
+                    }
+                    if (uiState.dieRecords.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .weight(dieWeight)
+                                .height(3.dp)
+                                .background(consoleColors.dieAccent)
+                        )
+                    }
+                    if (uiState.unknownRecords.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .weight(unknownWeight)
+                                .height(3.dp)
+                                .background(consoleColors.unknownAccent)
+                        )
+                    }
+                }
+            }
 
             val activeList = uiState.activeTabRecords
             if (activeList.isEmpty()) {

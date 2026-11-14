@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -470,7 +471,10 @@ fun ListToolkitBottomSheet(
                 // Active Tab Options for immediate visibility & focus
                 AnimatedContent(
                     targetState = activeTab,
-                    transitionSpec = { fadeIn() togetherWith fadeOut() },
+                    transitionSpec = {
+                        fadeIn(animationSpec = androidx.compose.animation.core.spring(stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow)) togetherWith
+                            fadeOut(animationSpec = androidx.compose.animation.core.spring(stiffness = androidx.compose.animation.core.Spring.StiffnessMedium))
+                    },
                     label = "toolkit_tab_transition"
                 ) { tab ->
                     when (tab) {
@@ -513,6 +517,7 @@ fun ListToolkitBottomSheet(
                     border = BorderStroke(0.75.dp, colorScheme.outlineVariant.copy(alpha = 0.55f)),
                     modifier = Modifier
                         .fillMaxWidth()
+                        .animateContentSize()
                         .testTag("toolkit_preview_card")
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {

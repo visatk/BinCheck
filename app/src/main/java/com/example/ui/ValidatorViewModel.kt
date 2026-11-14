@@ -1165,10 +1165,8 @@ class ValidatorViewModel(
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val app = (this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as Application)
-                NetworkClientProvider.init(app.applicationContext)
                 val prefsRepo = ValidatorPreferencesRepository(app.applicationContext)
                 val db = AppDatabase.getInstance(app.applicationContext)
-                BinLookupService.attachDao(db.binCacheDao())
                 val historyRepo = ValidationHistoryRepository(db.validationHistoryDao())
                 val workManager = WorkManager.getInstance(app.applicationContext)
                 ValidatorViewModel(app, prefsRepo, historyRepo, workManager)

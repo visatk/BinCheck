@@ -1,5 +1,6 @@
 package com.example.ui
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
@@ -38,12 +39,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -66,30 +67,44 @@ private val SplashEmerald = Color(0xFF34D399)
 private val SplashInkPrimary = Color(0xFFF4F8FB)
 private val SplashInkMuted = Color(0xFFA3B6C6)
 
+private object SplashBitmapCache {
+    @Volatile
+    private var cachedBitmap: ImageBitmap? = null
+
+    fun getOrDecode(context: Context): ImageBitmap? {
+        cachedBitmap?.let { return it }
+        return synchronized(this) {
+            cachedBitmap?.let { return it }
+            runCatching {
+                val opts = BitmapFactory.Options().apply {
+                    inSampleSize = 4
+                    inPreferredConfig = Bitmap.Config.RGB_565
+                }
+                BitmapFactory.decodeResource(
+                    context.resources,
+                    R.drawable.bincheck_app_icon_1794588466984,
+                    opts
+                )?.asImageBitmap()
+            }.getOrNull()?.also { decoded ->
+                cachedBitmap = decoded
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun BinCheckSplashOverlay(
     visible: Boolean,
     onFinished: () -> Unit,
-    durationMillis: Long = 550L,
+    durationMillis: Long = 440L,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val emblemScale = remember { Animatable(0.86f) }
+    val emblemScale = remember { Animatable(0.90f) }
     val contentAlpha = remember { Animatable(0f) }
-    // Downsample the 1024x1024 splash JPEG to 512x512 RGB_565 to cut cold-start decode time and memory ~8x.
     val sampledLogoBitmap = remember(context) {
-        runCatching {
-            val opts = BitmapFactory.Options().apply {
-                inSampleSize = 2
-                inPreferredConfig = Bitmap.Config.RGB_565
-            }
-            BitmapFactory.decodeResource(
-                context.resources,
-                R.drawable.bincheck_app_icon_1794588466984,
-                opts
-            )?.asImageBitmap()
-        }.getOrNull()
+        SplashBitmapCache.getOrDecode(context)
     }
 
     LaunchedEffect(visible) {
@@ -99,15 +114,15 @@ fun BinCheckSplashOverlay(
                 emblemScale.animateTo(
                     targetValue = 1f,
                     animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMedium
+                        dampingRatio = Spring.DampingRatioLowBouncy,
+                        stiffness = Spring.StiffnessMediumLow
                     )
                 )
             }
             launch {
                 contentAlpha.animateTo(
                     targetValue = 1f,
-                    animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing)
+                    animationSpec = tween(durationMillis = 190, easing = FastOutSlowInEasing)
                 )
             }
         }
@@ -118,10 +133,10 @@ fun BinCheckSplashOverlay(
 
     AnimatedVisibility(
         visible = visible,
-        exit = fadeOut(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) +
+        exit = fadeOut(animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing)) +
             scaleOut(
-                targetScale = 1.03f,
-                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)
+                targetScale = 1.025f,
+                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing)
             ),
         modifier = modifier
             .fillMaxSize()
@@ -147,14 +162,17 @@ fun BinCheckSplashOverlay(
             Column(
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .alpha(contentAlpha.value),
+                    .graphicsLayer { alpha = contentAlpha.value },
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Box(
                         modifier = Modifier
                             .size(136.dp)
-                            .scale(emblemScale.value)
+                            .graphicsLayer {
+                                scaleX = emblemScale.value
+                                scaleY = emblemScale.value
+                            }
                             .clip(RoundedCornerShape(36.dp))
                             .background(SplashEmerald.copy(alpha = 0.08f))
                     )
@@ -165,7 +183,10 @@ fun BinCheckSplashOverlay(
                         shadowElevation = 20.dp,
                         modifier = Modifier
                             .size(116.dp)
-                            .scale(emblemScale.value)
+                            .graphicsLayer {
+                                scaleX = emblemScale.value
+                                scaleY = emblemScale.value
+                            }
                             .testTag("splash_logo")
                     ) {
                         if (sampledLogoBitmap != null) {
@@ -257,7 +278,7 @@ fun BinCheckSplashOverlay(
                 border = BorderStroke(0.75.dp, SplashEmerald.copy(alpha = 0.25f)),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .alpha(contentAlpha.value)
+                    .graphicsLayer { alpha = contentAlpha.value }
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),

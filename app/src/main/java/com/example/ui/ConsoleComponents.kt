@@ -197,10 +197,20 @@ fun ConsoleInputCard(
     val isInputFocused by inputInteractionSource.collectIsFocusedAsState()
 
     val hasWildcard = remember(uiState.rawInputText) {
-        uiState.rawInputText.any { it.equals('x', ignoreCase = true) }
+        val sample = if (uiState.rawInputText.length > 4096) {
+            uiState.rawInputText.substring(0, 4096)
+        } else {
+            uiState.rawInputText
+        }
+        sample.any { it.equals('x', ignoreCase = true) }
     }
     val hasEmailCombo = remember(uiState.rawInputText) {
-        uiState.rawInputText.contains('@') && (uiState.rawInputText.contains(':') || uiState.rawInputText.contains('|'))
+        val sample = if (uiState.rawInputText.length > 4096) {
+            uiState.rawInputText.substring(0, 4096)
+        } else {
+            uiState.rawInputText
+        }
+        sample.contains('@') && (sample.contains(':') || sample.contains('|'))
     }
 
     val cardBorderColor by animateColorAsState(
