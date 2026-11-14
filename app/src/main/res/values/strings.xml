@@ -84,6 +84,8 @@
     <string name="toolkit_title">List &amp; Format Toolkit</string>
     <string name="toolkit_subtitle">Clean messy dumps, strip duplicates or expired cards, and tidy up formats</string>
     <string name="toolkit_copy_output">Copy Result</string>
+    <string name="toolkit_save_file">Save File</string>
+    <string name="toolkit_select_file">Select File</string>
     <string name="toolkit_apply_console">Use in Console</string>
     <string name="splash_tagline">Clean lists. Sharp checks. Instant BIN clarity.</string>
     <string name="permissions_section_title">Permissions &amp; Access</string>

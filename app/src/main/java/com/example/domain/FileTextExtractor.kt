@@ -35,7 +35,8 @@ object FileTextExtractor {
         val lowerMime = mimeType?.lowercase(Locale.ROOT).orEmpty()
         return when {
             lowerName.endsWith(".html") || lowerName.endsWith(".htm") || lowerMime.contains("html") -> SupportedFileType.HTML
-            lowerName.endsWith(".txt") || lowerName.endsWith(".csv") || lowerName.endsWith(".log") || lowerMime.startsWith("text/plain") -> SupportedFileType.TXT
+            lowerName.endsWith(".txt") || lowerName.endsWith(".csv") || lowerName.endsWith(".log") ||
+                lowerName.endsWith(".json") || lowerMime.startsWith("text/plain") || lowerMime.contains("json") || lowerMime.contains("csv") -> SupportedFileType.TXT
             lowerMime.startsWith("text/") -> SupportedFileType.TXT
             else -> null
         }
@@ -206,6 +207,30 @@ object FileTextExtractor {
             bytes < 1024 -> "$bytes B"
             bytes < 1024 * 1024 -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
             else -> String.format(Locale.US, "%.2f MB", bytes / (1024.0 * 1024.0))
+        }
+    }
+
+    /**
+     * Writes UTF-8 text content to a user-chosen SAF document Uri (e.g., from CreateDocument).
+     * Returns the number of non-blank lines written.
+     */
+    suspend fun writeTextToUri(
+        context: Context,
+        uri: Uri,
+        content: String
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            val resolver = context.contentResolver
+            val bytes = content.toByteArray(StandardCharsets.UTF_8)
+            resolver.openOutputStream(uri, "wt")?.use { out ->
+                out.write(bytes)
+                out.flush()
+            } ?: resolver.openOutputStream(uri)?.use { out ->
+                out.write(bytes)
+                out.flush()
+            } ?: throw IllegalStateException("Unable to open destination file for writing.")
+
+            content.lineSequence().count { it.isNotBlank() }
         }
     }
 }

@@ -274,7 +274,13 @@ fun ValidatorScreen(
                 copyToClipboard("Cleaned List", cleaned)
             },
             onApplyToConsole = viewModel::applyToolkitOutput,
-            onDismiss = viewModel::closeListToolkit
+            onDismiss = viewModel::closeListToolkit,
+            onFileStatusMessage = { msg ->
+                scope.launch {
+                    snackbarHostState.currentSnackbarData?.dismiss()
+                    snackbarHostState.showSnackbar(msg)
+                }
+            }
         )
     }
 
@@ -366,7 +372,7 @@ fun ValidatorScreen(
                                 onOpenSettings = viewModel::openSettings,
                                 onOpenFileImport = viewModel::openFileImport,
                                 onQuickGen10x = {
-                                    val patternToUse = uiState.rawInputText.lines()
+                                    val patternToUse = uiState.rawInputText.lineSequence()
                                         .firstOrNull { it.isNotBlank() }
                                         ?: uiState.settings.patternTemplate
                                     viewModel.generateBatchIntoConsole(patternToUse, 10)
@@ -441,7 +447,7 @@ fun ValidatorScreen(
                             }
                         } else {
                             val canPinSplitWithoutNestedScroll = maxHeight >= 540.dp
-                            val adaptiveConsoleHeight = (maxHeight * 0.28f).coerceIn(155.dp, 220.dp)
+                            val adaptiveConsoleHeight = (maxHeight * 0.30f).coerceIn(170.dp, 236.dp)
 
                             val outerModifier = if (canPinSplitWithoutNestedScroll) {
                                 Modifier

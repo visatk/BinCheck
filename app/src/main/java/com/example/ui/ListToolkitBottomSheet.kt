@@ -1,6 +1,8 @@
 package com.example.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -31,6 +33,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -53,10 +56,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -65,15 +70,18 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.domain.CardScheme
 import com.example.domain.DedupMode
+import com.example.domain.FileTextExtractor
 import com.example.domain.ListSortOrder
 import com.example.domain.ListToolkitEngine
 import com.example.domain.ListToolkitOptions
 import com.example.domain.OutputFormat
+import com.example.domain.SupportedFileType
 import com.example.domain.ToolkitPreset
 import com.example.domain.ToolkitTransformResult
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalConsoleColors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Calendar
 import kotlin.random.Random
@@ -99,10 +107,13 @@ fun ListToolkitBottomSheet(
     onPasteFromClipboard: () -> String?,
     onCopyOutput: (String) -> Unit,
     onApplyToConsole: (String, ToolkitTransformResult) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onFileStatusMessage: (String) -> Unit = {}
 ) {
     BackHandler(onBack = onDismiss)
 
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val colorScheme = MaterialTheme.colorScheme
     val consoleColors = LocalConsoleColors.current
@@ -113,6 +124,9 @@ fun ListToolkitBottomSheet(
     var sourceText by remember(initialInputText) { mutableStateOf(initialInputText) }
     var isEditingSource by remember { mutableStateOf(initialInputText.isBlank()) }
     var shuffleNonce by remember { mutableIntStateOf(0) }
+    var loadedFileBadge by remember { mutableStateOf<String?>(null) }
+    var inlineFeedbackMessage by remember { mutableStateOf<String?>(null) }
+    var isFileBusy by remember { mutableStateOf(false) }
 
     var transformResult by remember {
         mutableStateOf(
@@ -122,6 +136,63 @@ fun ListToolkitBottomSheet(
                 ToolkitTransformResult(outputText = "")
             }
         )
+    }
+
+    val openFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        isFileBusy = true
+        inlineFeedbackMessage = null
+        scope.launch {
+            val result = FileTextExtractor.readAndParseUri(context, uri)
+            isFileBusy = false
+            result.fold(
+                onSuccess = { preview ->
+                    val textToLoad = if (preview.fileType == SupportedFileType.HTML) {
+                        preview.allNonEmptyLines.joinToString("\n")
+                    } else {
+                        preview.rawContent
+                    }
+                    sourceText = textToLoad
+                    loadedFileBadge = "${preview.fileName} (${FileTextExtractor.formatFileSize(preview.fileSizeBytes)})"
+                    val msg = "Loaded ${preview.allNonEmptyLines.size} line(s) from ${preview.fileName}"
+                    inlineFeedbackMessage = msg
+                    onFileStatusMessage(msg)
+                },
+                onFailure = { err ->
+                    val msg = err.localizedMessage ?: "Failed to read selected file."
+                    inlineFeedbackMessage = msg
+                    onFileStatusMessage(msg)
+                }
+            )
+        }
+    }
+
+    val saveFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val textToSave = transformResult.outputText
+        if (textToSave.isBlank()) return@rememberLauncherForActivityResult
+        isFileBusy = true
+        inlineFeedbackMessage = null
+        scope.launch {
+            val result = FileTextExtractor.writeTextToUri(context, uri, textToSave)
+            isFileBusy = false
+            result.fold(
+                onSuccess = { lineCount ->
+                    val msg = "Exported $lineCount line(s) to file."
+                    inlineFeedbackMessage = msg
+                    onFileStatusMessage(msg)
+                },
+                onFailure = { err ->
+                    val msg = err.localizedMessage ?: "Could not save file."
+                    inlineFeedbackMessage = msg
+                    onFileStatusMessage(msg)
+                }
+            )
+        }
     }
 
     LaunchedEffect(sourceText, options, shuffleNonce) {
@@ -239,7 +310,164 @@ fun ListToolkitBottomSheet(
                     .padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Active Tab Options First for immediate visibility & focus
+                // Source Actions (Select File, Edit Input, Paste, Pull Live/All)
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilledTonalButton(
+                        onClick = {
+                            runCatching {
+                                openFileLauncher.launch(
+                                    arrayOf("text/*", "application/json", "application/octet-stream", "*/*")
+                                )
+                            }
+                        },
+                        enabled = !isFileBusy,
+                        shape = CircleShape,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        modifier = Modifier
+                            .height(32.dp)
+                            .testTag("toolkit_select_file_button")
+                    ) {
+                        Icon(
+                            imageVector = AppIcons.FolderOpen,
+                            contentDescription = stringResource(R.string.toolkit_select_file),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = stringResource(R.string.toolkit_select_file),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    FilterChip(
+                        selected = isEditingSource,
+                        onClick = { isEditingSource = !isEditingSource },
+                        label = {
+                            Text(
+                                text = if (isEditingSource) "Hide Input" else "Edit Input (${transformResult.totalInputLines})",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        },
+                        modifier = Modifier.testTag("toolkit_toggle_edit_input")
+                    )
+
+                    TextButton(
+                        onClick = {
+                            val pasted = onPasteFromClipboard()
+                            if (!pasted.isNullOrBlank()) {
+                                sourceText = pasted
+                                loadedFileBadge = null
+                            }
+                        },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.testTag("toolkit_paste_button")
+                    ) {
+                        Icon(
+                            imageVector = AppIcons.ContentPaste,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Paste", style = MaterialTheme.typography.labelSmall)
+                    }
+
+                    if (liveResultsCount > 0) {
+                        TextButton(
+                            onClick = {
+                                sourceText = liveResultsText
+                                loadedFileBadge = "Live Bucket ($liveResultsCount)"
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.testTag("toolkit_pull_live_button")
+                        ) {
+                            Text("Pull Live ($liveResultsCount)", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+
+                    if (allResultsCount > liveResultsCount) {
+                        TextButton(
+                            onClick = {
+                                sourceText = allResultsText
+                                loadedFileBadge = "All Results ($allResultsCount)"
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.testTag("toolkit_pull_all_button")
+                        ) {
+                            Text("Pull All ($allResultsCount)", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+
+                if (!loadedFileBadge.isNullOrBlank() || !inlineFeedbackMessage.isNullOrBlank()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        loadedFileBadge?.let { badge ->
+                            Surface(
+                                shape = CircleShape,
+                                color = colorScheme.secondaryContainer.copy(alpha = 0.7f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = AppIcons.Description,
+                                        contentDescription = null,
+                                        tint = colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Text(
+                                        text = badge,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = colorScheme.onSecondaryContainer,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+
+                        inlineFeedbackMessage?.let { msg ->
+                            Text(
+                                text = msg,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("toolkit_file_status_text")
+                            )
+                        }
+                    }
+                }
+
+                AnimatedVisibility(visible = isEditingSource) {
+                    OutlinedTextField(
+                        value = sourceText,
+                        onValueChange = { sourceText = it },
+                        label = { Text("Raw Input / Messy List") },
+                        placeholder = { Text("Paste cards, email:pass dumps, HTML logs, CSV, or BINs...") },
+                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
+                        minLines = 3,
+                        maxLines = 5,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("toolkit_source_input")
+                    )
+                }
+
+                // Active Tab Options for immediate visibility & focus
                 AnimatedContent(
                     targetState = activeTab,
                     transitionSpec = { fadeIn() togetherWith fadeOut() },
@@ -278,82 +506,6 @@ fun ListToolkitBottomSheet(
                     }
                 }
 
-                // Source Actions & Optional Inline Editor
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    FilterChip(
-                        selected = isEditingSource,
-                        onClick = { isEditingSource = !isEditingSource },
-                        label = {
-                            Text(
-                                text = if (isEditingSource) "Hide Input" else "Edit Input (${transformResult.totalInputLines})",
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        },
-                        modifier = Modifier.testTag("toolkit_toggle_edit_input")
-                    )
-
-                    TextButton(
-                        onClick = {
-                            val pasted = onPasteFromClipboard()
-                            if (!pasted.isNullOrBlank()) {
-                                sourceText = pasted
-                            }
-                        },
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        modifier = Modifier.testTag("toolkit_paste_button")
-                    ) {
-                        Icon(
-                            imageVector = AppIcons.ContentPaste,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Paste", style = MaterialTheme.typography.labelSmall)
-                    }
-
-                    if (liveResultsCount > 0) {
-                        TextButton(
-                            onClick = { sourceText = liveResultsText },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            modifier = Modifier.testTag("toolkit_pull_live_button")
-                        ) {
-                            Text("Pull Live ($liveResultsCount)", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-
-                    if (allResultsCount > liveResultsCount) {
-                        TextButton(
-                            onClick = { sourceText = allResultsText },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            modifier = Modifier.testTag("toolkit_pull_all_button")
-                        ) {
-                            Text("Pull All ($allResultsCount)", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-
-                AnimatedVisibility(visible = isEditingSource) {
-                    OutlinedTextField(
-                        value = sourceText,
-                        onValueChange = { sourceText = it },
-                        label = { Text("Raw Input / Messy List") },
-                        placeholder = { Text("Paste cards, HTML logs, CSV, or BINs...") },
-                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
-                        minLines = 3,
-                        maxLines = 5,
-                        shape = MaterialTheme.shapes.small,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("toolkit_source_input")
-                    )
-                }
-
                 // Live Output Preview Box
                 Surface(
                     shape = MaterialTheme.shapes.medium,
@@ -364,17 +516,36 @@ fun ListToolkitBottomSheet(
                         .testTag("toolkit_preview_card")
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
-                        Text(
-                            text = "Output Preview",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colorScheme.onSurfaceVariant
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Output Preview (${options.outputFormat.label})",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                            if (transformResult.outputCount > 0) {
+                                Text(
+                                    text = "${transformResult.outputCount} ready",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = JetBrainsMonoFamily,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = consoleColors.liveAccent
+                                )
+                            }
+                        }
                         Spacer(modifier = Modifier.height(6.dp))
-                        val previewText = remember(transformResult.outputText) {
+                        val previewText = remember(transformResult.outputText, options.outputFormat) {
                             val lines = transformResult.outputText.lines().filter { it.isNotBlank() }
                             when {
-                                lines.isEmpty() -> "Nothing left after filtering — paste cards or tweak the rules above."
+                                lines.isEmpty() -> if (options.outputFormat == OutputFormat.EMAIL_PASS) {
+                                    "No email:pass pairs found — select a file, paste a combo dump, or tweak filters."
+                                } else {
+                                    "Nothing left after filtering — paste cards, select a file, or tweak the rules above."
+                                }
                                 lines.size <= 5 -> lines.joinToString("\n")
                                 else -> lines.take(5).joinToString("\n") + "\n... (+${lines.size - 5} more)"
                             }
@@ -460,7 +631,7 @@ fun ListToolkitBottomSheet(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
@@ -468,6 +639,8 @@ fun ListToolkitBottomSheet(
                             activePreset = ToolkitPreset.FULL_CLEAN
                             options = ListToolkitOptions.fromPreset(ToolkitPreset.FULL_CLEAN)
                             sourceText = initialInputText
+                            loadedFileBadge = null
+                            inlineFeedbackMessage = null
                         },
                         modifier = Modifier.testTag("toolkit_reset_button")
                     ) {
@@ -482,20 +655,55 @@ fun ListToolkitBottomSheet(
                         onClick = { onCopyOutput(transformResult.outputText) },
                         enabled = transformResult.outputText.isNotBlank(),
                         shape = MaterialTheme.shapes.small,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                         modifier = Modifier
-                            .weight(1f)
+                            .weight(0.85f)
                             .height(48.dp)
                             .testTag("toolkit_copy_output_button")
                     ) {
                         Icon(
                             imageVector = AppIcons.ContentCopy,
                             contentDescription = stringResource(R.string.toolkit_copy_output),
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(15.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
                         Text(
                             text = "Copy",
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            val suggestedFileName = when (options.outputFormat) {
+                                OutputFormat.EMAIL_PASS -> "bincheck_email_pass.txt"
+                                OutputFormat.CSV -> "bincheck_cleaned.csv"
+                                OutputFormat.BIN_ONLY -> "bincheck_unique_bins.txt"
+                                OutputFormat.PAN_ONLY -> "bincheck_pans.txt"
+                                else -> "bincheck_cleaned.txt"
+                            }
+                            runCatching {
+                                saveFileLauncher.launch(suggestedFileName)
+                            }
+                        },
+                        enabled = transformResult.outputText.isNotBlank() && !isFileBusy,
+                        shape = MaterialTheme.shapes.small,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+                        modifier = Modifier
+                            .weight(0.95f)
+                            .height(48.dp)
+                            .testTag("toolkit_export_save_button")
+                    ) {
+                        Icon(
+                            imageVector = AppIcons.SaveAlt,
+                            contentDescription = stringResource(R.string.toolkit_save_file),
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = "Save",
                             style = MaterialTheme.typography.labelLarge,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -506,9 +714,9 @@ fun ListToolkitBottomSheet(
                         onClick = { onApplyToConsole(transformResult.outputText, transformResult) },
                         enabled = sourceText.isNotBlank() || transformResult.outputText.isNotBlank(),
                         shape = MaterialTheme.shapes.small,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                         modifier = Modifier
-                            .weight(1.25f)
+                            .weight(1.2f)
                             .height(48.dp)
                             .testTag("toolkit_apply_console_button")
                     ) {
@@ -517,7 +725,7 @@ fun ListToolkitBottomSheet(
                             contentDescription = stringResource(R.string.toolkit_apply_console),
                             modifier = Modifier.size(16.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
                         Text(
                             text = stringResource(R.string.toolkit_apply_console),
                             style = MaterialTheme.typography.labelLargeEmphasized,
@@ -531,7 +739,7 @@ fun ListToolkitBottomSheet(
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun CleanTabContent(
     activePreset: ToolkitPreset?,
@@ -540,6 +748,7 @@ private fun CleanTabContent(
     onOptionsChange: (ListToolkitOptions) -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val isEmailPassMode = options.outputFormat == OutputFormat.EMAIL_PASS
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -549,16 +758,26 @@ private fun CleanTabContent(
             color = colorScheme.onSurfaceVariant
         )
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             ToolkitPreset.entries.forEach { preset ->
                 FilterChip(
                     selected = activePreset == preset,
                     onClick = { onSelectPreset(preset) },
+                    leadingIcon = if (preset == ToolkitPreset.EXTRACT_EMAIL_PASS) {
+                        {
+                            Icon(
+                                imageVector = AppIcons.MailOutline,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    } else {
+                        null
+                    },
                     label = {
                         Text(
                             text = preset.label,
@@ -581,6 +800,15 @@ private fun CleanTabContent(
         val dedupModes = DedupMode.entries
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             dedupModes.forEachIndexed { index, mode ->
+                val modeText = if (isEmailPassMode) {
+                    when (mode) {
+                        DedupMode.NONE -> "Keep All"
+                        DedupMode.BY_PAN -> "Unique Email"
+                        DedupMode.BY_FULL_RECORD -> "Unique Combo"
+                    }
+                } else {
+                    mode.label
+                }
                 SegmentedButton(
                     selected = options.dedupMode == mode,
                     onClick = { onOptionsChange(options.copy(dedupMode = mode)) },
@@ -588,7 +816,7 @@ private fun CleanTabContent(
                     modifier = Modifier.testTag("toolkit_dedup_${mode.name.lowercase()}")
                 ) {
                     Text(
-                        text = mode.label,
+                        text = modeText,
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1
                     )
@@ -666,7 +894,11 @@ private fun FormatTabContent(
                 FilterChip(
                     selected = selected,
                     onClick = {
-                        val updatedDropIncomplete = if (format == OutputFormat.PAN_ONLY || format == OutputFormat.BIN_ONLY) {
+                        val updatedDropIncomplete = if (
+                            format == OutputFormat.PAN_ONLY ||
+                            format == OutputFormat.BIN_ONLY ||
+                            format == OutputFormat.EMAIL_PASS
+                        ) {
                             false
                         } else {
                             options.dropIncomplete
@@ -765,6 +997,7 @@ private fun FilterTabContent(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val currentYear = remember { Calendar.getInstance().get(Calendar.YEAR) }
+    val isEmailPassMode = options.outputFormat == OutputFormat.EMAIL_PASS
     val selectableSchemes = remember {
         listOf(
             CardScheme.VISA,
@@ -817,8 +1050,18 @@ private fun FilterTabContent(
         OutlinedTextField(
             value = options.includeBinPrefixes,
             onValueChange = { onOptionsChange(options.copy(includeBinPrefixes = it)) },
-            label = { Text("Include BIN Prefixes (comma-separated)") },
-            placeholder = { Text("e.g. 453225, 5154") },
+            label = {
+                Text(
+                    if (isEmailPassMode) {
+                        "Include Domains / Keywords (comma-separated)"
+                    } else {
+                        "Include BIN Prefixes (comma-separated)"
+                    }
+                )
+            },
+            placeholder = {
+                Text(if (isEmailPassMode) "e.g. gmail.com, outlook.com" else "e.g. 453225, 5154")
+            },
             singleLine = true,
             shape = MaterialTheme.shapes.small,
             textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
@@ -830,8 +1073,12 @@ private fun FilterTabContent(
         OutlinedTextField(
             value = options.excludeBinPrefixes,
             onValueChange = { onOptionsChange(options.copy(excludeBinPrefixes = it)) },
-            label = { Text("Exclude BIN Prefixes") },
-            placeholder = { Text("e.g. 4000, 5555") },
+            label = {
+                Text(if (isEmailPassMode) "Exclude Domains / Keywords" else "Exclude BIN Prefixes")
+            },
+            placeholder = {
+                Text(if (isEmailPassMode) "e.g. yahoo.com, temp" else "e.g. 4000, 5555")
+            },
             singleLine = true,
             shape = MaterialTheme.shapes.small,
             textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),

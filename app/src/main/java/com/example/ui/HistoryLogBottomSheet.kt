@@ -490,6 +490,7 @@ private fun HistoryEntryRow(
                         Text(
                             text = entry.normalizedLine,
                             style = MaterialTheme.typography.labelMedium,
+                            fontFamily = com.example.ui.theme.JetBrainsMonoFamily,
                             fontWeight = FontWeight.SemiBold,
                             color = colorScheme.onSurface,
                             maxLines = 1,
@@ -559,6 +560,8 @@ private fun MetadataTag(
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall,
+            fontFamily = com.example.ui.theme.JetBrainsMonoFamily,
+            fontWeight = FontWeight.Medium,
             color = color,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

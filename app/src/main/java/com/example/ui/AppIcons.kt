@@ -1296,4 +1296,59 @@ object AppIcons {
             close()
         }
     }
+
+    val SaveAlt: ImageVector by lazy {
+        icon("SaveAlt") {
+            moveTo(19f, 12f)
+            verticalLineToRelative(7f)
+            horizontalLineTo(5f)
+            verticalLineToRelative(-7f)
+            horizontalLineTo(3f)
+            verticalLineToRelative(7f)
+            curveToRelative(0f, 1.1f, 0.9f, 2f, 2f, 2f)
+            horizontalLineToRelative(14f)
+            curveToRelative(1.1f, 0f, 2f, -0.9f, 2f, -2f)
+            verticalLineToRelative(-7f)
+            horizontalLineToRelative(-2f)
+            close()
+            moveTo(13f, 12.67f)
+            lineToRelative(2.59f, -2.58f)
+            lineTo(17f, 11.5f)
+            lineToRelative(-5f, 5f)
+            lineToRelative(-5f, -5f)
+            lineToRelative(1.41f, -1.41f)
+            lineTo(11f, 12.67f)
+            verticalLineTo(3f)
+            horizontalLineToRelative(2f)
+            verticalLineToRelative(9.67f)
+            close()
+        }
+    }
+
+    val MailOutline: ImageVector by lazy {
+        icon("MailOutline") {
+            moveTo(20f, 4f)
+            horizontalLineTo(4f)
+            curveToRelative(-1.1f, 0f, -1.99f, 0.9f, -1.99f, 2f)
+            lineTo(2f, 18f)
+            curveToRelative(0f, 1.1f, 0.9f, 2f, 2f, 2f)
+            horizontalLineToRelative(16f)
+            curveToRelative(1.1f, 0f, 2f, -0.9f, 2f, -2f)
+            verticalLineTo(6f)
+            curveToRelative(0f, -1.1f, -0.9f, -2f, -2f, -2f)
+            close()
+            moveTo(20f, 18f)
+            horizontalLineTo(4f)
+            verticalLineTo(8f)
+            lineToRelative(8f, 5f)
+            lineToRelative(8f, -5f)
+            verticalLineToRelative(10f)
+            close()
+            moveTo(12f, 11f)
+            lineTo(4f, 6f)
+            horizontalLineToRelative(16f)
+            lineToRelative(-8f, 5f)
+            close()
+        }
+    }
 }

@@ -1066,4 +1066,61 @@ class ExampleRobolectricTest {
             repository.observeLatestBatchRowId("batch-delta").first()
         )
     }
+
+    @Test
+    fun `listToolkitEngine extracts email pass combos from messy logs json and urls`() {
+        val messyDump = """
+            https://portal.example.com/login:alice@gmail.com:AlicePass#1
+            {"email":"bob@outlook.com","password":"BobSecret99"}
+            <div>Email: alice@gmail.com | Password: AlicePass#1</div>
+            user=charlie@yahoo.com pass=Charlie!23
+            just_some_random_noise_line
+        """.trimIndent()
+
+        val result = ListToolkitEngine.transform(
+            rawInput = messyDump,
+            options = ListToolkitOptions.fromPreset(com.example.domain.ToolkitPreset.EXTRACT_EMAIL_PASS)
+                .copy(excludeBinPrefixes = "yahoo.com")
+        )
+
+        assertEquals(5, result.totalInputLines)
+        assertEquals(2, result.outputCount)
+        assertEquals(1, result.removedDuplicates)
+        assertEquals(1, result.removedUnparseable)
+        assertEquals(1, result.removedByFilter)
+        assertEquals(
+            "alice@gmail.com:AlicePass#1\nbob@outlook.com:BobSecret99",
+            result.outputText
+        )
+    }
+
+    @Test
+    fun `listToolkitBottomSheet exposes file select export save and email pass recipe`() {
+        var appliedOutput = ""
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                ListToolkitBottomSheet(
+                    initialInputText = "https://site.org:dev@company.io:Sup3rSecr3t\ndev@company.io|Sup3rSecr3t",
+                    liveResultsText = "",
+                    allResultsText = "",
+                    liveResultsCount = 0,
+                    allResultsCount = 0,
+                    onPasteFromClipboard = { null },
+                    onCopyOutput = {},
+                    onApplyToConsole = { out, _ -> appliedOutput = out },
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("toolkit_select_file_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("toolkit_export_save_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("toolkit_preset_extract_email_pass").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("2 in → 1 out").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("toolkit_apply_console_button").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals("dev@company.io:Sup3rSecr3t", appliedOutput)
+    }
 }

@@ -1,6 +1,14 @@
 package com.example.ui
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -33,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,6 +58,7 @@ import com.example.domain.HttpRequestMethod
 import com.example.domain.ValidationMode
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalConsoleColors
+import com.example.ui.theme.SpaceGroteskFamily
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -79,6 +89,12 @@ fun BinCheckTopBar(
             "${validationMode.badgeLabel} • ${concurrency}x"
     }
 
+    val statusDotColor by animateColorAsState(
+        targetValue = if (isRunning) consoleColors.liveAccent else colorScheme.primary,
+        animationSpec = spring(stiffness = Spring.StiffnessLow),
+        label = "topbar_status_dot"
+    )
+
     TopAppBar(
         modifier = modifier,
         windowInsets = WindowInsets(0, 0, 0, 0),
@@ -88,14 +104,23 @@ fun BinCheckTopBar(
         ),
         navigationIcon = {
             if (showMenuButton) {
-                IconButton(
+                FilledTonalIconButton(
                     onClick = onOpenDrawer,
-                    modifier = Modifier.testTag("open_navigation_drawer_button")
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = colorScheme.surfaceContainerHigh,
+                        contentColor = colorScheme.onSurface
+                    ),
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier
+                        .padding(start = 6.dp)
+                        .size(38.dp)
+                        .testTag("open_navigation_drawer_button")
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Menu,
                         contentDescription = stringResource(R.string.nav_open_drawer),
-                        tint = colorScheme.onSurface
+                        tint = colorScheme.onSurface,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             } else {
@@ -103,7 +128,8 @@ fun BinCheckTopBar(
                     Surface(
                         shape = MaterialTheme.shapes.small,
                         color = colorScheme.primaryContainer,
-                        modifier = Modifier.size(32.dp)
+                        border = BorderStroke(0.75.dp, colorScheme.primary.copy(alpha = 0.4f)),
+                        modifier = Modifier.size(34.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Text(
@@ -127,26 +153,30 @@ fun BinCheckTopBar(
                     Text(
                         text = stringResource(R.string.app_name),
                         style = MaterialTheme.typography.titleLargeEmphasized,
+                        fontFamily = SpaceGroteskFamily,
                         color = colorScheme.onSurface,
                         maxLines = 1
                     )
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Box(
                             modifier = Modifier
                                 .size(6.dp)
                                 .clip(CircleShape)
-                                .background(if (isRunning) consoleColors.liveAccent else colorScheme.primary)
+                                .background(statusDotColor)
                         )
+                        val subtitleText = if (isRunning && totalBatchCount > 0) {
+                            "Validating $processedCount / $totalBatchCount"
+                        } else {
+                            engineSummary
+                        }
                         Text(
-                            text = if (isRunning && totalBatchCount > 0) {
-                                "Validating $processedCount / $totalBatchCount"
-                            } else {
-                                engineSummary
-                            },
+                            text = subtitleText,
                             style = MaterialTheme.typography.labelSmall,
+                            fontFamily = JetBrainsMonoFamily,
+                            fontWeight = FontWeight.Medium,
                             color = if (isRunning) consoleColors.liveAccent else colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -171,7 +201,10 @@ fun BinCheckTopBar(
                     containerColor = colorScheme.surfaceContainerHigh,
                     contentColor = colorScheme.onSurface
                 ),
-                modifier = Modifier.testTag("topbar_bin_lookup_button")
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier
+                    .size(38.dp)
+                    .testTag("topbar_bin_lookup_button")
             ) {
                 Icon(
                     imageVector = AppIcons.AccountBalance,
@@ -193,7 +226,9 @@ fun BinCheckTopBar(
                             ) {
                                 Text(
                                     text = if (historyCount > 99) "99+" else historyCount.toString(),
-                                    style = MaterialTheme.typography.labelSmall
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = JetBrainsMonoFamily,
+                                    fontWeight = FontWeight.Bold
                                 )
                             }
                         }
@@ -222,6 +257,26 @@ fun TopTelemetryStrip(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val consoleColors = LocalConsoleColors.current
+    val isKnownScheme = detectedScheme != CardScheme.UNKNOWN
+
+    val binPillContainer by animateColorAsState(
+        targetValue = if (isKnownScheme) {
+            colorScheme.primaryContainer.copy(alpha = 0.72f)
+        } else {
+            colorScheme.surfaceContainerHigh
+        },
+        animationSpec = spring(stiffness = Spring.StiffnessLow),
+        label = "telemetry_bin_pill_bg"
+    )
+    val binPillContent by animateColorAsState(
+        targetValue = if (isKnownScheme) {
+            colorScheme.onPrimaryContainer
+        } else {
+            colorScheme.onSurfaceVariant
+        },
+        animationSpec = spring(stiffness = Spring.StiffnessLow),
+        label = "telemetry_bin_pill_fg"
+    )
 
     FlowRow(
         modifier = modifier.fillMaxWidth(),
@@ -235,50 +290,53 @@ fun TopTelemetryStrip(
             Surface(
                 onClick = onOpenBinLookup,
                 shape = CircleShape,
-                color = if (detectedScheme != CardScheme.UNKNOWN) {
-                    colorScheme.primaryContainer.copy(alpha = 0.6f)
-                } else {
-                    colorScheme.surfaceContainerHigh
-                },
+                color = binPillContainer,
+                border = BorderStroke(
+                    width = 0.75.dp,
+                    color = if (isKnownScheme) {
+                        colorScheme.primary.copy(alpha = 0.4f)
+                    } else {
+                        colorScheme.outlineVariant.copy(alpha = 0.5f)
+                    }
+                ),
                 modifier = Modifier.testTag("telemetry_bin_pill")
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
                         imageVector = AppIcons.AccountBalance,
                         contentDescription = null,
-                        tint = if (detectedScheme != CardScheme.UNKNOWN) {
-                            colorScheme.onPrimaryContainer
-                        } else {
-                            colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.size(12.dp)
+                        tint = binPillContent,
+                        modifier = Modifier.size(13.dp)
                     )
                     Spacer(modifier = Modifier.width(5.dp))
-                    Text(
-                        text = if (detectedScheme != CardScheme.UNKNOWN) {
-                            "BIN $binDigits • ${detectedScheme.displayName}"
-                        } else {
-                            "BIN $binDigits • Inspect"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = JetBrainsMonoFamily,
-                        fontWeight = FontWeight.Medium,
-                        color = if (detectedScheme != CardScheme.UNKNOWN) {
-                            colorScheme.onPrimaryContainer
-                        } else {
-                            colorScheme.onSurfaceVariant
-                        }
-                    )
+                    AnimatedContent(
+                        targetState = Pair(binDigits, detectedScheme),
+                        transitionSpec = { fadeIn() togetherWith fadeOut() },
+                        label = "telemetry_bin_text"
+                    ) { (digits, scheme) ->
+                        Text(
+                            text = if (scheme != CardScheme.UNKNOWN) {
+                                "BIN $digits • ${scheme.displayName}"
+                            } else {
+                                "BIN $digits • Inspect"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = JetBrainsMonoFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            color = binPillContent
+                        )
+                    }
                 }
             }
 
             if (!loadedFileName.isNullOrBlank()) {
                 Surface(
                     shape = CircleShape,
-                    color = colorScheme.surfaceContainerHigh
+                    color = colorScheme.surfaceContainerHigh,
+                    border = BorderStroke(0.75.dp, colorScheme.outlineVariant.copy(alpha = 0.5f))
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -287,14 +345,15 @@ fun TopTelemetryStrip(
                         Icon(
                             imageVector = AppIcons.Description,
                             contentDescription = null,
-                            tint = colorScheme.onSurfaceVariant,
+                            tint = colorScheme.secondary,
                             modifier = Modifier.size(12.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
                         Text(
                             text = loadedFileName,
                             style = MaterialTheme.typography.labelSmall,
-                            color = colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Medium,
+                            color = colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -306,11 +365,12 @@ fun TopTelemetryStrip(
         Surface(
             onClick = onOpenDeveloperChannel,
             shape = CircleShape,
-            color = colorScheme.surfaceContainerHigh.copy(alpha = 0.72f),
+            color = consoleColors.telegramContainer.copy(alpha = 0.55f),
+            border = BorderStroke(0.75.dp, consoleColors.telegramAccent.copy(alpha = 0.35f)),
             modifier = Modifier.testTag("header_developer_channel_button")
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TelegramPaperPlaneIcon(
@@ -321,8 +381,9 @@ fun TopTelemetryStrip(
                 Text(
                     text = stringResource(R.string.developer_channel_handle),
                     style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Medium,
-                    color = colorScheme.onSurfaceVariant
+                    fontFamily = JetBrainsMonoFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    color = consoleColors.telegramAccent
                 )
             }
         }

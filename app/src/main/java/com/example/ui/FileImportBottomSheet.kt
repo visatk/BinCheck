@@ -449,6 +449,7 @@ fun FileImportBottomSheet(
                                 Text(
                                     text = "${(idx + 1).toString().padStart(2, '0')}  $line",
                                     style = MaterialTheme.typography.labelMedium,
+                                    fontFamily = com.example.ui.theme.JetBrainsMonoFamily,
                                     color = colorScheme.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -458,6 +459,7 @@ fun FileImportBottomSheet(
                                 Text(
                                     text = "... +${previewLines.size - 5} more line(s)",
                                     style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = com.example.ui.theme.JetBrainsMonoFamily,
                                     color = consoleColors.unknownAccent
                                 )
                             }

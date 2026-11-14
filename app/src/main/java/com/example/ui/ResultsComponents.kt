@@ -1,6 +1,10 @@
 package com.example.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -39,11 +43,13 @@ import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.ToggleButtonShapes
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
@@ -59,6 +65,8 @@ import com.example.domain.ResultBucket
 import com.example.domain.ValidationRecord
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalConsoleColors
+import com.example.ui.theme.PlusJakartaSansFamily
+import com.example.ui.theme.SpaceGroteskFamily
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -86,11 +94,24 @@ fun ResultsCard(
         }
     }
 
+    val activeBorderColor by animateColorAsState(
+        targetValue = when {
+            uiState.activeTabRecords.isEmpty() -> colorScheme.outlineVariant.copy(alpha = 0.45f)
+            uiState.selectedTab == ResultBucket.LIVE -> consoleColors.liveAccent.copy(alpha = 0.42f)
+            uiState.selectedTab == ResultBucket.DIE -> consoleColors.dieAccent.copy(alpha = 0.34f)
+            else -> consoleColors.unknownAccent.copy(alpha = 0.38f)
+        },
+        animationSpec = spring(stiffness = Spring.StiffnessLow),
+        label = "results_card_border"
+    )
+
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)),
         shape = MaterialTheme.shapes.large,
         color = colorScheme.surfaceContainerLow,
-        border = BorderStroke(0.75.dp, colorScheme.outlineVariant.copy(alpha = 0.45f))
+        border = BorderStroke(0.75.dp, activeBorderColor)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
@@ -105,6 +126,7 @@ fun ResultsCard(
                     label = stringResource(R.string.tab_live),
                     count = uiState.liveRecords.size,
                     selected = uiState.selectedTab == ResultBucket.LIVE,
+                    icon = AppIcons.CheckCircle,
                     accentColor = consoleColors.liveAccent,
                     containerColor = consoleColors.liveContainer,
                     shapes = ButtonGroupDefaults.connectedLeadingButtonShapes(),
@@ -118,6 +140,7 @@ fun ResultsCard(
                     label = stringResource(R.string.tab_die),
                     count = uiState.dieRecords.size,
                     selected = uiState.selectedTab == ResultBucket.DIE,
+                    icon = AppIcons.ErrorOutline,
                     accentColor = consoleColors.dieAccent,
                     containerColor = consoleColors.dieContainer,
                     shapes = ButtonGroupDefaults.connectedMiddleButtonShapes(),
@@ -131,6 +154,7 @@ fun ResultsCard(
                     label = stringResource(R.string.tab_unknown),
                     count = uiState.unknownRecords.size,
                     selected = uiState.selectedTab == ResultBucket.UNKNOWN,
+                    icon = AppIcons.HelpOutline,
                     accentColor = consoleColors.unknownAccent,
                     containerColor = consoleColors.unknownContainer,
                     shapes = ButtonGroupDefaults.connectedTrailingButtonShapes(),
@@ -187,6 +211,7 @@ fun ResultsCard(
                         Surface(
                             shape = CircleShape,
                             color = emptyContainer.copy(alpha = 0.72f),
+                            border = BorderStroke(0.75.dp, emptyAccent.copy(alpha = 0.28f)),
                             modifier = Modifier.size(48.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
@@ -233,7 +258,9 @@ fun ResultsCard(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = stringResource(R.string.bin_lookup_chip),
-                                    style = MaterialTheme.typography.labelMedium
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontFamily = PlusJakartaSansFamily,
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             }
                         }
@@ -255,6 +282,7 @@ fun ResultsCard(
                             Surface(
                                 shape = CircleShape,
                                 color = emptyContainer.copy(alpha = 0.72f),
+                                border = BorderStroke(0.75.dp, emptyAccent.copy(alpha = 0.28f)),
                                 modifier = Modifier.size(34.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
@@ -305,7 +333,8 @@ fun ResultsCard(
                                 Text(
                                     text = stringResource(R.string.bin_lookup_chip),
                                     style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Medium
+                                    fontFamily = PlusJakartaSansFamily,
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             }
                         }
@@ -344,14 +373,23 @@ fun ResultsCard(
                             Text(
                                 text = tabTitle,
                                 style = MaterialTheme.typography.labelLargeEmphasized,
+                                fontFamily = SpaceGroteskFamily,
                                 color = colorScheme.onSurface
                             )
                             if (totalProcessedInSession > 0) {
-                                Text(
-                                    text = "$liveRatePercent% Live",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = consoleColors.liveAccent
-                                )
+                                Surface(
+                                    shape = CircleShape,
+                                    color = consoleColors.liveContainer.copy(alpha = 0.65f)
+                                ) {
+                                    Text(
+                                        text = "$liveRatePercent% Live",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = JetBrainsMonoFamily,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = consoleColors.liveAccent,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
                             }
                         }
 
@@ -384,7 +422,8 @@ fun ResultsCard(
                                     Text(
                                         text = stringResource(R.string.bin_lookup_chip),
                                         style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Medium
+                                        fontFamily = PlusJakartaSansFamily,
+                                        fontWeight = FontWeight.SemiBold
                                     )
                                 }
                             }
@@ -414,6 +453,7 @@ fun ResultsCard(
                                 Text(
                                     text = stringResource(R.string.copy_all),
                                     style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = PlusJakartaSansFamily,
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
@@ -438,7 +478,8 @@ fun ResultsCard(
                                 Text(
                                     text = stringResource(R.string.clear_tab),
                                     style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Medium
+                                    fontFamily = PlusJakartaSansFamily,
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             }
                         }
@@ -479,7 +520,11 @@ fun ResultsCard(
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                     onCopyRecord(record)
                                 },
-                                onRemove = { onRemoveRecord(record) }
+                                onRemove = { onRemoveRecord(record) },
+                                modifier = Modifier.animateItem(
+                                    fadeInSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                                    fadeOutSpec = spring(stiffness = Spring.StiffnessMedium)
+                                )
                             )
                         }
                     }
@@ -495,6 +540,7 @@ private fun BucketToggleItem(
     label: String,
     count: Int,
     selected: Boolean,
+    icon: ImageVector,
     accentColor: Color,
     containerColor: Color,
     shapes: ToggleButtonShapes,
@@ -515,9 +561,18 @@ private fun BucketToggleItem(
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
         modifier = modifier.height(42.dp)
     ) {
+        if (selected) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(modifier = Modifier.width(5.dp))
+        }
         Text(
             text = label,
             style = if (selected) MaterialTheme.typography.labelLargeEmphasized else MaterialTheme.typography.labelLarge,
+            fontFamily = PlusJakartaSansFamily,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -539,6 +594,7 @@ private fun BucketToggleItem(
                 Text(
                     text = targetCount.toString(),
                     style = MaterialTheme.typography.labelSmall,
+                    fontFamily = JetBrainsMonoFamily,
                     fontWeight = FontWeight.Bold,
                     color = if (selected || targetCount > 0) accentColor else colorScheme.onSurfaceVariant
                 )
@@ -555,7 +611,8 @@ private fun ValidationRecordRow(
     isBinLoading: Boolean,
     onInspectBin: () -> Unit,
     onCopy: () -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val consoleColors = LocalConsoleColors.current
@@ -574,20 +631,21 @@ private fun ValidationRecordRow(
         onClick = onCopy,
         shape = MaterialTheme.shapes.medium,
         color = colorScheme.surfaceContainerLowest,
-        modifier = Modifier
+        border = BorderStroke(0.75.dp, accentColor.copy(alpha = 0.24f)),
+        modifier = modifier
             .fillMaxWidth()
             .testTag("record_row_${record.pan}")
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+                .padding(start = 12.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Box(
                 modifier = Modifier
-                    .width(3.dp)
+                    .width(3.5.dp)
                     .height(38.dp)
                     .clip(CircleShape)
                     .background(accentColor)
@@ -613,11 +671,12 @@ private fun ValidationRecordRow(
                         modifier = Modifier
                             .clip(CircleShape)
                             .background(containerAccent.copy(alpha = 0.78f))
-                            .padding(horizontal = 6.dp, vertical = 1.dp)
+                            .padding(horizontal = 7.dp, vertical = 1.dp)
                     ) {
                         Text(
                             text = record.scheme.displayName,
                             style = MaterialTheme.typography.labelSmall,
+                            fontFamily = PlusJakartaSansFamily,
                             fontWeight = FontWeight.SemiBold,
                             color = accentColor
                         )
@@ -637,10 +696,11 @@ private fun ValidationRecordRow(
                         onClick = onInspectBin,
                         shape = CircleShape,
                         color = colorScheme.surfaceContainer,
+                        border = BorderStroke(0.5.dp, colorScheme.outlineVariant.copy(alpha = 0.5f)),
                         modifier = Modifier.testTag("live_bin_badge_${record.pan}")
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
@@ -664,6 +724,7 @@ private fun ValidationRecordRow(
                                 Text(
                                     text = binInfo.compactSummary(),
                                     style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Medium,
                                     color = colorScheme.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -678,6 +739,8 @@ private fun ValidationRecordRow(
                                 Text(
                                     text = "BIN ${BinLookupService.extractBin6(record.pan)} • Lookup",
                                     style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = JetBrainsMonoFamily,
+                                    fontWeight = FontWeight.Medium,
                                     color = colorScheme.primary
                                 )
                             }

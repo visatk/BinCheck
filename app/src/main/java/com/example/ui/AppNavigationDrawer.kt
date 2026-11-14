@@ -47,10 +47,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.BorderStroke
 import com.example.R
 import com.example.data.AppThemeMode
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalConsoleColors
+import com.example.ui.theme.SpaceGroteskFamily
 
 enum class CompactWorkspacePane(val labelRes: Int) {
     SPLIT(R.string.pane_split),
@@ -180,6 +182,7 @@ private fun DrawerSheetContent(
         Surface(
             shape = MaterialTheme.shapes.large,
             color = colorScheme.surfaceContainer,
+            border = BorderStroke(0.75.dp, colorScheme.outlineVariant.copy(alpha = 0.45f)),
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
@@ -212,6 +215,7 @@ private fun DrawerSheetContent(
                         Text(
                             text = stringResource(R.string.app_name),
                             style = MaterialTheme.typography.titleLargeEmphasized,
+                            fontFamily = SpaceGroteskFamily,
                             color = colorScheme.onSurface
                         )
                         val drawerModeSummary = uiState.settings.validationMode.fixedDelayMs?.let { fixedMs ->
@@ -220,6 +224,7 @@ private fun DrawerSheetContent(
                         Text(
                             text = drawerModeSummary,
                             style = MaterialTheme.typography.labelSmall,
+                            fontFamily = JetBrainsMonoFamily,
                             color = colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -241,6 +246,8 @@ private fun DrawerSheetContent(
         Text(
             text = "WORKSPACE",
             style = MaterialTheme.typography.labelSmall,
+            fontFamily = SpaceGroteskFamily,
+            fontWeight = FontWeight.Bold,
             color = colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
         )

@@ -268,7 +268,9 @@ fun SettingsBottomSheet(
                                                 .testTag("pattern_template_input"),
                                             label = { Text("Pattern (PAN|MM|YYYY|CVV)") },
                                             placeholder = { Text("453225005536xxx3|08|2028|113") },
-                                            textStyle = MaterialTheme.typography.labelMedium,
+                                            textStyle = MaterialTheme.typography.labelMedium.copy(
+                                                fontFamily = com.example.ui.theme.JetBrainsMonoFamily
+                                            ),
                                             singleLine = true,
                                             shape = MaterialTheme.shapes.small
                                         )
@@ -289,7 +291,9 @@ fun SettingsBottomSheet(
                                                 ) {
                                                     Text(
                                                         text = "$countOption",
-                                                        style = MaterialTheme.typography.labelMedium
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        fontFamily = com.example.ui.theme.JetBrainsMonoFamily,
+                                                        fontWeight = FontWeight.SemiBold
                                                     )
                                                 }
                                             }

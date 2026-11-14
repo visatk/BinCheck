@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LinearWavyProgressIndicator
@@ -51,16 +52,19 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.R
 import com.example.ui.theme.JetBrainsMonoFamily
+import com.example.ui.theme.SpaceGroteskFamily
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private val SplashObsidian = Color(0xFF091219)
+private val SplashObsidian = Color(0xFF081017)
+private val SplashDeepTeal = Color(0xFF0E222E)
 private val SplashEmerald = Color(0xFF34D399)
-private val SplashInkPrimary = Color(0xFFF3F7FA)
-private val SplashInkMuted = Color(0xFF9FB2C2)
+private val SplashInkPrimary = Color(0xFFF4F8FB)
+private val SplashInkMuted = Color(0xFFA3B6C6)
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -129,10 +133,10 @@ fun BinCheckSplashOverlay(
                 .background(
                     Brush.radialGradient(
                         colors = listOf(
-                            Color(0xFF0F2430),
+                            SplashDeepTeal,
                             SplashObsidian
                         ),
-                        radius = 950f
+                        radius = 1050f
                     )
                 )
                 .statusBarsPadding()
@@ -146,48 +150,87 @@ fun BinCheckSplashOverlay(
                     .alpha(contentAlpha.value),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Box(
+                        modifier = Modifier
+                            .size(136.dp)
+                            .scale(emblemScale.value)
+                            .clip(RoundedCornerShape(36.dp))
+                            .background(SplashEmerald.copy(alpha = 0.08f))
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(30.dp),
+                        color = SplashObsidian,
+                        border = BorderStroke(1.25.dp, SplashEmerald.copy(alpha = 0.5f)),
+                        shadowElevation = 20.dp,
+                        modifier = Modifier
+                            .size(116.dp)
+                            .scale(emblemScale.value)
+                            .testTag("splash_logo")
+                    ) {
+                        if (sampledLogoBitmap != null) {
+                            Image(
+                                bitmap = sampledLogoBitmap,
+                                contentDescription = stringResource(R.string.app_name),
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(30.dp))
+                            )
+                        } else {
+                            Image(
+                                painter = painterResource(id = R.drawable.bincheck_app_icon_1794588466984),
+                                contentDescription = stringResource(R.string.app_name),
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(30.dp))
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
                 Surface(
-                    shape = RoundedCornerShape(30.dp),
-                    color = SplashObsidian,
-                    border = BorderStroke(1.25.dp, SplashEmerald.copy(alpha = 0.45f)),
-                    shadowElevation = 18.dp,
-                    modifier = Modifier
-                        .size(116.dp)
-                        .scale(emblemScale.value)
-                        .testTag("splash_logo")
+                    shape = CircleShape,
+                    color = SplashEmerald.copy(alpha = 0.14f),
+                    border = BorderStroke(0.75.dp, SplashEmerald.copy(alpha = 0.35f))
                 ) {
-                    if (sampledLogoBitmap != null) {
-                        Image(
-                            bitmap = sampledLogoBitmap,
-                            contentDescription = stringResource(R.string.app_name),
-                            contentScale = ContentScale.Crop,
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(30.dp))
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(SplashEmerald)
                         )
-                    } else {
-                        Image(
-                            painter = painterResource(id = R.drawable.bincheck_app_icon_1794588466984),
-                            contentDescription = stringResource(R.string.app_name),
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(30.dp))
+                        Text(
+                            text = "BATCH & IIN STUDIO",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = JetBrainsMonoFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.8.sp,
+                            color = SplashEmerald
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(22.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
                     text = stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.headlineLarge,
+                    style = MaterialTheme.typography.displaySmall,
+                    fontFamily = SpaceGroteskFamily,
                     fontWeight = FontWeight.Bold,
                     color = SplashInkPrimary,
                     modifier = Modifier.testTag("splash_title")
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
                 Text(
                     text = stringResource(R.string.splash_tagline),
@@ -201,32 +244,39 @@ fun BinCheckSplashOverlay(
 
                 LinearWavyProgressIndicator(
                     modifier = Modifier
-                        .width(164.dp)
+                        .width(168.dp)
                         .testTag("splash_progress"),
                     color = SplashEmerald,
-                    trackColor = Color(0xFF1A2A36)
+                    trackColor = Color(0xFF172834)
                 )
             }
 
-            Row(
+            Surface(
+                shape = CircleShape,
+                color = Color(0xFF10202B),
+                border = BorderStroke(0.75.dp, SplashEmerald.copy(alpha = 0.25f)),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .alpha(contentAlpha.value),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
+                    .alpha(contentAlpha.value)
             ) {
-                TelegramPaperPlaneIcon(
-                    color = SplashEmerald,
-                    modifier = Modifier.size(13.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = stringResource(R.string.developer_channel_handle),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontFamily = JetBrainsMonoFamily,
-                    color = SplashInkMuted
-                )
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TelegramPaperPlaneIcon(
+                        color = SplashEmerald,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.developer_channel_handle),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontFamily = JetBrainsMonoFamily,
+                        fontWeight = FontWeight.Medium,
+                        color = SplashInkMuted
+                    )
+                }
             }
         }
     }
