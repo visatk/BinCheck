@@ -186,6 +186,7 @@ fun ConsoleInputCard(
     onClearBanner: () -> Unit,
     onOpenListToolkit: () -> Unit = {},
     onQuickSwitchMode: (ValidationMode) -> Unit = {},
+    onQuickLoadSandbox: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -558,6 +559,16 @@ fun ConsoleInputCard(
                                 testTag = "quick_gen_10x_button"
                             )
 
+                            ConsoleMiniActionPill(
+                                label = "Sandbox",
+                                icon = AppIcons.CheckCircle,
+                                containerColor = colorScheme.tertiaryContainer.copy(alpha = 0.56f),
+                                contentColor = colorScheme.onTertiaryContainer,
+                                borderColor = colorScheme.tertiary.copy(alpha = 0.32f),
+                                onClick = onQuickLoadSandbox,
+                                testTag = "quick_load_sandbox_button"
+                            )
+
                             AnimatedVisibility(visible = hasWildcard) {
                                 ConsoleMiniActionPill(
                                     label = "Solve x",
@@ -718,6 +729,7 @@ fun ConsoleInputCard(
                             val delayBadge = mode.fixedDelayMs?.let { "${it / 1000L}s pace" } ?: "Custom"
                             val modeIcon = when (mode) {
                                 ValidationMode.LOCAL_DETERMINISTIC -> AppIcons.Memory
+                                ValidationMode.SANDBOX_SUITE -> AppIcons.CheckCircle
                                 ValidationMode.MULTI_API_AUTO -> AppIcons.SyncAlt
                                 ValidationMode.CHKR_CC -> AppIcons.Public
                                 ValidationMode.PAYATE_MOCK -> AppIcons.Api

@@ -134,6 +134,7 @@ class BatchValidationWorker(
 
         val endpointLabel = when (mode) {
             ValidationMode.LOCAL_DETERMINISTIC -> "Local Luhn Mod-10 Engine"
+            ValidationMode.SANDBOX_SUITE -> "Multi-Gateway Sandbox Suite (Stripe/Braintree/Adyen/Square)"
             ValidationMode.CHKR_CC -> "Chkr.cc API (api.chkr.cc)"
             ValidationMode.PAYATE_MOCK -> "Payate API (mock.payate.com)"
             ValidationMode.MULTI_API_AUTO -> "Multi-API Failover (Chkr.cc + Payate)"

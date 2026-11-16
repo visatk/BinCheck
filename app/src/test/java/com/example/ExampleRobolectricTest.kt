@@ -20,6 +20,7 @@ import androidx.work.testing.TestListenableWorkerBuilder
 import androidx.work.workDataOf
 import com.example.data.AppThemeMode
 import com.example.data.ValidatorPreferencesRepository
+import com.example.data.ValidatorSettings
 import com.example.data.local.AppDatabase
 import com.example.data.local.BinCacheEntity
 import com.example.data.local.HistoryFilter
@@ -53,6 +54,7 @@ import com.example.ui.HistoryUiSummary
 import com.example.ui.ListToolkitBottomSheet
 import com.example.ui.NetworkOptimizationSectionCard
 import com.example.ui.ResultsCard
+import com.example.ui.SettingsBottomSheet
 import com.example.ui.TelegramWebhookSectionCard
 import com.example.ui.TopTelemetryStrip
 import com.example.ui.ValidatorUiState
@@ -1123,4 +1125,58 @@ class ExampleRobolectricTest {
         composeTestRule.waitForIdle()
         assertEquals("dev@company.io:Sup3rSecr3t", appliedOutput)
     }
+
+    @Test
+    fun `settingsBottomSheet exposes sandbox suite loaders and http sandbox presets`() {
+        var loadedProvider: com.example.domain.SandboxProvider? = null
+        var savedMode: ValidationMode? = null
+        var savedHttpConfig: CustomHttpConfig? = null
+
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                SettingsBottomSheet(
+                    settings = ValidatorSettings(validationMode = ValidationMode.LOCAL_DETERMINISTIC),
+                    networkStats = com.example.domain.NetworkTelemetrySnapshot(),
+                    deviceNetworkStatus = com.example.domain.DeviceNetworkStatus(),
+                    isTestingEndpoint = false,
+                    httpProbeResult = null,
+                    isTestingTelegram = false,
+                    telegramProbeResult = null,
+                    onDismiss = {},
+                    onTestEndpoint = {},
+                    onDetectTelegramChat = {},
+                    onTestTelegramWebhook = {},
+                    onClearCaches = {},
+                    onSaveSettings = { mode, httpCfg, _, _, _, _, _, _, _, _, _, _, _, _ ->
+                        savedMode = mode
+                        savedHttpConfig = httpCfg
+                    },
+                    onGenerateBatchToConsole = { _, _ -> },
+                    onLoadSandboxSuite = { provider -> loadedProvider = provider },
+                    onClearAllBuckets = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("sandbox_suite_card").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("sandbox_load_stripe").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(com.example.domain.SandboxProvider.STRIPE, loadedProvider)
+
+        composeTestRule.onNodeWithTag("mode_sandbox_option").performScrollTo().assertIsDisplayed()
+
+        // Switch to Gateway tab and verify HTTP Sandbox Presets
+        composeTestRule.onNodeWithTag("settings_tab_gateway").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("http_sandbox_preset_httpbin_echo").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("save_settings_button").performClick()
+        composeTestRule.waitForIdle()
+
+        assertEquals(ValidationMode.SANDBOX_SUITE, savedMode)
+        assertEquals("https://httpbin.org/post", savedHttpConfig?.url)
+    }
 }
+

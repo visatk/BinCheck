@@ -459,4 +459,48 @@ class ExampleUnitTest {
         // After cancellation, half-open probe lock must be released for the next caller
         assertTrue(breaker.isRequestAllowed(host))
     }
+
+    @Test
+    fun sandboxTestRegistry_allOfficialVectorsAreLuhnValidAndEvaluateExpectedBuckets() = runTest {
+        assertTrue(com.example.domain.SandboxTestRegistry.allVectors.size >= 30)
+        for (vector in com.example.domain.SandboxTestRegistry.allVectors) {
+            assertTrue(
+                "Vector ${vector.pan} (${vector.description}) must satisfy Luhn Mod-10",
+                CardValidatorEngine.verifyLuhn(vector.pan)
+            )
+            val record = CardValidatorEngine.validateLine(
+                rawLine = vector.toPipeLine(),
+                mode = ValidationMode.SANDBOX_SUITE,
+                webhookUrl = "",
+                autoResolveWildcards = false
+            )
+            assertEquals(
+                "Unexpected bucket for ${vector.provider} ${vector.pan}",
+                vector.expectedBucket,
+                record.bucket
+            )
+            assertTrue(record.message.contains(vector.gatewayCode))
+        }
+
+        // Verify deterministic sandbox triggers for custom Luhn-valid cards
+        val customPan = CardValidatorEngine.resolveWildcardPan("453225005536xxx3")
+        val cvcFail = CardValidatorEngine.validateLine(
+            rawLine = "$customPan|12|2029|000",
+            mode = ValidationMode.SANDBOX_SUITE,
+            webhookUrl = "",
+            autoResolveWildcards = false
+        )
+        assertEquals(ResultBucket.DIE, cvcFail.bucket)
+        assertTrue(cvcFail.message.contains("incorrect_cvc"))
+
+        val transientErr = CardValidatorEngine.validateLine(
+            rawLine = "$customPan|12|2029|999",
+            mode = ValidationMode.SANDBOX_SUITE,
+            webhookUrl = "",
+            autoResolveWildcards = false
+        )
+        assertEquals(ResultBucket.UNKNOWN, transientErr.bucket)
+        assertTrue(transientErr.message.contains("processing_error"))
+    }
 }
+

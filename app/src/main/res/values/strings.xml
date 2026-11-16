@@ -59,6 +59,10 @@
     <string name="mode_chkr_cc">Chkr.cc Gateway</string>
     <string name="mode_payate_mock">Payate Gateway</string>
     <string name="mode_multi_api">Smart Failover (Chkr.cc → Payate)</string>
+    <string name="mode_sandbox_suite">Multi-Gateway Sandbox Suite</string>
+    <string name="sandbox_suite_title">Developer Payment Sandboxes</string>
+    <string name="sandbox_suite_subtitle">Load official Stripe, Braintree, Adyen, Square, Authorize.Net &amp; Checkout.com test vectors</string>
+    <string name="http_sandbox_presets_label">Sandbox &amp; Echo Endpoints</string>
     <string name="nav_open_drawer">Open menu</string>
     <string name="nav_workspace">Workspace</string>
     <string name="nav_results">Results</string>

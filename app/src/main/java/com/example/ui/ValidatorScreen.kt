@@ -68,6 +68,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.domain.BinLookupService
 import com.example.domain.CardValidatorEngine
+import com.example.domain.SandboxProvider
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -199,6 +200,7 @@ fun ValidatorScreen(
             },
             onSaveSettings = viewModel::saveSettings,
             onGenerateBatchToConsole = viewModel::generateBatchIntoConsole,
+            onLoadSandboxSuite = viewModel::loadSandboxVectorsIntoConsole,
             onClearAllBuckets = viewModel::clearAllResults
         )
     }
@@ -390,6 +392,9 @@ fun ValidatorScreen(
                                 onClearBanner = viewModel::clearStatusBanner,
                                 onOpenListToolkit = viewModel::openListToolkit,
                                 onQuickSwitchMode = viewModel::setValidationModeQuick,
+                                onQuickLoadSandbox = {
+                                    viewModel.loadSandboxVectorsIntoConsole(SandboxProvider.ALL_SANDBOXES)
+                                },
                                 modifier = cardModifier
                             )
                         }

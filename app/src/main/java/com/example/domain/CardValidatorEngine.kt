@@ -15,6 +15,7 @@ enum class ValidationMode(
     val fixedDelayMs: Long? = null
 ) {
     LOCAL_DETERMINISTIC("LUHN", fixedDelayMs = null),
+    SANDBOX_SUITE("SANDBOX", fixedDelayMs = null),
     CHKR_CC("CHKR.CC", fixedDelayMs = 10_000L),
     PAYATE_MOCK("PAYATE", fixedDelayMs = 3_000L),
     MULTI_API_AUTO("MULTI API", fixedDelayMs = 5_000L),
@@ -479,6 +480,30 @@ object CardValidatorEngine {
                         useCacheAndDedup = useCacheAndDedup
                     )
                 }
+            }
+
+            ValidationMode.SANDBOX_SUITE -> {
+                val (sandboxBucket, sandboxMessage) = SandboxTestRegistry.evaluateSandboxCard(
+                    pan = pan,
+                    mm = paddedMm,
+                    yyyy = yyyy,
+                    cvv = cvv,
+                    scheme = scheme
+                )
+                val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos).coerceAtLeast(1L)
+                ValidationRecord(
+                    id = "${System.nanoTime()}_${canonicalLine.hashCode()}",
+                    rawLine = trimmed,
+                    normalizedLine = canonicalLine,
+                    pan = pan,
+                    month = paddedMm,
+                    year = yyyy,
+                    cvv = cvv,
+                    scheme = scheme,
+                    bucket = sandboxBucket,
+                    message = sandboxMessage,
+                    latencyMs = elapsed
+                )
             }
 
             ValidationMode.LOCAL_DETERMINISTIC -> {

@@ -36,6 +36,8 @@ import com.example.domain.ImportedFilePreview
 import com.example.domain.NetworkClientProvider
 import com.example.domain.NetworkTelemetrySnapshot
 import com.example.domain.ResultBucket
+import com.example.domain.SandboxProvider
+import com.example.domain.SandboxTestRegistry
 import com.example.domain.TelegramProbeResult
 import com.example.domain.TelegramWebhookClient
 import com.example.domain.TelegramWebhookConfig
@@ -684,8 +686,10 @@ class ValidatorViewModel(
 
         val settings = currentState.settings
         val deviceStatus = NetworkClientProvider.inspectDeviceNetworkStatus(getApplication())
-        val isNetworkEngine = settings.validationMode != ValidationMode.LOCAL_DETERMINISTIC ||
-            (settings.telegramWebhookEnabled && settings.telegramChatId.isNotBlank())
+        val isNetworkEngine = (
+            settings.validationMode != ValidationMode.LOCAL_DETERMINISTIC &&
+                settings.validationMode != ValidationMode.SANDBOX_SUITE
+            ) || (settings.telegramWebhookEnabled && settings.telegramChatId.isNotBlank())
 
         val effectiveConcurrency = if (settings.batterySaverMode || deviceStatus.shouldThrottleForBatteryOrData) {
             settings.concurrency.coerceAtMost(2)
@@ -995,6 +999,22 @@ class ValidatorViewModel(
                 isSettingsOpen = false,
                 statusBannerMessage = "Added ${expanded.size} Luhn-valid card(s) to console."
             )
+        }
+    }
+
+    fun loadSandboxVectorsIntoConsole(provider: SandboxProvider) {
+        val vectors = SandboxTestRegistry.vectorsForProvider(provider)
+        val batchText = vectors.joinToString("\n") { it.toPipeLine() }
+        viewModelScope.launch {
+            preferencesRepository.setValidationMode(ValidationMode.SANDBOX_SUITE)
+            _localState.update { prev ->
+                prev.copy(
+                    rawInputText = batchText,
+                    loadedFileName = "${provider.shortLabel.uppercase()} SANDBOX",
+                    isSettingsOpen = false,
+                    statusBannerMessage = "Loaded ${vectors.size} ${provider.displayName} test vector(s) • SANDBOX mode ready."
+                )
+            }
         }
     }
 

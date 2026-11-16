@@ -69,6 +69,8 @@ import com.example.domain.CustomHttpConfig
 import com.example.domain.DeviceNetworkStatus
 import com.example.domain.HttpProbeResult
 import com.example.domain.NetworkTelemetrySnapshot
+import com.example.domain.SandboxProvider
+import com.example.domain.SandboxTestRegistry
 import com.example.domain.TelegramProbeResult
 import com.example.domain.TelegramWebhookConfig
 import com.example.domain.ValidationMode
@@ -125,6 +127,7 @@ fun SettingsBottomSheet(
         batterySaverMode: Boolean
     ) -> Unit,
     onGenerateBatchToConsole: (pattern: String, quantity: Int) -> Unit,
+    onLoadSandboxSuite: (SandboxProvider) -> Unit = {},
     onClearAllBuckets: () -> Unit
 ) {
     BackHandler(onBack = onDismiss)
@@ -323,6 +326,13 @@ fun SettingsBottomSheet(
                                     }
                                 }
 
+                                SandboxSuiteSectionCard(
+                                    onLoadProvider = { provider ->
+                                        selectedMode = ValidationMode.SANDBOX_SUITE
+                                        onLoadSandboxSuite(provider)
+                                    }
+                                )
+
                                 Text(
                                     text = "How Checks Run",
                                     style = MaterialTheme.typography.titleSmallEmphasized,
@@ -336,6 +346,15 @@ fun SettingsBottomSheet(
                                     selected = selectedMode == ValidationMode.LOCAL_DETERMINISTIC,
                                     onClick = { selectedMode = ValidationMode.LOCAL_DETERMINISTIC },
                                     testTag = "mode_local_option"
+                                )
+
+                                ModeOptionCard(
+                                    title = stringResource(R.string.mode_sandbox_suite),
+                                    subtitle = "Official Stripe, Braintree, Adyen, Square, Auth.Net & Checkout.com test responses.",
+                                    icon = AppIcons.CheckCircle,
+                                    selected = selectedMode == ValidationMode.SANDBOX_SUITE,
+                                    onClick = { selectedMode = ValidationMode.SANDBOX_SUITE },
+                                    testTag = "mode_sandbox_option"
                                 )
 
                                 ModeOptionCard(
@@ -789,3 +808,68 @@ private fun SettingsSwitchCard(
         }
     }
 }
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun SandboxSuiteSectionCard(
+    onLoadProvider: (SandboxProvider) -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("sandbox_suite_card"),
+        shape = MaterialTheme.shapes.medium,
+        color = colorScheme.surfaceContainerLowest,
+        border = BorderStroke(0.75.dp, colorScheme.outlineVariant.copy(alpha = 0.55f))
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = AppIcons.CheckCircle,
+                    contentDescription = null,
+                    tint = colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Text(
+                        text = stringResource(R.string.sandbox_suite_title),
+                        style = MaterialTheme.typography.titleSmallEmphasized,
+                        color = colorScheme.onSurface
+                    )
+                    Text(
+                        text = stringResource(R.string.sandbox_suite_subtitle),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                SandboxProvider.entries.forEach { provider ->
+                    val count = SandboxTestRegistry.vectorsForProvider(provider).size
+                    val isAll = provider == SandboxProvider.ALL_SANDBOXES
+                    FilterChip(
+                        selected = isAll,
+                        onClick = { onLoadProvider(provider) },
+                        label = {
+                            Text(
+                                text = "${provider.shortLabel} ($count)",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (isAll) FontWeight.SemiBold else FontWeight.Medium
+                            )
+                        },
+                        modifier = Modifier.testTag("sandbox_load_${provider.id}")
+                    )
+                }
+            }
+        }
+    }
+}
+

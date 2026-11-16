@@ -56,6 +56,7 @@ import com.example.domain.CustomHttpConfig
 import com.example.domain.HttpProbeResult
 import com.example.domain.HttpRequestMethod
 import com.example.domain.ResultBucket
+import com.example.domain.SandboxTestRegistry
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalConsoleColors
 
@@ -179,6 +180,45 @@ fun CustomHttpSectionCard(
                             labelColor = colorScheme.onSurface
                         ),
                         border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = stringResource(R.string.http_sandbox_presets_label),
+                style = MaterialTheme.typography.labelSmall,
+                color = colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                SandboxTestRegistry.httpSandboxPresets.forEach { preset ->
+                    val isSelected = config.url.equals(preset.url, ignoreCase = true)
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = {
+                            onConfigChange(
+                                config.copy(
+                                    url = preset.url,
+                                    method = preset.method,
+                                    bodyTemplate = preset.bodyTemplate,
+                                    liveKeywords = preset.liveKeywords,
+                                    dieKeywords = preset.dieKeywords
+                                )
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = preset.label,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        },
+                        modifier = Modifier.testTag("http_sandbox_preset_${preset.id}")
                     )
                 }
             }
