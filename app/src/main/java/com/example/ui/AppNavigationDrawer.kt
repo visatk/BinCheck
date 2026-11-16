@@ -70,6 +70,7 @@ fun BinCheckNavigationShell(
     onSelectPane: (CompactWorkspacePane) -> Unit,
     onOpenBinLookup: () -> Unit,
     onOpenListToolkit: () -> Unit = {},
+    onOpenConfigStudio: () -> Unit = {},
     onOpenFileImport: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -98,6 +99,7 @@ fun BinCheckNavigationShell(
                         onSelectPane = onSelectPane,
                         onOpenBinLookup = onOpenBinLookup,
                         onOpenListToolkit = onOpenListToolkit,
+                        onOpenConfigStudio = onOpenConfigStudio,
                         onOpenFileImport = onOpenFileImport,
                         onOpenHistory = onOpenHistory,
                         onOpenSettings = onOpenSettings,
@@ -134,6 +136,7 @@ fun BinCheckNavigationShell(
                         onSelectPane = onSelectPane,
                         onOpenBinLookup = onOpenBinLookup,
                         onOpenListToolkit = onOpenListToolkit,
+                        onOpenConfigStudio = onOpenConfigStudio,
                         onOpenFileImport = onOpenFileImport,
                         onOpenHistory = onOpenHistory,
                         onOpenSettings = onOpenSettings,
@@ -159,6 +162,7 @@ private fun DrawerSheetContent(
     onSelectPane: (CompactWorkspacePane) -> Unit,
     onOpenBinLookup: () -> Unit,
     onOpenListToolkit: () -> Unit,
+    onOpenConfigStudio: () -> Unit,
     onOpenFileImport: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -409,6 +413,45 @@ private fun DrawerSheetContent(
             modifier = Modifier
                 .height(48.dp)
                 .testTag("drawer_item_toolkit")
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        val parseCount = uiState.settings.toCustomHttpConfig().parsedParseRules().size
+        val checkpointCount = uiState.settings.toCustomHttpConfig().parsedCheckpointRules().size
+        NavigationDrawerItem(
+            selected = uiState.isConfigStudioOpen,
+            onClick = {
+                onCloseDrawer()
+                onOpenConfigStudio()
+            },
+            icon = {
+                Icon(
+                    imageVector = AppIcons.Api,
+                    contentDescription = null
+                )
+            },
+            label = {
+                Text(
+                    text = stringResource(R.string.nav_config_studio),
+                    style = MaterialTheme.typography.labelLarge
+                )
+            },
+            badge = {
+                if (parseCount > 0 || checkpointCount > 0 || uiState.settings.httpProxyEnabled) {
+                    Badge(
+                        containerColor = colorScheme.tertiaryContainer,
+                        contentColor = colorScheme.onTertiaryContainer
+                    ) {
+                        Text("${parseCount + checkpointCount}")
+                    }
+                }
+            },
+            shape = MaterialTheme.shapes.medium,
+            colors = itemColors,
+            modifier = Modifier
+                .height(48.dp)
+                .testTag("drawer_item_config_studio")
         )
 
         Spacer(modifier = Modifier.height(4.dp))

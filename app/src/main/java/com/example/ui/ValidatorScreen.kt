@@ -201,7 +201,23 @@ fun ValidatorScreen(
             onSaveSettings = viewModel::saveSettings,
             onGenerateBatchToConsole = viewModel::generateBatchIntoConsole,
             onLoadSandboxSuite = viewModel::loadSandboxVectorsIntoConsole,
-            onClearAllBuckets = viewModel::clearAllResults
+            onClearAllBuckets = viewModel::clearAllResults,
+            onOpenConfigStudio = viewModel::openConfigStudio
+        )
+    }
+
+    if (uiState.isConfigStudioOpen) {
+        CustomConfigStudioBottomSheet(
+            initialConfig = uiState.settings.toCustomHttpConfig(),
+            savedProfiles = uiState.settings.savedCustomProfiles(),
+            isTestingEndpoint = uiState.isTestingEndpoint,
+            probeResult = uiState.httpProbeResult,
+            onTestConfig = viewModel::testHttpEndpoint,
+            onClearProbeResult = viewModel::clearHttpProbeResult,
+            onSaveAndUseConfig = viewModel::applyCustomConfig,
+            onSaveProfile = viewModel::saveCustomConfigProfile,
+            onDeleteProfile = viewModel::deleteCustomConfigProfile,
+            onDismiss = viewModel::closeConfigStudio
         )
     }
 
@@ -298,6 +314,7 @@ fun ValidatorScreen(
             onSelectPane = { activeCompactPane = it },
             onOpenBinLookup = { viewModel.openBinInspector() },
             onOpenListToolkit = viewModel::openListToolkit,
+            onOpenConfigStudio = viewModel::openConfigStudio,
             onOpenFileImport = viewModel::openFileImport,
             onOpenHistory = viewModel::openHistory,
             onOpenSettings = viewModel::openSettings,
@@ -391,6 +408,7 @@ fun ValidatorScreen(
                                 onClearInput = { viewModel.onInputTextChanged("") },
                                 onClearBanner = viewModel::clearStatusBanner,
                                 onOpenListToolkit = viewModel::openListToolkit,
+                                onOpenConfigStudio = viewModel::openConfigStudio,
                                 onQuickSwitchMode = viewModel::setValidationModeQuick,
                                 onQuickLoadSandbox = {
                                     viewModel.loadSandboxVectorsIntoConsole(SandboxProvider.ALL_SANDBOXES)

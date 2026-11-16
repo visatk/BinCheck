@@ -129,7 +129,8 @@ fun SettingsBottomSheet(
     ) -> Unit,
     onGenerateBatchToConsole: (pattern: String, quantity: Int) -> Unit,
     onLoadSandboxSuite: (SandboxProvider) -> Unit = {},
-    onClearAllBuckets: () -> Unit
+    onClearAllBuckets: () -> Unit,
+    onOpenConfigStudio: () -> Unit = {}
 ) {
     BackHandler(onBack = onDismiss)
 
@@ -595,7 +596,11 @@ fun SettingsBottomSheet(
                                     isTestingEndpoint = isTestingEndpoint,
                                     probeResult = httpProbeResult,
                                     onConfigChange = { httpConfig = it },
-                                    onTestEndpoint = onTestEndpoint
+                                    onTestEndpoint = onTestEndpoint,
+                                    onOpenConfigStudio = {
+                                        onDismiss()
+                                        onOpenConfigStudio()
+                                    }
                                 )
 
                                 TelegramWebhookSectionCard(

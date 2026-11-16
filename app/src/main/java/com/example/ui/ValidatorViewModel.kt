@@ -28,6 +28,7 @@ import com.example.domain.BinInfo
 import com.example.domain.BinLookupService
 import com.example.domain.CardScheme
 import com.example.domain.CardValidatorEngine
+import com.example.domain.CustomConfigProfile
 import com.example.domain.CustomHttpClient
 import com.example.domain.CustomHttpConfig
 import com.example.domain.DeviceNetworkStatus
@@ -92,6 +93,7 @@ data class ValidatorUiState(
     val isFileImportOpen: Boolean = false,
     val isHistoryOpen: Boolean = false,
     val isToolkitOpen: Boolean = false,
+    val isConfigStudioOpen: Boolean = false,
     val historyFilter: HistoryFilter = HistoryFilter.ALL,
     val historySearchQuery: String = "",
     val historyEntries: List<ValidationHistoryEntity> = emptyList(),
@@ -336,11 +338,35 @@ class ValidatorViewModel(
         }
     }
 
-    fun testHttpEndpoint(config: CustomHttpConfig) {
+    fun openConfigStudio() {
+        refreshDeviceAndNetworkTelemetry()
+        _localState.update {
+            it.copy(
+                isConfigStudioOpen = true,
+                httpProbeResult = null,
+                statusBannerMessage = null
+            )
+        }
+    }
+
+    fun closeConfigStudio() {
+        _localState.update {
+            it.copy(
+                isConfigStudioOpen = false,
+                httpProbeResult = null
+            )
+        }
+    }
+
+    fun clearHttpProbeResult() {
+        _localState.update { it.copy(httpProbeResult = null) }
+    }
+
+    fun testHttpEndpoint(config: CustomHttpConfig, customSampleLine: String? = null) {
         if (_localState.value.isTestingEndpoint) return
         _localState.update { it.copy(isTestingEndpoint = true, httpProbeResult = null) }
         viewModelScope.launch {
-            val probe = CustomHttpClient.testEndpoint(config)
+            val probe = CustomHttpClient.testEndpoint(config, customSampleLine = customSampleLine)
             _localState.update {
                 it.copy(
                     isTestingEndpoint = false,
@@ -348,6 +374,34 @@ class ValidatorViewModel(
                     networkStats = NetworkClientProvider.telemetry.snapshot()
                 )
             }
+        }
+    }
+
+    fun applyCustomConfig(config: CustomHttpConfig) {
+        viewModelScope.launch {
+            preferencesRepository.applyCustomHttpConfig(
+                config = config,
+                activateRemoteWebhookMode = true
+            )
+            _localState.update {
+                it.copy(
+                    isConfigStudioOpen = false,
+                    httpProbeResult = null,
+                    statusBannerMessage = "Active config: ${config.profileName.ifBlank { "Custom Config" }} (Custom HTTP ready)."
+                )
+            }
+        }
+    }
+
+    fun saveCustomConfigProfile(profile: CustomConfigProfile) {
+        viewModelScope.launch {
+            preferencesRepository.saveCustomProfile(profile)
+        }
+    }
+
+    fun deleteCustomConfigProfile(profileId: String) {
+        viewModelScope.launch {
+            preferencesRepository.deleteCustomProfile(profileId)
         }
     }
 
@@ -1096,6 +1150,15 @@ class ValidatorViewModel(
                 httpMaxRetries = httpConfig.maxRetries,
                 httpLiveKeywords = httpConfig.liveKeywords,
                 httpDieKeywords = httpConfig.dieKeywords,
+                httpProfileName = httpConfig.profileName,
+                httpUserAgent = httpConfig.userAgent,
+                httpFollowRedirects = httpConfig.followRedirects,
+                httpParseRulesSpec = httpConfig.parseRulesSpec,
+                httpCheckpointRulesSpec = httpConfig.checkpointRulesSpec,
+                httpProxyEnabled = httpConfig.proxyEnabled,
+                httpProxyProtocol = httpConfig.proxyProtocol,
+                httpProxyRotation = httpConfig.proxyRotation,
+                httpProxyListText = httpConfig.proxyListText,
                 autoResolveWildcards = autoResolveWildcards,
                 autoBinLookupForLive = autoBinLookupForLive,
                 batchDelayMs = batchDelayMs,

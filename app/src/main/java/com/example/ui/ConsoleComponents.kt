@@ -185,6 +185,7 @@ fun ConsoleInputCard(
     onClearInput: () -> Unit,
     onClearBanner: () -> Unit,
     onOpenListToolkit: () -> Unit = {},
+    onOpenConfigStudio: () -> Unit = {},
     onQuickSwitchMode: (ValidationMode) -> Unit = {},
     onQuickLoadSandbox: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -557,6 +558,16 @@ fun ConsoleInputCard(
                                 borderColor = colorScheme.primary.copy(alpha = 0.32f),
                                 onClick = onQuickGen10x,
                                 testTag = "quick_gen_10x_button"
+                            )
+
+                            ConsoleMiniActionPill(
+                                label = stringResource(R.string.config_studio_chip),
+                                icon = AppIcons.Tune,
+                                containerColor = colorScheme.tertiaryContainer.copy(alpha = 0.56f),
+                                contentColor = colorScheme.onTertiaryContainer,
+                                borderColor = colorScheme.tertiary.copy(alpha = 0.34f),
+                                onClick = onOpenConfigStudio,
+                                testTag = "open_config_studio_button"
                             )
 
                             ConsoleMiniActionPill(

@@ -72,6 +72,7 @@ fun CustomHttpSectionCard(
     probeResult: HttpProbeResult?,
     onConfigChange: (CustomHttpConfig) -> Unit,
     onTestEndpoint: (CustomHttpConfig) -> Unit,
+    onOpenConfigStudio: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -129,6 +130,52 @@ fun CustomHttpSectionCard(
             }
 
             Spacer(modifier = Modifier.height(6.dp))
+
+            val parseRuleCount = remember(config.parseRulesSpec) { config.parsedParseRules().size }
+            val checkpointRuleCount = remember(config.checkpointRulesSpec) { config.parsedCheckpointRules().size }
+            val proxyCount = remember(config.proxyListText, config.proxyProtocol) { config.parsedProxyPool().size }
+            Surface(
+                shape = MaterialTheme.shapes.small,
+                color = colorScheme.primaryContainer.copy(alpha = 0.35f),
+                border = BorderStroke(0.75.dp, colorScheme.primary.copy(alpha = 0.35f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = config.profileName.ifBlank { "Custom Config" },
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface
+                        )
+                        Text(
+                            text = "$parseRuleCount Parse • $checkpointRuleCount Checkpoints • ${if (config.proxyEnabled) "$proxyCount Proxies" else "Direct Net"}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    FilledTonalButton(
+                        onClick = onOpenConfigStudio,
+                        modifier = Modifier.testTag("open_full_config_studio_button")
+                    ) {
+                        Icon(
+                            imageVector = AppIcons.Tune,
+                            contentDescription = null,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Config Studio", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             OutlinedTextField(
                 value = config.url,

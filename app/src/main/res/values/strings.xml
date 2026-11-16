@@ -96,4 +96,6 @@
     <string name="permissions_section_subtitle">Only the essentials — never broad storage or background tracking</string>
     <string name="batch_notification_channel_name">Batch Results</string>
     <string name="batch_notification_channel_desc">Notifies you when a background checking run finishes</string>
+    <string name="config_studio_chip">Config</string>
+    <string name="nav_config_studio">Custom Config Studio</string>
 </resources>

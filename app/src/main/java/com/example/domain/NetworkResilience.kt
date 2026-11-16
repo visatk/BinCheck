@@ -359,7 +359,8 @@ data class HttpCallRawResponse(
     val code: Int,
     val body: String,
     val retryAfterMs: Long? = null,
-    val fromCache: Boolean = false
+    val fromCache: Boolean = false,
+    val headers: Map<String, String> = emptyMap()
 )
 
 data class NetworkTelemetrySnapshot(

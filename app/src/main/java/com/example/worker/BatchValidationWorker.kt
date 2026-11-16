@@ -35,6 +35,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -67,26 +68,31 @@ class BatchValidationWorker(
         val database = AppDatabase.getInstance(applicationContext)
         BinLookupService.attachDao(database.binCacheDao())
 
+        val storedSettings = runCatching {
+            com.example.data.ValidatorPreferencesRepository(applicationContext).settingsFlow.first()
+        }.getOrNull()
+        val storedConfig = storedSettings?.toCustomHttpConfig() ?: CustomHttpConfig()
+
         val batchId = inputData.getString(KEY_BATCH_ID) ?: return@withContext Result.failure()
-        val modeName = inputData.getString(KEY_VALIDATION_MODE) ?: ValidationMode.LOCAL_DETERMINISTIC.name
+        val modeName = inputData.getString(KEY_VALIDATION_MODE) ?: storedSettings?.validationMode?.name ?: ValidationMode.LOCAL_DETERMINISTIC.name
         val mode = runCatching { ValidationMode.valueOf(modeName) }
             .getOrDefault(ValidationMode.LOCAL_DETERMINISTIC)
-        val webhookUrl = inputData.getString(KEY_WEBHOOK_URL).orEmpty()
-        val httpMethodName = inputData.getString(KEY_HTTP_METHOD) ?: HttpRequestMethod.AUTO.name
+        val webhookUrl = inputData.getString(KEY_WEBHOOK_URL)?.ifBlank { storedConfig.url } ?: storedConfig.url
+        val httpMethodName = inputData.getString(KEY_HTTP_METHOD) ?: storedConfig.method.name
         val httpMethod = runCatching { HttpRequestMethod.valueOf(httpMethodName) }
-            .getOrDefault(HttpRequestMethod.AUTO)
-        val httpHeaders = inputData.getString(KEY_HTTP_HEADERS).orEmpty()
-        val httpBodyTemplate = inputData.getString(KEY_HTTP_BODY_TEMPLATE).orEmpty()
-        val httpTimeoutSeconds = inputData.getInt(KEY_HTTP_TIMEOUT_SECONDS, 12).coerceIn(5, 60)
-        val httpMaxRetries = inputData.getInt(KEY_HTTP_MAX_RETRIES, 1).coerceIn(0, 3)
+            .getOrDefault(storedConfig.method)
+        val httpHeaders = inputData.getString(KEY_HTTP_HEADERS) ?: storedConfig.headersText
+        val httpBodyTemplate = inputData.getString(KEY_HTTP_BODY_TEMPLATE) ?: storedConfig.bodyTemplate
+        val httpTimeoutSeconds = inputData.getInt(KEY_HTTP_TIMEOUT_SECONDS, storedConfig.timeoutSeconds).coerceIn(5, 60)
+        val httpMaxRetries = inputData.getInt(KEY_HTTP_MAX_RETRIES, storedConfig.maxRetries).coerceIn(0, 3)
         val httpLiveKeywords = inputData.getString(KEY_HTTP_LIVE_KEYWORDS)
-            ?.ifBlank { CustomHttpConfig.DEFAULT_LIVE_KEYWORDS }
-            ?: CustomHttpConfig.DEFAULT_LIVE_KEYWORDS
+            ?.ifBlank { storedConfig.liveKeywords }
+            ?: storedConfig.liveKeywords
         val httpDieKeywords = inputData.getString(KEY_HTTP_DIE_KEYWORDS)
-            ?.ifBlank { CustomHttpConfig.DEFAULT_DIE_KEYWORDS }
-            ?: CustomHttpConfig.DEFAULT_DIE_KEYWORDS
-        val gzipRequests = inputData.getBoolean(KEY_GZIP_REQUESTS, false)
-        val customHttpConfig = CustomHttpConfig(
+            ?.ifBlank { storedConfig.dieKeywords }
+            ?: storedConfig.dieKeywords
+        val gzipRequests = inputData.getBoolean(KEY_GZIP_REQUESTS, storedConfig.compressBodyGzip)
+        val customHttpConfig = storedConfig.copy(
             url = webhookUrl,
             method = httpMethod,
             headersText = httpHeaders,

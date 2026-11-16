@@ -535,6 +535,262 @@ class ExampleUnitTest {
         assertEquals(ResultBucket.DIE, dieBucket)
         assertTrue(dieMsg.contains("incorrect_cvc"))
     }
+
+    @Test
+    fun customConfigStudio_extractsJsonLrRegexAndHeaderCaptures() {
+        val sampleJson = """{"status":"succeeded","id":"ch_998877","error":{"code":"none","msg":"ok"},"bin":"453225"}"""
+        val headers = mapOf("x-request-id" to "req_abc123", "content-type" to "application/json")
+        val rules = listOf(
+            com.example.domain.CustomParseRule(
+                name = "status",
+                mode = com.example.domain.ParseRuleMode.JSON,
+                expression = "status"
+            ),
+            com.example.domain.CustomParseRule(
+                name = "err_code",
+                mode = com.example.domain.ParseRuleMode.JSON,
+                expression = "error.code"
+            ),
+            com.example.domain.CustomParseRule(
+                name = "charge_id",
+                mode = com.example.domain.ParseRuleMode.LR,
+                leftDelimiter = "\"id\":\"",
+                rightDelimiter = "\""
+            ),
+            com.example.domain.CustomParseRule(
+                name = "bin_rx",
+                mode = com.example.domain.ParseRuleMode.REGEX,
+                expression = "\"bin\"\\s*:\\s*\"(\\d{6})\""
+            ),
+            com.example.domain.CustomParseRule(
+                name = "req_id",
+                mode = com.example.domain.ParseRuleMode.HEADER,
+                expression = "X-Request-Id"
+            )
+        )
+
+        val captures = com.example.domain.CustomConfigStudioEngine.extractCaptures(
+            bodyStr = sampleJson,
+            responseHeaders = headers,
+            rules = rules
+        )
+        assertEquals("succeeded", captures["status"])
+        assertEquals("none", captures["err_code"])
+        assertEquals("ch_998877", captures["charge_id"])
+        assertEquals("453225", captures["bin_rx"])
+        assertEquals("req_abc123", captures["req_id"])
+    }
+
+    @Test
+    fun customConfigStudio_evaluatesPriorityOrderedCheckpointsAndFallback() {
+        val rules = listOf(
+            com.example.domain.CustomCheckpointRule(
+                verdict = ResultBucket.DIE,
+                condition = com.example.domain.CheckpointCondition.BODY_CONTAINS_ANY,
+                expectedValue = "card_declined,incorrect_cvc,expired_card",
+                label = "Declined"
+            ),
+            com.example.domain.CustomCheckpointRule(
+                verdict = ResultBucket.LIVE,
+                condition = com.example.domain.CheckpointCondition.JSON_KEY_EQUALS,
+                targetKey = "outcome.type",
+                expectedValue = "authorized",
+                label = "Authorized"
+            ),
+            com.example.domain.CustomCheckpointRule(
+                verdict = ResultBucket.UNKNOWN,
+                condition = com.example.domain.CheckpointCondition.STATUS_CODE_IN,
+                expectedValue = "429,502,503",
+                label = "Rate Limited"
+            ),
+            com.example.domain.CustomCheckpointRule(
+                verdict = ResultBucket.LIVE,
+                condition = com.example.domain.CheckpointCondition.CAPTURED_VAR_EQUALS,
+                targetKey = "token_prefix",
+                expectedValue = "pm_ok",
+                label = "PM Captured"
+            )
+        )
+
+        val config = CustomHttpConfig(
+            checkpointRulesSpec = com.example.domain.CustomConfigStudioEngine.serializeCheckpointRules(rules)
+        )
+
+        // Rule #1 should win even if HTTP 200
+        val dieRes = CustomHttpClient.classifyResponse(
+            statusCode = 200,
+            bodyStr = """{"error":"incorrect_cvc"}""",
+            config = config
+        )
+        assertEquals(ResultBucket.DIE, dieRes.first)
+        assertEquals("Checkpoint: Declined", dieRes.second)
+
+        // Rule #2 JSON dot-path equality
+        val liveRes = CustomHttpClient.classifyResponse(
+            statusCode = 200,
+            bodyStr = """{"outcome":{"type":"authorized"}}""",
+            config = config
+        )
+        assertEquals(ResultBucket.LIVE, liveRes.first)
+        assertEquals("Checkpoint: Authorized", liveRes.second)
+
+        // Rule #3 HTTP status list
+        val unknownRes = CustomHttpClient.classifyResponse(
+            statusCode = 429,
+            bodyStr = "Too many requests",
+            config = config
+        )
+        assertEquals(ResultBucket.UNKNOWN, unknownRes.first)
+        assertEquals("Checkpoint: Rate Limited", unknownRes.second)
+
+        // Rule #4 Precomputed captured variable equals
+        val varRes = CustomHttpClient.classifyResponse(
+            statusCode = 201,
+            bodyStr = "plain response",
+            config = config,
+            precomputedCaptures = mapOf("token_prefix" to "pm_ok")
+        )
+        assertEquals(ResultBucket.LIVE, varRes.first)
+        assertEquals("Checkpoint: PM Captured", varRes.second)
+    }
+
+    @Test
+    fun customConfigStudio_parsesProxyFormatsAndAuthHeaders() {
+        val proxyText = """
+            # comment line
+            198.51.100.10:8080
+            198.51.100.20:1080:myuser:mypass
+            socks5://alice:s3cr3t@203.0.113.5:9050
+            invalid-line
+        """.trimIndent()
+
+        val parsed = com.example.domain.CustomConfigStudioEngine.parseProxyPool(
+            proxyText,
+            com.example.domain.ProxyProtocol.HTTP
+        )
+        assertEquals(3, parsed.size)
+
+        assertEquals("198.51.100.10", parsed[0].host)
+        assertEquals(8080, parsed[0].port)
+        assertFalse(parsed[0].requiresAuth)
+        assertEquals(com.example.domain.ProxyProtocol.HTTP, parsed[0].protocol)
+
+        assertEquals("198.51.100.20", parsed[1].host)
+        assertEquals(1080, parsed[1].port)
+        assertTrue(parsed[1].requiresAuth)
+        assertEquals("myuser", parsed[1].username)
+        assertEquals("mypass", parsed[1].password)
+        assertTrue(parsed[1].basicAuthorizationHeaderValue()!!.startsWith("Basic "))
+
+        assertEquals("203.0.113.5", parsed[2].host)
+        assertEquals(9050, parsed[2].port)
+        assertEquals(com.example.domain.ProxyProtocol.SOCKS5, parsed[2].protocol)
+        assertEquals("alice", parsed[2].username)
+        assertEquals("s3cr3t", parsed[2].password)
+    }
+
+    @Test
+    fun customConfigStudio_importsCurlAndJsFetchSnippetsWithAutoTokenization() {
+        val fetchSnippet = """
+            fetch("https://postman-echo.com/post", {
+              "headers": {
+                "accept": "application/json",
+                "content-type": "application/x-www-form-urlencoded",
+                "x-custom": "demo"
+              },
+              "body": "card[number]=4532250055360003&card[cvc]=113&card[exp_month]=8&card[exp_year]=2028",
+              "method": "POST"
+            });
+        """.trimIndent()
+
+        val fromFetch = com.example.domain.CustomConfigStudioEngine
+            .importFromCurlOrFetch(fetchSnippet, autoTokenizeFields = true)
+            .getOrThrow()
+        assertEquals("https://postman-echo.com/post", fromFetch.url)
+        assertEquals(HttpRequestMethod.POST_FORM, fromFetch.method)
+        assertTrue(fromFetch.headersText.contains("x-custom: demo"))
+        assertTrue(fromFetch.bodyTemplate.contains("card[number]={card}"))
+        assertTrue(fromFetch.bodyTemplate.contains("card[cvc]={cvv}"))
+        assertTrue(fromFetch.bodyTemplate.contains("card[exp_month]={mm}"))
+        assertTrue(fromFetch.bodyTemplate.contains("card[exp_year]={yyyy}"))
+
+        val curlSnippet = """
+            curl -X POST 'https://httpbin.org/post' \
+              -H 'Authorization: Bearer tok_test' \
+              -H 'Content-Type: application/json' \
+              -A 'CustomUA/1.0' \
+              --data-raw '{"number":"5178059025936114","exp_month":"02","exp_year":"2029","cvv":"414"}'
+        """.trimIndent()
+
+        val fromCurl = com.example.domain.CustomConfigStudioEngine
+            .importFromCurlOrFetch(curlSnippet, autoTokenizeFields = true)
+            .getOrThrow()
+        assertEquals("https://httpbin.org/post", fromCurl.url)
+        assertEquals(HttpRequestMethod.POST_JSON, fromCurl.method)
+        assertEquals("CustomUA/1.0", fromCurl.userAgent)
+        assertTrue(fromCurl.headersText.contains("Authorization: Bearer tok_test"))
+        assertTrue(fromCurl.bodyTemplate.contains("\"number\":\"{card}\""))
+        assertTrue(fromCurl.bodyTemplate.contains("\"cvv\":\"{cvv}\""))
+    }
+
+    @Test
+    fun customConfigStudio_exportAndImportJsonRoundTripPreservesAllFields() {
+        val original = CustomHttpConfig(
+            profileName = "Stripe Sandbox Test",
+            url = "https://postman-echo.com/post",
+            method = HttpRequestMethod.POST_JSON,
+            headersText = "Accept: application/json\nX-Trace: {uuid}",
+            bodyTemplate = CustomHttpConfig.ZERO_DOLLAR_AUTH_JSON_PAYLOAD,
+            timeoutSeconds = 20,
+            maxRetries = 2,
+            liveKeywords = "succeeded,ok",
+            dieKeywords = "declined,fail",
+            compressBodyGzip = true,
+            userAgent = "BinCheck-UA/3.0",
+            followRedirects = false,
+            parseRulesSpec = com.example.domain.CustomConfigStudioEngine.serializeParseRules(
+                listOf(
+                    com.example.domain.CustomParseRule("code", com.example.domain.ParseRuleMode.JSON, "error.code"),
+                    com.example.domain.CustomParseRule("id", com.example.domain.ParseRuleMode.LR, leftDelimiter = "\"id\":\"", rightDelimiter = "\"")
+                )
+            ),
+            checkpointRulesSpec = com.example.domain.CustomConfigStudioEngine.serializeCheckpointRules(
+                listOf(
+                    com.example.domain.CustomCheckpointRule(
+                        verdict = ResultBucket.LIVE,
+                        condition = com.example.domain.CheckpointCondition.BODY_CONTAINS,
+                        expectedValue = "zero_dollar",
+                        label = "OK"
+                    )
+                )
+            ),
+            proxyEnabled = true,
+            proxyProtocol = com.example.domain.ProxyProtocol.SOCKS5,
+            proxyRotation = com.example.domain.ProxyRotationMode.RANDOM,
+            proxyListText = "198.51.100.1:1080:user:pass"
+        )
+
+        val json = com.example.domain.CustomConfigStudioEngine.exportConfigToJson(original)
+        val restored = com.example.domain.CustomConfigStudioEngine.importConfigFromJson(json).getOrThrow()
+
+        assertEquals(original.profileName, restored.profileName)
+        assertEquals(original.url, restored.url)
+        assertEquals(original.method, restored.method)
+        assertEquals(original.headersText, restored.headersText)
+        assertEquals(original.bodyTemplate, restored.bodyTemplate)
+        assertEquals(original.timeoutSeconds, restored.timeoutSeconds)
+        assertEquals(original.maxRetries, restored.maxRetries)
+        assertEquals(original.compressBodyGzip, restored.compressBodyGzip)
+        assertEquals(original.userAgent, restored.userAgent)
+        assertEquals(original.followRedirects, restored.followRedirects)
+        assertEquals(original.proxyEnabled, restored.proxyEnabled)
+        assertEquals(original.proxyProtocol, restored.proxyProtocol)
+        assertEquals(original.proxyRotation, restored.proxyRotation)
+        assertEquals(original.proxyListText, restored.proxyListText)
+        assertEquals(2, restored.parsedParseRules().size)
+        assertEquals(1, restored.parsedCheckpointRules().size)
+    }
 }
+
 
 

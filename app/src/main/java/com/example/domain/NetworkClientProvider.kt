@@ -119,6 +119,45 @@ object NetworkClientProvider {
         }
     }
 
+    /**
+     * Builds a scoped OkHttpClient supporting custom redirect rules and HTTP/SOCKS5 proxy routing.
+     */
+    fun clientWithCustomOptions(
+        timeoutSeconds: Int,
+        followRedirects: Boolean = true,
+        proxyEndpoint: ParsedProxyEndpoint? = null
+    ): OkHttpClient {
+        if (followRedirects && proxyEndpoint == null) {
+            return clientWithTimeout(timeoutSeconds)
+        }
+        val clamped = timeoutSeconds.coerceIn(5, 60)
+        val sec = clamped.toLong()
+        val builder = baseClient.newBuilder()
+            .connectTimeout(sec, TimeUnit.SECONDS)
+            .readTimeout(sec, TimeUnit.SECONDS)
+            .writeTimeout(sec, TimeUnit.SECONDS)
+            .callTimeout(sec + 5L, TimeUnit.SECONDS)
+            .followRedirects(followRedirects)
+            .followSslRedirects(followRedirects)
+
+        if (proxyEndpoint != null) {
+            builder.proxy(proxyEndpoint.toJavaNetProxy())
+            val basicHeader = proxyEndpoint.basicAuthorizationHeaderValue()
+            if (basicHeader != null) {
+                builder.proxyAuthenticator { _, response ->
+                    if (response.request.header("Proxy-Authorization") != null) {
+                        null
+                    } else {
+                        response.request.newBuilder()
+                            .header("Proxy-Authorization", basicHeader)
+                            .build()
+                    }
+                }
+            }
+        }
+        return builder.build()
+    }
+
     fun clearDiskHttpCache() {
         runCatching { baseClient.cache?.evictAll() }
     }
@@ -212,12 +251,18 @@ object NetworkClientProvider {
                                 responseBody = body
                             )
                             val fromCache = res.networkResponse == null && res.cacheResponse != null
+                            val headersMap = buildMap<String, String> {
+                                for (i in 0 until res.headers.size) {
+                                    put(res.headers.name(i).lowercase(), res.headers.value(i))
+                                }
+                            }
                             continuation.resume(
                                 HttpCallRawResponse(
                                     code = code,
                                     body = body,
                                     retryAfterMs = retryAfter,
-                                    fromCache = fromCache
+                                    fromCache = fromCache,
+                                    headers = headersMap
                                 )
                             )
                         } catch (t: Throwable) {
