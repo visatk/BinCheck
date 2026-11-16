@@ -13,6 +13,7 @@ import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
@@ -270,12 +271,14 @@ class ValidatorViewModel(
     )
 
     fun refreshDeviceAndNetworkTelemetry() {
-        val deviceStatus = NetworkClientProvider.inspectDeviceNetworkStatus(getApplication())
-        _localState.update {
-            it.copy(
-                deviceNetworkStatus = deviceStatus,
-                networkStats = NetworkClientProvider.telemetry.snapshot()
-            )
+        viewModelScope.launch(Dispatchers.Default) {
+            val deviceStatus = NetworkClientProvider.inspectDeviceNetworkStatus(getApplication())
+            _localState.update {
+                it.copy(
+                    deviceNetworkStatus = deviceStatus,
+                    networkStats = NetworkClientProvider.telemetry.snapshot()
+                )
+            }
         }
     }
 
@@ -758,12 +761,16 @@ class ValidatorViewModel(
                 constraintsBuilder.setRequiresBatteryNotLow(true)
             }
 
-            val workRequest = OneTimeWorkRequestBuilder<BatchValidationWorker>()
+            val canRunExpedited = !settings.batterySaverMode && (!isNetworkEngine || !settings.wifiOnlyBatch)
+            val workRequestBuilder = OneTimeWorkRequestBuilder<BatchValidationWorker>()
                 .setInputData(inputData)
                 .setConstraints(constraintsBuilder.build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
                 .addTag("batch:$batchId")
-                .build()
+            if (canRunExpedited) {
+                workRequestBuilder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            }
+            val workRequest = workRequestBuilder.build()
 
             activeWorkId = workRequest.id
 

@@ -417,6 +417,7 @@ class ExampleUnitTest {
         assertEquals(CardScheme.UNIONPAY, CardValidatorEngine.detectScheme("6210000000000000"))
     }
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun retryAndBackoffPolicy_releasesHalfOpenProbeOnCancellation() = runTest {
         var now = 0L

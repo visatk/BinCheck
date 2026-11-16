@@ -522,6 +522,76 @@ fun ResultsCard(
                         }
                     }
 
+                    val distinctLiveSchemes = remember(uiState.liveRecords) {
+                        uiState.liveRecords.map { it.scheme.displayName }.distinct().take(3)
+                    }
+                    val distinctLiveBinsCount = remember(uiState.liveRecords) {
+                        uiState.liveRecords.map { BinLookupService.extractBin6(it.pan) }
+                            .filter { it.length == 6 }
+                            .distinct()
+                            .size
+                    }
+
+                    AnimatedVisibility(
+                        visible = uiState.selectedTab == ResultBucket.LIVE && activeList.isNotEmpty()
+                    ) {
+                        Surface(
+                            shape = MaterialTheme.shapes.small,
+                            color = consoleColors.liveContainer.copy(alpha = 0.42f),
+                            border = BorderStroke(0.75.dp, consoleColors.liveAccent.copy(alpha = 0.30f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp)
+                                .testTag("live_merchandising_strip")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = AppIcons.CheckCircle,
+                                        contentDescription = null,
+                                        tint = consoleColors.liveAccent,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = buildString {
+                                            append("${activeList.size} Verified")
+                                            if (distinctLiveBinsCount > 0) {
+                                                append(" • $distinctLiveBinsCount BIN")
+                                                if (distinctLiveBinsCount > 1) append("s")
+                                            }
+                                            if (distinctLiveSchemes.isNotEmpty()) {
+                                                append(" (${distinctLiveSchemes.joinToString("/")})")
+                                            }
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = JetBrainsMonoFamily,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Text(
+                                    text = "$liveRatePercent% HIT RATE",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = JetBrainsMonoFamily,
+                                    fontWeight = FontWeight.Bold,
+                                    color = consoleColors.liveAccent
+                                )
+                            }
+                        }
+                    }
+
                     val listModifier = if (fillRemainingHeight) {
                         Modifier
                             .fillMaxWidth()

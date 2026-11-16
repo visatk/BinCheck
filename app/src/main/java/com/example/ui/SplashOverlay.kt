@@ -67,9 +67,11 @@ private val SplashEmerald = Color(0xFF34D399)
 private val SplashInkPrimary = Color(0xFFF4F8FB)
 private val SplashInkMuted = Color(0xFFA3B6C6)
 
-private object SplashBitmapCache {
+internal object SplashBitmapCache {
     @Volatile
     private var cachedBitmap: ImageBitmap? = null
+
+    fun peek(): ImageBitmap? = cachedBitmap
 
     fun getOrDecode(context: Context): ImageBitmap? {
         cachedBitmap?.let { return it }
@@ -97,15 +99,22 @@ private object SplashBitmapCache {
 fun BinCheckSplashOverlay(
     visible: Boolean,
     onFinished: () -> Unit,
-    durationMillis: Long = 440L,
+    durationMillis: Long = 320L,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val emblemScale = remember { Animatable(0.90f) }
+    val emblemScale = remember { Animatable(0.92f) }
     val contentAlpha = remember { Animatable(0f) }
-    val sampledLogoBitmap = remember(context) {
-        SplashBitmapCache.getOrDecode(context)
-    }
+    val sampledLogoBitmap = androidx.compose.runtime.produceState<ImageBitmap?>(
+        initialValue = SplashBitmapCache.peek(),
+        key1 = context
+    ) {
+        if (value == null) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                SplashBitmapCache.getOrDecode(context)
+            }
+        }
+    }.value
 
     LaunchedEffect(visible) {
         if (!visible) return@LaunchedEffect
@@ -114,15 +123,15 @@ fun BinCheckSplashOverlay(
                 emblemScale.animateTo(
                     targetValue = 1f,
                     animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioLowBouncy,
-                        stiffness = Spring.StiffnessMediumLow
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMedium
                     )
                 )
             }
             launch {
                 contentAlpha.animateTo(
                     targetValue = 1f,
-                    animationSpec = tween(durationMillis = 190, easing = FastOutSlowInEasing)
+                    animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing)
                 )
             }
         }
@@ -133,10 +142,10 @@ fun BinCheckSplashOverlay(
 
     AnimatedVisibility(
         visible = visible,
-        exit = fadeOut(animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing)) +
+        exit = fadeOut(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) +
             scaleOut(
-                targetScale = 1.025f,
-                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing)
+                targetScale = 1.02f,
+                animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)
             ),
         modifier = modifier
             .fillMaxSize()
@@ -177,6 +186,7 @@ fun BinCheckSplashOverlay(
                             .background(SplashEmerald.copy(alpha = 0.08f))
                     )
                     Surface(
+                        onClick = onFinished,
                         shape = RoundedCornerShape(30.dp),
                         color = SplashObsidian,
                         border = BorderStroke(1.25.dp, SplashEmerald.copy(alpha = 0.5f)),
@@ -199,14 +209,18 @@ fun BinCheckSplashOverlay(
                                     .clip(RoundedCornerShape(30.dp))
                             )
                         } else {
-                            Image(
-                                painter = painterResource(id = R.drawable.bincheck_app_icon_1794588466984),
-                                contentDescription = stringResource(R.string.app_name),
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .clip(RoundedCornerShape(30.dp))
-                            )
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "BC",
+                                    style = MaterialTheme.typography.headlineLarge,
+                                    fontFamily = JetBrainsMonoFamily,
+                                    fontWeight = FontWeight.Bold,
+                                    color = SplashEmerald
+                                )
+                            }
                         }
                     }
                 }

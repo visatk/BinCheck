@@ -19,16 +19,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.AppThemeMode
 import com.example.ui.BinCheckSplashOverlay
+import com.example.ui.SplashBitmapCache
 import com.example.ui.ValidatorScreen
 import com.example.ui.ValidatorViewModel
 import com.example.ui.theme.MyApplicationTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        lifecycleScope.launch(Dispatchers.IO) {
+            SplashBitmapCache.getOrDecode(applicationContext)
+        }
         enableEdgeToEdge()
         setContent {
             val validatorViewModel: ValidatorViewModel = viewModel(factory = ValidatorViewModel.Factory)

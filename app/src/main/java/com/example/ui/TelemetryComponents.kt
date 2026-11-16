@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -49,6 +50,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -113,7 +118,7 @@ fun BinCheckTopBar(
                     shape = MaterialTheme.shapes.small,
                     modifier = Modifier
                         .padding(start = 6.dp)
-                        .size(38.dp)
+                        .size(42.dp)
                         .testTag("open_navigation_drawer_button")
                 ) {
                     Icon(
@@ -129,7 +134,7 @@ fun BinCheckTopBar(
                         shape = MaterialTheme.shapes.small,
                         color = colorScheme.primaryContainer,
                         border = BorderStroke(0.75.dp, colorScheme.primary.copy(alpha = 0.4f)),
-                        modifier = Modifier.size(34.dp)
+                        modifier = Modifier.size(36.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Text(
@@ -203,7 +208,7 @@ fun BinCheckTopBar(
                 ),
                 shape = MaterialTheme.shapes.small,
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(42.dp)
                     .testTag("topbar_bin_lookup_button")
             ) {
                 Icon(
@@ -258,6 +263,7 @@ fun TopTelemetryStrip(
     val colorScheme = MaterialTheme.colorScheme
     val consoleColors = LocalConsoleColors.current
     val isKnownScheme = detectedScheme != CardScheme.UNKNOWN
+    val devHandle = stringResource(R.string.developer_channel_handle)
 
     val binPillContainer by animateColorAsState(
         targetValue = if (isKnownScheme) {
@@ -299,10 +305,16 @@ fun TopTelemetryStrip(
                         colorScheme.outlineVariant.copy(alpha = 0.5f)
                     }
                 ),
-                modifier = Modifier.testTag("telemetry_bin_pill")
+                modifier = Modifier
+                    .heightIn(min = 34.dp)
+                    .semantics {
+                        role = Role.Button
+                        contentDescription = "Inspect BIN $binDigits"
+                    }
+                    .testTag("telemetry_bin_pill")
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
@@ -336,10 +348,11 @@ fun TopTelemetryStrip(
                 Surface(
                     shape = CircleShape,
                     color = colorScheme.surfaceContainerHigh,
-                    border = BorderStroke(0.75.dp, colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    border = BorderStroke(0.75.dp, colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                    modifier = Modifier.heightIn(min = 34.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
@@ -367,10 +380,16 @@ fun TopTelemetryStrip(
             shape = CircleShape,
             color = consoleColors.telegramContainer.copy(alpha = 0.55f),
             border = BorderStroke(0.75.dp, consoleColors.telegramAccent.copy(alpha = 0.35f)),
-            modifier = Modifier.testTag("header_developer_channel_button")
+            modifier = Modifier
+                .heightIn(min = 34.dp)
+                .semantics {
+                    role = Role.Button
+                    contentDescription = "Open developer channel $devHandle"
+                }
+                .testTag("header_developer_channel_button")
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TelegramPaperPlaneIcon(
@@ -379,7 +398,7 @@ fun TopTelemetryStrip(
                 )
                 Spacer(modifier = Modifier.width(5.dp))
                 Text(
-                    text = stringResource(R.string.developer_channel_handle),
+                    text = devHandle,
                     style = MaterialTheme.typography.labelSmall,
                     fontFamily = JetBrainsMonoFamily,
                     fontWeight = FontWeight.SemiBold,

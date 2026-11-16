@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
+import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.example.MainActivity
@@ -40,6 +41,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
@@ -47,6 +49,18 @@ class BatchValidationWorker(
     appContext: Context,
     workerParams: WorkerParameters
 ) : CoroutineWorker(appContext, workerParams) {
+
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        ensureNotificationChannel()
+        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID_BATCH_RESULTS)
+            .setSmallIcon(R.drawable.ic_stat_bincheck)
+            .setContentTitle(applicationContext.getString(R.string.app_name))
+            .setContentText("Running concurrent batch validation...")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .build()
+        return ForegroundInfo(NOTIFICATION_ID_BATCH_FOREGROUND, notification)
+    }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         NetworkClientProvider.init(applicationContext)
@@ -118,6 +132,8 @@ class BatchValidationWorker(
         val dieCounter = AtomicInteger(0)
         val unknownCounter = AtomicInteger(0)
         val lastProgressTime = AtomicLong(0L)
+        val isPublishingProgress = AtomicBoolean(false)
+        val dbBatchFlushSize = if (total >= 250) 100 else DB_BATCH_FLUSH_SIZE
 
         // Bounded LRU cache prevents unbounded memory growth on huge files while deduplicating concrete lines
         val batchConcreteCache = TtlLruCache<String, ValidationRecord>(maxEntries = BATCH_CACHE_MAX_ENTRIES)
@@ -125,7 +141,7 @@ class BatchValidationWorker(
 
         // Buffered DB history writes for high-throughput (< 2s delay or concurrent) runs
         val useBatchedDbWrites = effectiveDelayMs < 2_000L || effectiveConcurrency > 1
-        val historyWriteBuffer = mutableListOf<com.example.data.local.ValidationHistoryEntity>()
+        val historyWriteBuffer = ArrayList<com.example.data.local.ValidationHistoryEntity>(dbBatchFlushSize)
         val historyBufferMutex = Mutex()
 
         // Buffered Telegram alert digest queue for high-throughput batches
@@ -134,10 +150,10 @@ class BatchValidationWorker(
 
         val endpointLabel = when (mode) {
             ValidationMode.LOCAL_DETERMINISTIC -> "Local Luhn Mod-10 Engine"
-            ValidationMode.SANDBOX_SUITE -> "Multi-Gateway Sandbox Suite (Stripe/Braintree/Adyen/Square)"
-            ValidationMode.CHKR_CC -> "Chkr.cc API (api.chkr.cc)"
+            ValidationMode.SANDBOX_SUITE -> "Multi-Gateway Sandbox Suite ($0.00 Auth)"
+            ValidationMode.CHKR_CC -> "Stripe Tokens API (api.stripe.com)"
             ValidationMode.PAYATE_MOCK -> "Payate API (mock.payate.com)"
-            ValidationMode.MULTI_API_AUTO -> "Multi-API Failover (Chkr.cc + Payate)"
+            ValidationMode.MULTI_API_AUTO -> "Multi-API Failover (Stripe + Payate)"
             ValidationMode.REMOTE_WEBHOOK -> if (webhookUrl.isNotBlank()) webhookUrl else "Custom HTTP"
         }
 
@@ -217,7 +233,7 @@ class BatchValidationWorker(
             )
             val flushChunk = historyBufferMutex.withLock {
                 historyWriteBuffer.add(entity)
-                if (historyWriteBuffer.size >= DB_BATCH_FLUSH_SIZE) {
+                if (historyWriteBuffer.size >= dbBatchFlushSize) {
                     historyWriteBuffer.toList().also { historyWriteBuffer.clear() }
                 } else {
                     null
@@ -272,12 +288,26 @@ class BatchValidationWorker(
         suspend fun maybePublishProgress(done: Int, force: Boolean = false) {
             val now = System.currentTimeMillis()
             val prev = lastProgressTime.get()
-            val shouldUpdate = force || done == total ||
-                (now - prev >= PROGRESS_MIN_INTERVAL_MS && lastProgressTime.compareAndSet(prev, now))
-            if (shouldUpdate) {
-                if (force || done == total) {
+            if (!force && done < total) {
+                if (now - prev < PROGRESS_MIN_INTERVAL_MS) return
+                if (!isPublishingProgress.compareAndSet(false, true)) return
+                try {
                     lastProgressTime.set(now)
+                    setProgress(
+                        workDataOf(
+                            KEY_BATCH_ID to batchId,
+                            KEY_PROCESSED to done,
+                            KEY_TOTAL to total,
+                            KEY_LIVE to liveCounter.get(),
+                            KEY_DIE to dieCounter.get(),
+                            KEY_UNKNOWN to unknownCounter.get()
+                        )
+                    )
+                } finally {
+                    isPublishingProgress.set(false)
                 }
+            } else {
+                lastProgressTime.set(now)
                 setProgress(
                     workDataOf(
                         KEY_BATCH_ID to batchId,
@@ -392,6 +422,20 @@ class BatchValidationWorker(
         }
     }
 
+    private fun ensureNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID_BATCH_RESULTS,
+                applicationContext.getString(R.string.batch_notification_channel_name),
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = applicationContext.getString(R.string.batch_notification_channel_desc)
+            }
+            val sysManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            sysManager?.createNotificationChannel(channel)
+        }
+    }
+
     private fun postCompletionNotification(
         processed: Int,
         total: Int,
@@ -410,17 +454,7 @@ class BatchValidationWorker(
         val manager = NotificationManagerCompat.from(applicationContext)
         if (!manager.areNotificationsEnabled()) return
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID_BATCH_RESULTS,
-                applicationContext.getString(R.string.batch_notification_channel_name),
-                NotificationManager.IMPORTANCE_DEFAULT
-            ).apply {
-                description = applicationContext.getString(R.string.batch_notification_channel_desc)
-            }
-            val sysManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            sysManager?.createNotificationChannel(channel)
-        }
+        ensureNotificationChannel()
 
         val launchIntent = Intent(applicationContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -454,8 +488,9 @@ class BatchValidationWorker(
     companion object {
         const val UNIQUE_BATCH_WORK_NAME = "bincheck_concurrent_batch_validation"
         private const val CHANNEL_ID_BATCH_RESULTS = "bincheck_batch_results"
+        private const val NOTIFICATION_ID_BATCH_FOREGROUND = 2047
         private const val NOTIFICATION_ID_BATCH_DONE = 2048
-        private const val PROGRESS_MIN_INTERVAL_MS = 250L
+        private const val PROGRESS_MIN_INTERVAL_MS = 220L
         private const val DB_BATCH_FLUSH_SIZE = 50
         private const val BATCH_CACHE_MAX_ENTRIES = 2_500
         private val BATCH_CACHE_TTL_MS = TimeUnit.MINUTES.toMillis(15)

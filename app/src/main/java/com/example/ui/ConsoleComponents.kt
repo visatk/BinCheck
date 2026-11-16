@@ -916,16 +916,20 @@ private fun ConsoleMiniActionPill(
         color = containerColor,
         border = if (borderColor != Color.Transparent) BorderStroke(0.75.dp, borderColor) else null,
         modifier = Modifier
+            .heightIn(min = 34.dp)
             .clip(CircleShape)
+            .semantics {
+                contentDescription = label
+            }
             .testTag(testTag)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = icon,
-                contentDescription = label,
+                contentDescription = null,
                 tint = contentColor,
                 modifier = Modifier.size(13.dp)
             )
