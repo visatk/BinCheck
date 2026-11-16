@@ -1160,6 +1160,7 @@ class ExampleRobolectricTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithTag("sandbox_suite_card").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("sandbox_env_status_badge").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("sandbox_load_stripe").performScrollTo().performClick()
         composeTestRule.waitForIdle()
         assertEquals(com.example.domain.SandboxProvider.STRIPE, loadedProvider)
@@ -1177,6 +1178,7 @@ class ExampleRobolectricTest {
 
         assertEquals(ValidationMode.SANDBOX_SUITE, savedMode)
         assertEquals("https://httpbin.org/post", savedHttpConfig?.url)
+        assertEquals(CustomHttpConfig.ZERO_DOLLAR_AUTH_JSON_PAYLOAD, savedHttpConfig?.bodyTemplate)
     }
 }
 

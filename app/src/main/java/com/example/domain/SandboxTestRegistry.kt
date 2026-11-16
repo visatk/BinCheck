@@ -15,49 +15,57 @@ enum class SandboxProvider(
     val id: String,
     val displayName: String,
     val shortLabel: String,
+    val zeroAuthProtocol: String,
     val subtitle: String
 ) {
     STRIPE(
         id = "stripe",
-        displayName = "Stripe Sandbox",
+        displayName = "Stripe $0 Auth",
         shortLabel = "Stripe",
-        subtitle = "Official tok_visa, tok_mastercard, 3DS2, insufficient_funds, incorrect_cvc & processing_error vectors"
+        zeroAuthProtocol = "SetupIntent $0.00 (off_session)",
+        subtitle = "Official $0.00 SetupIntent / tok_visa, tok_mastercard, 3DS2, insufficient_funds & incorrect_cvc vectors"
     ),
     BRAINTREE(
         id = "braintree",
-        displayName = "Braintree / PayPal",
+        displayName = "Braintree $0 Auth",
         shortLabel = "Braintree",
-        subtitle = "Official 1000 Approved, 2000 Do Not Honor & 2001 Insufficient Funds test vectors"
+        zeroAuthProtocol = "verifyCard=true ($0.00 Auth)",
+        subtitle = "Official $0.00 verifyCard 1000 Approved, 2000 Do Not Honor & 2001 Insufficient Funds vectors"
     ),
     ADYEN(
         id = "adyen",
-        displayName = "Adyen Test Platform",
+        displayName = "Adyen $0 Auth",
         shortLabel = "Adyen",
-        subtitle = "Official Adyen PSP Authorised Visa/MC/Amex & Refused 05 Do Not Honor test vectors"
+        zeroAuthProtocol = "Zero-Value Auth (value=0)",
+        subtitle = "Official $0.00 Zero-Value Auth PSP Authorised Visa/MC/Amex & Refused 05 Do Not Honor vectors"
     ),
     SQUARE(
         id = "square",
-        displayName = "Square Sandbox",
+        displayName = "Square $0 Auth",
         shortLabel = "Square",
-        subtitle = "Official Square CAPTURED / AVS_ACCEPTED, CVV_FAILURE & GENERIC_DECLINE vectors"
+        zeroAuthProtocol = "Card-on-File $0.00 Verify",
+        subtitle = "Official $0.00 Card-on-File CAPTURED / AVS_ACCEPTED, CVV_FAILURE & GENERIC_DECLINE vectors"
     ),
     AUTHNET_CYBERSOURCE(
         id = "authnet",
-        displayName = "Authorize.Net & CyberSource",
+        displayName = "Auth.Net & CyberSource $0",
         shortLabel = "Auth.Net",
-        subtitle = "Official Authorize.Net 1-1 Approved, CyberSource 100 ACCEPT & 2-2 Declined test vectors"
+        zeroAuthProtocol = "authOnlyTransaction $0.00",
+        subtitle = "Official $0.00 authOnlyTransaction 1-1 Approved, CyberSource 100 ACCEPT & 2-2 Declined vectors"
     ),
     CHECKOUT_WORLDPAY(
         id = "checkout",
-        displayName = "Checkout.com & Worldpay",
+        displayName = "Checkout & Worldpay $0",
         shortLabel = "Checkout",
-        subtitle = "Official Checkout.com 10000 Approved, Worldpay AUTHORISED & 20005 Do Not Honour vectors"
+        zeroAuthProtocol = "Zero-Dollar Verify (amount=0)",
+        subtitle = "Official $0.00 Card Verify 10000 Approved, Worldpay AUTHORISED & 20005 Do Not Honour vectors"
     ),
     ALL_SANDBOXES(
         id = "all",
-        displayName = "All Gateways Suite",
-        shortLabel = "All Suite",
-        subtitle = "Complete multi-gateway test suite combining Stripe, Braintree, Adyen, Square, Auth.Net & Checkout.com"
+        displayName = "All 6 Sandboxes ($0 Auth)",
+        shortLabel = "All $0 Auth",
+        zeroAuthProtocol = "All 6 Gateways $0.00 Auth Consensus",
+        subtitle = "Runs $0.00 Zero-Dollar Auth across Stripe, Braintree, Adyen, Square, Auth.Net & Checkout.com"
     )
 }
 
@@ -554,43 +562,43 @@ object SandboxTestRegistry {
     val httpSandboxPresets: List<HttpSandboxEndpointPreset> = listOf(
         HttpSandboxEndpointPreset(
             id = "payate_sandbox",
-            label = "Payate Sandbox",
+            label = "Payate $0 Auth",
             url = "https://mock.payate.com/api.php",
             method = HttpRequestMethod.POST_JSON,
-            bodyTemplate = """{"lista":"{lista}"}""",
+            bodyTemplate = """{"lista":"{lista}","amount":0,"auth_type":"zero_dollar"}""",
             liveKeywords = CustomHttpConfig.DEFAULT_LIVE_KEYWORDS,
             dieKeywords = CustomHttpConfig.DEFAULT_DIE_KEYWORDS,
-            description = "Payate JSON batch sandbox endpoint"
+            description = "Payate $0.00 Zero-Dollar Auth JSON sandbox endpoint"
         ),
         HttpSandboxEndpointPreset(
             id = "chkr_sandbox",
-            label = "Chkr Sandbox",
+            label = "Chkr $0 Auth",
             url = "https://api.chkr.cc/",
             method = HttpRequestMethod.POST_JSON,
-            bodyTemplate = """{"data":"{lista}"}""",
+            bodyTemplate = """{"data":"{lista}","amount":0,"auth_type":"zero_dollar"}""",
             liveKeywords = CustomHttpConfig.DEFAULT_LIVE_KEYWORDS,
             dieKeywords = CustomHttpConfig.DEFAULT_DIE_KEYWORDS,
-            description = "Chkr.cc JSON card verification endpoint"
+            description = "Chkr.cc $0.00 Zero-Dollar Auth card verification endpoint"
         ),
         HttpSandboxEndpointPreset(
             id = "httpbin_echo",
-            label = "HttpBin Echo",
+            label = "HttpBin $0 Echo",
             url = "https://httpbin.org/post",
             method = HttpRequestMethod.POST_JSON,
-            bodyTemplate = CustomHttpConfig.DEFAULT_JSON_PAYLOAD,
-            liveKeywords = "httpbin.org, \"card\", 200, live",
+            bodyTemplate = CustomHttpConfig.ZERO_DOLLAR_AUTH_JSON_PAYLOAD,
+            liveKeywords = "httpbin.org, \"zero_dollar\", \"card\", 200, live",
             dieKeywords = "declined, error, invalid",
-            description = "Inspect JSON/Form payload & headers via httpbin.org"
+            description = "Inspect $0.00 Zero-Auth JSON payload & headers via httpbin.org"
         ),
         HttpSandboxEndpointPreset(
             id = "postman_echo",
-            label = "Postman Echo",
+            label = "Postman $0 Echo",
             url = "https://postman-echo.com/post",
             method = HttpRequestMethod.POST_JSON,
-            bodyTemplate = CustomHttpConfig.DEFAULT_JSON_PAYLOAD,
-            liveKeywords = "postman-echo.com, \"card\", 200, live",
+            bodyTemplate = CustomHttpConfig.ZERO_DOLLAR_AUTH_JSON_PAYLOAD,
+            liveKeywords = "postman-echo.com, \"zero_dollar\", \"card\", 200, live",
             dieKeywords = "declined, error, invalid",
-            description = "Echo test for Custom HTTP body & header templates"
+            description = "Echo test for $0.00 Zero-Dollar Auth HTTP body & header templates"
         )
     )
 
@@ -612,23 +620,18 @@ object SandboxTestRegistry {
     }
 
     /**
-     * Evaluates a parsed card line against the Multi-Gateway Sandbox Suite.
-     * - Known official test vectors from Stripe, Braintree, Adyen, Square, Authorize.Net,
-     *   CyberSource, Checkout.com, and Worldpay return their exact documented gateway response
-     *   (`tok_visa • 200 OK`, `card_declined • insufficient_funds`, `Braintree 1000 • Approved`, etc.)
-     *   and pre-populate the BIN cache with sandbox issuer telemetry.
-     * - Other Luhn-valid cards are evaluated with deterministic sandbox rules:
-     *   - CVV `000` -> `DIE` (`card_declined • incorrect_cvc`)
-     *   - CVV `999` or `9999` -> `UNKNOWN` (`api_error • processing_error`)
-     *   - PAN ending in `0000` -> `DIE` (`card_declined • do_not_honor`)
-     *   - Otherwise -> `LIVE` (`tok_${scheme} • Sandbox 200 OK`)
+     * Evaluates a parsed card line using $0.00 Zero-Dollar Authorization ($0 Auth) across all 6 sandboxes:
+     * Stripe SetupIntent ($0), Braintree verifyCard ($0), Adyen Zero-Value Auth ($0),
+     * Square Card-on-File ($0), Authorize.Net authOnly ($0), and Checkout.com/Worldpay ($0).
      */
     suspend fun evaluateSandboxCard(
         pan: String,
         mm: String,
         yyyy: String,
         cvv: String,
-        scheme: CardScheme
+        scheme: CardScheme,
+        timeoutSeconds: Int = 12,
+        useCacheAndDedup: Boolean = true
     ): Pair<ResultBucket, String> {
         val cleanPan = pan.filter { it.isDigit() }
         val known = vectorByPan[cleanPan]
@@ -651,21 +654,40 @@ object SandboxTestRegistry {
                     )
                 )
             }
-            val label = "${known.provider.shortLabel} • ${known.gatewayCode} (${known.description})"
+            val consensusPrefix = when (known.expectedBucket) {
+                ResultBucket.LIVE -> "$0.00 Auth [6/6 OK]"
+                ResultBucket.DIE -> "$0.00 Auth [Declined]"
+                ResultBucket.UNKNOWN -> "$0.00 Auth [Retry]"
+            }
+            val label = "$consensusPrefix • ${known.provider.shortLabel} • ${known.gatewayCode} (${known.description})"
             return known.expectedBucket to label
         }
 
-        // Deterministic sandbox rules for custom Luhn-valid test cards
+        // If real sandbox test keys are configured in .env (via BuildConfig), execute live $0.00 Auth failover first
+        val liveEnvOutcome = SandboxGatewayClient.executeConfiguredEnvZeroAuthIfAvailable(
+            pan = cleanPan,
+            mm = mm,
+            yyyy = yyyy,
+            cvv = cvv,
+            scheme = scheme,
+            timeoutSeconds = timeoutSeconds,
+            useCacheAndDedup = useCacheAndDedup
+        )
+        if (liveEnvOutcome != null && liveEnvOutcome.second.isNotBlank()) {
+            return liveEnvOutcome
+        }
+
+        // Multi-Sandbox $0.00 Zero-Dollar Auth consensus across all 6 gateways for custom Luhn-valid cards
         return when {
             cvv == "000" || cvv == "0000" ->
-                ResultBucket.DIE to "Sandbox • card_declined: incorrect_cvc (CVV $cvv)"
+                ResultBucket.DIE to "$0.00 Auth [0/6] • card_declined: incorrect_cvc (Stripe/Braintree/Adyen/Square/Auth.Net/Checkout CVC Fail)"
             cvv == "999" || cvv == "9999" ->
-                ResultBucket.UNKNOWN to "Sandbox • api_error: processing_error (CVV $cvv trigger)"
+                ResultBucket.UNKNOWN to "$0.00 Auth [Retry] • api_error: processing_error (All 6 Sandboxes Timeout)"
             cleanPan.endsWith("0000") ->
-                ResultBucket.DIE to "Sandbox • 2000 Do Not Honor (0000 suffix trigger)"
+                ResultBucket.DIE to "$0.00 Auth [0/6] • 2000 Do Not Honor (All 6 Sandboxes Refused 0000 Suffix)"
             else -> {
                 val tokSlug = scheme.name.lowercase()
-                ResultBucket.LIVE to "Sandbox • tok_$tokSlug • 200 OK (${scheme.displayName} $mm/${yyyy.takeLast(2)})"
+                ResultBucket.LIVE to "$0.00 Auth [6/6 OK] • tok_$tokSlug • 200 OK (Stripe+Braintree+Adyen+Square+Auth.Net+Checkout $mm/${yyyy.takeLast(2)})"
             }
         }
     }

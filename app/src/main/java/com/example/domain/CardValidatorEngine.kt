@@ -488,7 +488,9 @@ object CardValidatorEngine {
                     mm = paddedMm,
                     yyyy = yyyy,
                     cvv = cvv,
-                    scheme = scheme
+                    scheme = scheme,
+                    timeoutSeconds = timeoutSec,
+                    useCacheAndDedup = useCacheAndDedup
                 )
                 val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos).coerceAtLeast(1L)
                 ValidationRecord(

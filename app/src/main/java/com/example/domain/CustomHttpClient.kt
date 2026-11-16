@@ -33,6 +33,8 @@ data class CustomHttpConfig(
         const val DEFAULT_DIE_KEYWORDS = "die,dead,declined,invalid,insufficient,expired"
         const val DEFAULT_JSON_PAYLOAD =
             """{"lista":"{lista}","card":"{card}","month":"{mm}","year":"{yyyy}","cvv":"{cvv}","scheme":"{scheme}","bin":"{bin}"}"""
+        const val ZERO_DOLLAR_AUTH_JSON_PAYLOAD =
+            """{"amount":0,"currency":"USD","verify_card":true,"auth_type":"zero_dollar","card":{"number":"{card}","exp_month":"{mm}","exp_year":"{yyyy}","cvc":"{cvv}","scheme":"{scheme}","bin":"{bin}"}}"""
         const val DEFAULT_FORM_PAYLOAD =
             "lista={lista}&card={card}&mm={mm}&yyyy={yyyy}&cvv={cvv}&scheme={scheme}&bin={bin}"
     }

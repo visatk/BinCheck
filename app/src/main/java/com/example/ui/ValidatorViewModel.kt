@@ -36,6 +36,7 @@ import com.example.domain.ImportedFilePreview
 import com.example.domain.NetworkClientProvider
 import com.example.domain.NetworkTelemetrySnapshot
 import com.example.domain.ResultBucket
+import com.example.domain.SandboxGatewayClient
 import com.example.domain.SandboxProvider
 import com.example.domain.SandboxTestRegistry
 import com.example.domain.TelegramProbeResult
@@ -283,6 +284,7 @@ class ValidatorViewModel(
             BinLookupService.clearAllCaches()
             ValidationApiProviders.clearCache()
             CustomHttpClient.clearCache()
+            SandboxGatewayClient.clearCache()
             NetworkClientProvider.clearDiskHttpCache()
             NetworkClientProvider.circuitBreaker.resetAll()
             NetworkClientProvider.telemetry.reset()
@@ -688,7 +690,8 @@ class ValidatorViewModel(
         val deviceStatus = NetworkClientProvider.inspectDeviceNetworkStatus(getApplication())
         val isNetworkEngine = (
             settings.validationMode != ValidationMode.LOCAL_DETERMINISTIC &&
-                settings.validationMode != ValidationMode.SANDBOX_SUITE
+                (settings.validationMode != ValidationMode.SANDBOX_SUITE ||
+                    SandboxGatewayClient.inspectEnvKeys().hasAnyConfiguredLiveSandbox)
             ) || (settings.telegramWebhookEnabled && settings.telegramChatId.isNotBlank())
 
         val effectiveConcurrency = if (settings.batterySaverMode || deviceStatus.shouldThrottleForBatteryOrData) {

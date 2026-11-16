@@ -69,6 +69,7 @@ import com.example.domain.CustomHttpConfig
 import com.example.domain.DeviceNetworkStatus
 import com.example.domain.HttpProbeResult
 import com.example.domain.NetworkTelemetrySnapshot
+import com.example.domain.SandboxGatewayClient
 import com.example.domain.SandboxProvider
 import com.example.domain.SandboxTestRegistry
 import com.example.domain.TelegramProbeResult
@@ -350,7 +351,7 @@ fun SettingsBottomSheet(
 
                                 ModeOptionCard(
                                     title = stringResource(R.string.mode_sandbox_suite),
-                                    subtitle = "Official Stripe, Braintree, Adyen, Square, Auth.Net & Checkout.com test responses.",
+                                    subtitle = "Runs $0.00 Zero-Dollar Auth across Stripe, Braintree, Adyen, Square, Auth.Net & Checkout.com.",
                                     icon = AppIcons.CheckCircle,
                                     selected = selectedMode == ValidationMode.SANDBOX_SUITE,
                                     onClick = { selectedMode = ValidationMode.SANDBOX_SUITE },
@@ -815,6 +816,8 @@ private fun SandboxSuiteSectionCard(
     onLoadProvider: (SandboxProvider) -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val envSnapshot = remember { SandboxGatewayClient.inspectEnvKeys() }
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -844,6 +847,32 @@ private fun SandboxSuiteSectionCard(
                         color = colorScheme.onSurfaceVariant
                     )
                 }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Surface(
+                shape = MaterialTheme.shapes.small,
+                color = if (envSnapshot.hasAnyConfiguredLiveSandbox) {
+                    colorScheme.primaryContainer.copy(alpha = 0.45f)
+                } else {
+                    colorScheme.surfaceContainerHigh
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("sandbox_env_status_badge")
+            ) {
+                Text(
+                    text = envSnapshot.summaryLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = com.example.ui.theme.JetBrainsMonoFamily,
+                    color = if (envSnapshot.hasAnyConfiguredLiveSandbox) {
+                        colorScheme.onPrimaryContainer
+                    } else {
+                        colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                )
             }
 
             Spacer(modifier = Modifier.height(10.dp))

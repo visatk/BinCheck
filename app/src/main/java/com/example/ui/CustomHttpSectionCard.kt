@@ -281,6 +281,25 @@ fun CustomHttpSectionCard(
                                 onConfigChange(
                                     config.copy(
                                         method = nextMethod,
+                                        bodyTemplate = CustomHttpConfig.ZERO_DOLLAR_AUTH_JSON_PAYLOAD
+                                    )
+                                )
+                            },
+                            label = {
+                                Text("$0 Auth JSON", style = MaterialTheme.typography.labelSmall)
+                            },
+                            modifier = Modifier.testTag("payload_preset_zero_auth")
+                        )
+                        SuggestionChip(
+                            onClick = {
+                                val nextMethod = if (config.method == HttpRequestMethod.POST_FORM) {
+                                    HttpRequestMethod.POST_JSON
+                                } else {
+                                    config.method
+                                }
+                                onConfigChange(
+                                    config.copy(
+                                        method = nextMethod,
                                         bodyTemplate = CustomHttpConfig.DEFAULT_JSON_PAYLOAD
                                     )
                                 )

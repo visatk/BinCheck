@@ -479,6 +479,7 @@ class ExampleUnitTest {
                 vector.expectedBucket,
                 record.bucket
             )
+            assertTrue(record.message.contains("$0.00 Auth"))
             assertTrue(record.message.contains(vector.gatewayCode))
         }
 
@@ -502,5 +503,37 @@ class ExampleUnitTest {
         assertEquals(ResultBucket.UNKNOWN, transientErr.bucket)
         assertTrue(transientErr.message.contains("processing_error"))
     }
+
+    @Test
+    fun sandboxGatewayClient_enforcesSandboxOnlyKeyGuardsAndParsesZeroAuthResponses() {
+        val snapshot = com.example.domain.SandboxGatewayClient.inspectEnvKeys()
+        assertEquals(6, snapshot.totalProviders)
+        assertEquals(6, snapshot.providerStatuses.size)
+
+        // Verify live keys are strictly rejected while sandbox test keys are accepted
+        assertFalse(com.example.domain.SandboxGatewayClient.isStripeSecretConfigured("sk_live_1234567890abcdef"))
+        assertFalse(com.example.domain.SandboxGatewayClient.isStripePublishableConfigured("pk_live_1234567890abcdef"))
+        assertFalse(com.example.domain.SandboxGatewayClient.isStripeSecretConfigured("sk_test_PLACEHOLDER_KEY"))
+        assertTrue(com.example.domain.SandboxGatewayClient.isStripeSecretConfigured("sk_test_51N9xYzRealSandboxKey1234"))
+        assertTrue(com.example.domain.SandboxGatewayClient.isStripePublishableConfigured("pk_test_51N9xYzRealSandboxKey1234"))
+        assertFalse(com.example.domain.SandboxGatewayClient.isCheckoutConfigured("sk_prd_1234567890abcdef"))
+        assertTrue(com.example.domain.SandboxGatewayClient.isCheckoutConfigured("sk_sbox_1234567890abcdef1234"))
+
+        val (liveBucket, liveMsg) = com.example.domain.SandboxGatewayClient.parseStripeSandboxResponse(
+            httpCode = 200,
+            body = """{"id":"seti_1SandboxZeroAuth","status":"succeeded"}"""
+        )
+        assertEquals(ResultBucket.LIVE, liveBucket)
+        assertTrue(liveMsg.contains("$0.00 Auth"))
+        assertTrue(liveMsg.contains("seti_1SandboxZeroAuth"))
+
+        val (dieBucket, dieMsg) = com.example.domain.SandboxGatewayClient.parseStripeSandboxResponse(
+            httpCode = 402,
+            body = """{"error":{"code":"card_declined","decline_code":"incorrect_cvc","message":"Your card's security code is incorrect."}}"""
+        )
+        assertEquals(ResultBucket.DIE, dieBucket)
+        assertTrue(dieMsg.contains("incorrect_cvc"))
+    }
 }
+
 
