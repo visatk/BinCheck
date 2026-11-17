@@ -58,6 +58,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.analytics.FirebaseMetrics
 import com.example.data.local.HistoryFilter
 import com.example.data.local.ValidationHistoryEntity
 import com.example.ui.theme.LocalConsoleColors
@@ -93,6 +94,10 @@ fun HistoryLogBottomSheet(
     val dateFormatter = remember { SimpleDateFormat("MMM dd, HH:mm:ss", Locale.US) }
     val colorScheme = MaterialTheme.colorScheme
     val consoleColors = LocalConsoleColors.current
+
+    LaunchedEffect(Unit) {
+        FirebaseMetrics.logScreenView("HistoryLog", "MainActivity")
+    }
 
     val shouldAutoLoadMore by remember(hasMore, entries.size) {
         derivedStateOf {

@@ -46,6 +46,7 @@ import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,6 +67,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.analytics.FirebaseMetrics
 import com.example.domain.BinLookupService
 import com.example.domain.CardValidatorEngine
 import com.example.domain.SandboxProvider
@@ -105,6 +107,7 @@ fun ValidatorScreen(
     ) { grants ->
         permissionSnapshot = AppPermissionHelper.inspectSnapshot(context)
         val granted = grants.values.all { it }
+        FirebaseMetrics.logPermissionPromptResult(granted = granted, source = "settings")
         scope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
             snackbarHostState.showSnackbar(
@@ -123,6 +126,7 @@ fun ValidatorScreen(
         onPromptAttempted = viewModel::markNotificationPermissionPrompted,
         onResult = { granted ->
             permissionSnapshot = AppPermissionHelper.inspectSnapshot(context)
+            FirebaseMetrics.logPermissionPromptResult(granted = granted, source = "startup")
             if (!granted) {
                 scope.launch {
                     snackbarHostState.currentSnackbarData?.dismiss()
@@ -164,6 +168,7 @@ fun ValidatorScreen(
     }
 
     fun openDeveloperChannel() {
+        FirebaseMetrics.logDeveloperChannelOpened(source = "workspace")
         runCatching {
             val intent = Intent(Intent.ACTION_VIEW, channelUrl.toUri()).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -202,7 +207,8 @@ fun ValidatorScreen(
             onGenerateBatchToConsole = viewModel::generateBatchIntoConsole,
             onLoadSandboxSuite = viewModel::loadSandboxVectorsIntoConsole,
             onClearAllBuckets = viewModel::clearAllResults,
-            onOpenConfigStudio = viewModel::openConfigStudio
+            onOpenConfigStudio = viewModel::openConfigStudio,
+            onToggleFirebaseMetrics = viewModel::setFirebaseMetricsQuick
         )
     }
 
@@ -305,6 +311,12 @@ fun ValidatorScreen(
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val isExpandedNavigation = maxWidth >= 840.dp
 
+        LaunchedEffect(drawerState.isOpen) {
+            if (drawerState.isOpen && !isExpandedNavigation) {
+                FirebaseMetrics.logScreenView("NavigationDrawer", "MainActivity")
+            }
+        }
+
         BinCheckNavigationShell(
             isExpandedWidth = isExpandedNavigation,
             drawerState = drawerState,
@@ -373,6 +385,19 @@ fun ValidatorScreen(
 
                     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                         val isTwoPaneLayout = maxWidth >= 700.dp && maxHeight >= 360.dp
+
+                        LaunchedEffect(isTwoPaneLayout, activeCompactPane) {
+                            val screenName = if (isTwoPaneLayout) {
+                                "Workspace_TwoPane"
+                            } else {
+                                when (activeCompactPane) {
+                                    CompactWorkspacePane.SPLIT -> "Workspace_Split"
+                                    CompactWorkspacePane.CONSOLE -> "Workspace_Console"
+                                    CompactWorkspacePane.RESULTS -> "Workspace_Results"
+                                }
+                            }
+                            FirebaseMetrics.logScreenView(screenName, "MainActivity")
+                        }
                         val horizontalPadding = when {
                             maxWidth < 380.dp -> 12.dp
                             maxWidth < 600.dp -> 16.dp
@@ -422,9 +447,16 @@ fun ValidatorScreen(
                                 uiState = uiState,
                                 fillRemainingHeight = fillHeight,
                                 onSelectTab = viewModel::selectTab,
-                                onCopyAll = { title, joined -> copyToClipboard(title, joined) },
+                                onCopyAll = { title, joined ->
+                                    val count = joined.lineSequence().count { it.isNotBlank() }
+                                    FirebaseMetrics.logResultsCopied(scope = "tab_all", count = count)
+                                    copyToClipboard(title, joined)
+                                },
                                 onClearTab = viewModel::clearActiveTabRecords,
-                                onCopyRecord = { record -> copyToClipboard("Record", record.normalizedLine) },
+                                onCopyRecord = { record ->
+                                    FirebaseMetrics.logResultsCopied(scope = "single", count = 1)
+                                    copyToClipboard("Record", record.normalizedLine)
+                                },
                                 onRemoveRecord = { record -> viewModel.removeRecord(record.id, record.bucket) },
                                 onInspectBin = viewModel::openBinInspector,
                                 modifier = cardModifier

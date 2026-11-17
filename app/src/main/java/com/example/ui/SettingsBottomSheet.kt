@@ -47,6 +47,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -63,6 +64,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import com.example.R
+import com.example.analytics.FirebaseMetrics
 import com.example.data.AppThemeMode
 import com.example.data.ValidatorSettings
 import com.example.domain.CustomHttpConfig
@@ -130,7 +132,8 @@ fun SettingsBottomSheet(
     onGenerateBatchToConsole: (pattern: String, quantity: Int) -> Unit,
     onLoadSandboxSuite: (SandboxProvider) -> Unit = {},
     onClearAllBuckets: () -> Unit,
-    onOpenConfigStudio: () -> Unit = {}
+    onOpenConfigStudio: () -> Unit = {},
+    onToggleFirebaseMetrics: (Boolean) -> Unit = {}
 ) {
     BackHandler(onBack = onDismiss)
 
@@ -154,6 +157,16 @@ fun SettingsBottomSheet(
     var deduplicateBatchInputs by remember(settings) { mutableStateOf(settings.deduplicateBatchInputs) }
     var wifiOnlyBatch by remember(settings) { mutableStateOf(settings.wifiOnlyBatch) }
     var batterySaverMode by remember(settings) { mutableStateOf(settings.batterySaverMode) }
+    var firebaseMetricsEnabled by remember(settings) { mutableStateOf(settings.firebaseMetricsEnabled) }
+
+    LaunchedEffect(activeTab) {
+        val screenName = when (activeTab) {
+            SettingsStudioTab.ENGINE -> "Settings_Engine"
+            SettingsStudioTab.GATEWAY -> "Settings_Gateway"
+            SettingsStudioTab.SYSTEM -> "Settings_System"
+        }
+        FirebaseMetrics.logScreenView(screenName, "MainActivity")
+    }
 
     val channelUrl = stringResource(R.string.developer_channel_url)
 
@@ -630,6 +643,14 @@ fun SettingsBottomSheet(
                                     useDynamicColor = useDynamicColor,
                                     onSelectThemeMode = { selectedThemeMode = it },
                                     onToggleDynamicColor = { useDynamicColor = it }
+                                )
+
+                                MetricsTelemetrySectionCard(
+                                    metricsEnabled = firebaseMetricsEnabled,
+                                    onToggleMetrics = { enabled ->
+                                        firebaseMetricsEnabled = enabled
+                                        onToggleFirebaseMetrics(enabled)
+                                    }
                                 )
 
                                 Surface(

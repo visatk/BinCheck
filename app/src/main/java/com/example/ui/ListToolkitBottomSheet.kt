@@ -69,6 +69,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.analytics.FirebaseMetrics
 import com.example.domain.CardScheme
 import com.example.domain.DedupMode
 import com.example.domain.FileTextExtractor
@@ -128,6 +129,10 @@ fun ListToolkitBottomSheet(
     var loadedFileBadge by remember { mutableStateOf<String?>(null) }
     var inlineFeedbackMessage by remember { mutableStateOf<String?>(null) }
     var isFileBusy by remember { mutableStateOf(false) }
+
+    LaunchedEffect(activeTab) {
+        FirebaseMetrics.logScreenView("ListToolkit_${activeTab.label}", "MainActivity")
+    }
 
     var transformResult by remember {
         mutableStateOf(

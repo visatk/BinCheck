@@ -92,6 +92,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.analytics.FirebaseMetrics
 import com.example.domain.CheckpointCondition
 import com.example.domain.CheckpointEvaluationResult
 import com.example.domain.CustomCheckpointRule
@@ -161,6 +162,11 @@ fun CustomConfigStudioBottomSheet(
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var statusBanner by rememberSaveable { mutableStateOf<String?>(null) }
     var showCurlImportDialog by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(selectedTab) {
+        val tabName = ConfigStudioTab.entries.getOrNull(selectedTab)?.title ?: "Request"
+        FirebaseMetrics.logScreenView("ConfigStudio_$tabName", "MainActivity")
+    }
 
     // Editable state mirrors initialConfig
     var profileName by rememberSaveable { mutableStateOf(initialConfig.profileName.ifBlank { "Custom Config" }) }
@@ -307,9 +313,11 @@ fun CustomConfigStudioBottomSheet(
             }
             CustomConfigStudioEngine.importConfigFromJson(rawText)
                 .onSuccess { imported ->
+                    FirebaseMetrics.logCustomConfigImported(format = "json_file", success = true)
                     loadConfigIntoEditor(imported, "Imported '${imported.profileName}' from .json file.")
                 }
                 .onFailure { err ->
+                    FirebaseMetrics.logCustomConfigImported(format = "json_file", success = false)
                     statusBanner = "Import failed: ${err.localizedMessage ?: "Invalid JSON"}"
                 }
         }
@@ -331,6 +339,7 @@ fun CustomConfigStudioBottomSheet(
                 }.getOrDefault(false)
             }
             statusBanner = if (ok) {
+                FirebaseMetrics.logCustomConfigExported(format = "json_file")
                 "Exported '${profileName.ifBlank { "config" }}.json' successfully."
             } else {
                 "Failed to write config JSON file."
@@ -573,6 +582,7 @@ fun CustomConfigStudioBottomSheet(
                             sampleLine = sampleTestLine
                         )
                         clipboard.setText(AnnotatedString(curlCmd))
+                        FirebaseMetrics.logCustomConfigExported(format = "curl")
                         statusBanner = "Copied ready-to-run cURL command to clipboard."
                     },
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
@@ -593,6 +603,7 @@ fun CustomConfigStudioBottomSheet(
                     onClick = {
                         val loli = CustomConfigStudioEngine.exportToLoliScript(buildCurrentConfig())
                         clipboard.setText(AnnotatedString(loli))
+                        FirebaseMetrics.logCustomConfigExported(format = "loliscript")
                         statusBanner = "Copied OpenBullet LoliScript block to clipboard."
                     },
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
@@ -944,6 +955,7 @@ fun CustomConfigStudioBottomSheet(
                                 onCopyJson = {
                                     val json = CustomConfigStudioEngine.exportConfigToJson(buildCurrentConfig())
                                     clipboard.setText(AnnotatedString(json))
+                                    FirebaseMetrics.logCustomConfigExported(format = "json_clipboard")
                                     statusBanner = "Copied Config JSON to clipboard."
                                 },
                                 onPasteJson = {
@@ -953,12 +965,14 @@ fun CustomConfigStudioBottomSheet(
                                     } else {
                                         CustomConfigStudioEngine.importConfigFromJson(clip)
                                             .onSuccess { imported ->
+                                                FirebaseMetrics.logCustomConfigImported(format = "json_clipboard", success = true)
                                                 loadConfigIntoEditor(
                                                     imported,
                                                     "Imported '${imported.profileName}' from clipboard JSON."
                                                 )
                                             }
                                             .onFailure { err ->
+                                                FirebaseMetrics.logCustomConfigImported(format = "json_clipboard", success = false)
                                                 statusBanner = "Clipboard JSON invalid: ${err.localizedMessage ?: "Parse error"}"
                                             }
                                     }
@@ -969,11 +983,13 @@ fun CustomConfigStudioBottomSheet(
                                         sampleLine = sampleTestLine
                                     )
                                     clipboard.setText(AnnotatedString(curlCmd))
+                                    FirebaseMetrics.logCustomConfigExported(format = "curl")
                                     statusBanner = "Copied cURL command to clipboard."
                                 },
                                 onCopyLoliScript = {
                                     val loli = CustomConfigStudioEngine.exportToLoliScript(buildCurrentConfig())
                                     clipboard.setText(AnnotatedString(loli))
+                                    FirebaseMetrics.logCustomConfigExported(format = "loliscript")
                                     statusBanner = "Copied LoliScript block to clipboard."
                                 },
                                 onOpenCurlImporter = { showCurlImportDialog = true }
@@ -1293,8 +1309,14 @@ private fun CurlOrFetchImportDialog(
             Button(
                 onClick = {
                     CustomConfigStudioEngine.importFromCurlOrFetch(snippet, autoTokenize)
-                        .onSuccess { onImported(it) }
-                        .onFailure { err -> errorMsg = err.localizedMessage ?: "Failed to parse snippet." }
+                        .onSuccess {
+                            FirebaseMetrics.logCustomConfigImported(format = "curl_fetch_raw_loli", success = true)
+                            onImported(it)
+                        }
+                        .onFailure { err ->
+                            FirebaseMetrics.logCustomConfigImported(format = "curl_fetch_raw_loli", success = false)
+                            errorMsg = err.localizedMessage ?: "Failed to parse snippet."
+                        }
                 },
                 enabled = snippet.isNotBlank(),
                 modifier = Modifier.testTag("curl_import_confirm_button")

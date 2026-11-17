@@ -38,6 +38,17 @@ data class DeviceNetworkStatus(
         get() = isBackgroundDataRestricted || isPowerSaveMode
 }
 
+fun interface NetworkHttpMetricListener {
+    fun onHttpCallCompleted(
+        rawUrl: String,
+        method: String,
+        statusCode: Int,
+        latencyMs: Long,
+        responseBytes: Long,
+        fromCache: Boolean
+    )
+}
+
 /**
  * Centralized shared OkHttpClient, disk HTTP Cache, ConnectionPool, Dispatcher,
  * CircuitBreaker, GZIP compression utilities, and global telemetry.
@@ -52,6 +63,9 @@ object NetworkClientProvider {
         failureThreshold = 5,
         openCooldownMs = 20_000L
     )
+
+    @Volatile
+    var httpMetricListener: NetworkHttpMetricListener? = null
 
     @Volatile
     private var appCacheDir: File? = null
@@ -226,10 +240,24 @@ object NetworkClientProvider {
         client: OkHttpClient,
         request: Request
     ): HttpCallRawResponse = suspendCancellableCoroutine { continuation ->
+        val startNanos = System.nanoTime()
+        val rawUrl = request.url.toString()
+        val method = request.method
         val call = client.newCall(request)
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
+                val latencyMs = TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - startNanos).coerceAtLeast(0L))
+                runCatching {
+                    httpMetricListener?.onHttpCallCompleted(
+                        rawUrl = rawUrl,
+                        method = method,
+                        statusCode = -1,
+                        latencyMs = latencyMs,
+                        responseBytes = -1L,
+                        fromCache = false
+                    )
+                }
                 if (continuation.isActive) {
                     continuation.resumeWithException(e)
                 }
@@ -251,6 +279,17 @@ object NetworkClientProvider {
                                 responseBody = body
                             )
                             val fromCache = res.networkResponse == null && res.cacheResponse != null
+                            val latencyMs = TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - startNanos).coerceAtLeast(0L))
+                            runCatching {
+                                httpMetricListener?.onHttpCallCompleted(
+                                    rawUrl = rawUrl,
+                                    method = method,
+                                    statusCode = code,
+                                    latencyMs = latencyMs,
+                                    responseBytes = body.toByteArray(Charsets.UTF_8).size.toLong(),
+                                    fromCache = fromCache
+                                )
+                            }
                             val headersMap = buildMap<String, String> {
                                 for (i in 0 until res.headers.size) {
                                     put(res.headers.name(i).lowercase(), res.headers.value(i))

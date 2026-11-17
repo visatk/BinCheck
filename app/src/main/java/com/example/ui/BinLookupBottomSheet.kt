@@ -42,6 +42,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -54,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import com.example.R
+import com.example.analytics.FirebaseMetrics
 import com.example.domain.BinInfo
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalConsoleColors
@@ -80,6 +82,10 @@ fun BinLookupBottomSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val colorScheme = MaterialTheme.colorScheme
     val consoleColors = LocalConsoleColors.current
+
+    LaunchedEffect(Unit) {
+        FirebaseMetrics.logScreenView("BinInspector", "MainActivity")
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -325,6 +331,10 @@ private fun BinDetailsCard(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val consoleColors = LocalConsoleColors.current
+
+    LaunchedEffect(Unit) {
+        FirebaseMetrics.logScreenView("BinInspector", "MainActivity")
+    }
 
     Surface(
         modifier = Modifier

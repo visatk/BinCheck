@@ -97,4 +97,6 @@
     <string name="batch_notification_channel_desc">Notifies you when a background checking run finishes</string>
     <string name="config_studio_chip">Config</string>
     <string name="nav_config_studio">Custom Config Studio</string>
+    <string name="firebase_metrics_title">Firebase Metrics &amp; Diagnostics</string>
+    <string name="firebase_metrics_subtitle">Anonymous usage, crash &amp; latency metrics — never logs cards, CVVs, or tokens</string>
 </resources>

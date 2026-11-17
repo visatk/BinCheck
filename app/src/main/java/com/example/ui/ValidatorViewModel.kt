@@ -17,6 +17,7 @@ import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.example.analytics.FirebaseMetrics
 import com.example.data.AppThemeMode
 import com.example.data.ValidatorPreferencesRepository
 import com.example.data.ValidatorSettings
@@ -169,10 +170,17 @@ class ValidatorViewModel(
     private var batchResultsObserverJob: Job? = null
 
     init {
+        FirebaseMetrics.init(application)
         viewModelScope.launch(Dispatchers.IO) {
             NetworkClientProvider.init(application)
             BinLookupService.attachDao(AppDatabase.getInstance(application).binCacheDao())
             refreshDeviceAndNetworkTelemetry()
+        }
+        viewModelScope.launch {
+            preferencesRepository.settingsFlow.collect { prefs ->
+                FirebaseMetrics.setCollectionEnabled(prefs.firebaseMetricsEnabled)
+                FirebaseMetrics.syncUserProperties(prefs)
+            }
         }
         observeDebouncedBinInput()
         reconnectOngoingBatchWork()
@@ -293,6 +301,7 @@ class ValidatorViewModel(
             NetworkClientProvider.clearDiskHttpCache()
             NetworkClientProvider.circuitBreaker.resetAll()
             NetworkClientProvider.telemetry.reset()
+            FirebaseMetrics.logCachesCleared()
             _localState.update {
                 it.copy(
                     networkStats = NetworkClientProvider.telemetry.snapshot(),
@@ -313,6 +322,7 @@ class ValidatorViewModel(
     }
 
     fun selectTab(bucket: ResultBucket) {
+        FirebaseMetrics.logResultTabSelected(bucket.name.lowercase())
         _localState.update { it.copy(selectedTab = bucket) }
     }
 
@@ -367,6 +377,15 @@ class ValidatorViewModel(
         _localState.update { it.copy(isTestingEndpoint = true, httpProbeResult = null) }
         viewModelScope.launch {
             val probe = CustomHttpClient.testEndpoint(config, customSampleLine = customSampleLine)
+            FirebaseMetrics.logCustomHttpTested(
+                method = config.method.name.lowercase(),
+                statusCode = probe.statusCode,
+                detectedBucket = probe.detectedBucket.name.lowercase(),
+                step1Enabled = config.preRequestEnabled,
+                proxyEnabled = config.proxyEnabled,
+                latencyMs = probe.latencyMs,
+                reachable = probe.isReachable
+            )
             _localState.update {
                 it.copy(
                     isTestingEndpoint = false,
@@ -382,6 +401,14 @@ class ValidatorViewModel(
             preferencesRepository.applyCustomHttpConfig(
                 config = config,
                 activateRemoteWebhookMode = true
+            )
+            FirebaseMetrics.logCustomConfigApplied(
+                method = config.method.name.lowercase(),
+                parseRuleCount = config.parsedParseRules().size,
+                checkpointRuleCount = config.parsedCheckpointRules().size,
+                preRequestEnabled = config.preRequestEnabled,
+                proxyEnabled = config.proxyEnabled,
+                gzipEnabled = config.compressBodyGzip
             )
             _localState.update {
                 it.copy(
@@ -410,6 +437,7 @@ class ValidatorViewModel(
         _localState.update { it.copy(isTestingTelegram = true, telegramProbeResult = null) }
         viewModelScope.launch {
             val probe = TelegramWebhookClient.verifyAndDetectChat()
+            FirebaseMetrics.logTelegramProbe(action = "detect_chat", success = probe.success)
             _localState.update {
                 it.copy(
                     isTestingTelegram = false,
@@ -425,6 +453,7 @@ class ValidatorViewModel(
         _localState.update { it.copy(isTestingTelegram = true, telegramProbeResult = null) }
         viewModelScope.launch {
             val probe = TelegramWebhookClient.sendTestMessage(chatId)
+            FirebaseMetrics.logTelegramProbe(action = "send_test", success = probe.success)
             _localState.update {
                 it.copy(
                     isTestingTelegram = false,
@@ -474,6 +503,11 @@ class ValidatorViewModel(
     }
 
     fun applyToolkitOutput(outputText: String, result: ToolkitTransformResult) {
+        FirebaseMetrics.logToolkitApplied(
+            inputCount = result.totalInputLines,
+            outputCount = result.outputCount,
+            removedCount = result.totalRemoved
+        )
         val banner = if (result.totalRemoved > 0) {
             "Kept ${result.outputCount} clean line(s) (${result.totalRemoved} removed)."
         } else {
@@ -542,7 +576,25 @@ class ValidatorViewModel(
             )
         }
         viewModelScope.launch {
-            val info = BinLookupService.lookupBin(bin6, forceRefresh = forceRefresh)
+            val startNanos = System.nanoTime()
+            val trace = FirebaseMetrics.startTrace("bin_lookup_inspect")
+            val info = try {
+                BinLookupService.lookupBin(bin6, forceRefresh = forceRefresh)
+            } finally {
+                trace.putAttribute("force_refresh", forceRefresh.toString())
+                trace.stop()
+            }
+            val latencyMs = TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - startNanos).coerceAtLeast(0L))
+            FirebaseMetrics.logBinLookup(
+                source = info?.source ?: "none",
+                cacheHit = !forceRefresh && latencyMs < 15L && info != null,
+                scheme = info?.scheme.orEmpty(),
+                countryCode = info?.countryCode.orEmpty(),
+                isPrepaid = info?.isPrepaid,
+                isVerified = info?.isNetworkVerified ?: false,
+                success = info != null,
+                latencyMs = latencyMs
+            )
             _localState.update { prev ->
                 val updatedMap = if (info != null) prev.binLookupMap + (bin6 to info) else prev.binLookupMap
                 prev.copy(
@@ -591,6 +643,10 @@ class ValidatorViewModel(
     }
 
     fun setHistoryFilter(filter: HistoryFilter) {
+        FirebaseMetrics.logHistoryFiltered(
+            filter = filter.name.lowercase(),
+            hasSearchQuery = _historyQuery.value.isNotBlank()
+        )
         _historyPageLimit.value = ValidationHistoryRepository.DEFAULT_PAGE_SIZE
         _historyFilter.value = filter
     }
@@ -609,6 +665,7 @@ class ValidatorViewModel(
     fun clearAllHistory() {
         viewModelScope.launch {
             historyRepository.clearAllHistory()
+            FirebaseMetrics.logHistoryCleared()
             _localState.update { it.copy(statusBannerMessage = "History cleared.") }
         }
     }
@@ -632,7 +689,12 @@ class ValidatorViewModel(
         }
 
         viewModelScope.launch {
-            val result = FileTextExtractor.readAndParseUri(getApplication(), uri)
+            val trace = FirebaseMetrics.startTrace("file_import_parse")
+            val result = try {
+                FileTextExtractor.readAndParseUri(getApplication(), uri)
+            } finally {
+                trace.stop()
+            }
             result.fold(
                 onSuccess = { preview ->
                     _localState.update {
@@ -648,6 +710,8 @@ class ValidatorViewModel(
                     }
                 },
                 onFailure = { err ->
+                    FirebaseMetrics.logFileImportError(err::class.java.simpleName)
+                    FirebaseMetrics.recordNonFatal("file_import_parse", err)
                     _localState.update {
                         it.copy(
                             isImportingFile = false,
@@ -680,6 +744,14 @@ class ValidatorViewModel(
         }
 
         val payload = chosenLines.joinToString("\n")
+        FirebaseMetrics.logFileImported(
+            fileType = preview.fileType.name.lowercase(),
+            totalLines = preview.allNonEmptyLines.size,
+            delimitedLines = preview.delimitedRecordLines.size,
+            append = append,
+            onlyDelimited = onlyDelimitedRecords,
+            startImmediately = startImmediately
+        )
         _localState.update { prev ->
             val existing = prev.rawInputText.trim()
             val merged = if (append && existing.isNotEmpty()) {
@@ -714,6 +786,12 @@ class ValidatorViewModel(
     }
 
     private fun stopBatchRun() {
+        val current = _localState.value
+        FirebaseMetrics.logBatchStopped(
+            mode = uiState.value.settings.validationMode,
+            processed = current.processedCount,
+            total = current.totalBatchCount
+        )
         activeWorkId?.let { workManager.cancelWorkById(it) }
         workerObserverJob?.cancel()
         batchResultsObserverJob?.cancel()
@@ -859,6 +937,16 @@ class ValidatorViewModel(
                 BatchValidationWorker.UNIQUE_BATCH_WORK_NAME,
                 ExistingWorkPolicy.REPLACE,
                 workRequest
+            )
+            FirebaseMetrics.logBatchStarted(
+                mode = settings.validationMode,
+                sourceType = if (sourceName.equals("Console", ignoreCase = true)) "console" else "file",
+                lineCount = lines.size,
+                concurrency = effectiveConcurrency,
+                delayMs = effectiveDelayMs,
+                wifiOnly = settings.wifiOnlyBatch,
+                batterySaver = settings.batterySaverMode,
+                deduplicate = settings.deduplicateBatchInputs
             )
         }
     }
@@ -1051,6 +1139,10 @@ class ValidatorViewModel(
             templateLine = pattern,
             count = quantity.coerceIn(1, 100)
         )
+        FirebaseMetrics.logPatternGenerated(
+            quantity = expanded.size,
+            hasWildcards = pattern.any { it.equals('x', ignoreCase = true) }
+        )
         _localState.update { prev ->
             val existing = prev.rawInputText.trim()
             val combined = if (existing.isEmpty() || existing == pattern.trim()) {
@@ -1069,6 +1161,7 @@ class ValidatorViewModel(
     fun loadSandboxVectorsIntoConsole(provider: SandboxProvider) {
         val vectors = SandboxTestRegistry.vectorsForProvider(provider)
         val batchText = vectors.joinToString("\n") { it.toPipeLine() }
+        FirebaseMetrics.logSandboxSuiteLoaded(provider.id, vectors.size)
         viewModelScope.launch {
             preferencesRepository.setValidationMode(ValidationMode.SANDBOX_SUITE)
             _localState.update { prev ->
@@ -1087,6 +1180,10 @@ class ValidatorViewModel(
         if (currentText.isEmpty()) {
             val defaultTemplate = uiState.value.settings.patternTemplate
             val batch = CardValidatorEngine.expandPatternBatch(defaultTemplate, uiState.value.settings.generateQuantity)
+            FirebaseMetrics.logPatternGenerated(
+                quantity = batch.size,
+                hasWildcards = defaultTemplate.any { it.equals('x', ignoreCase = true) }
+            )
             _localState.update {
                 it.copy(
                     rawInputText = batch.joinToString("\n"),
@@ -1098,7 +1195,7 @@ class ValidatorViewModel(
 
         viewModelScope.launch {
             val generateQty = uiState.value.settings.generateQuantity
-            val (expandedLines, joinedText) = withContext(Dispatchers.Default) {
+            val (inputLineCount, expandedLines, joinedText) = withContext(Dispatchers.Default) {
                 val lines = currentText.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
                 val expanded = if (lines.size == 1 && lines[0].any { it.equals('x', ignoreCase = true) }) {
                     CardValidatorEngine.expandPatternBatch(lines[0], generateQty)
@@ -1111,8 +1208,12 @@ class ValidatorViewModel(
                         }
                     }
                 }
-                expanded to expanded.joinToString("\n")
+                Triple(lines.size, expanded, expanded.joinToString("\n"))
             }
+            FirebaseMetrics.logWildcardsExpanded(
+                inputLines = inputLineCount,
+                outputLines = expandedLines.size
+            )
 
             _localState.update {
                 it.copy(
@@ -1140,6 +1241,7 @@ class ValidatorViewModel(
         batterySaverMode: Boolean = false
     ) {
         viewModelScope.launch {
+            val currentMetricsEnabled = uiState.value.settings.firebaseMetricsEnabled
             preferencesRepository.updateSettings(
                 validationMode = validationMode,
                 webhookUrl = httpConfig.url,
@@ -1180,7 +1282,20 @@ class ValidatorViewModel(
                 deduplicateBatchInputs = deduplicateBatchInputs,
                 gzipCustomRequests = httpConfig.compressBodyGzip,
                 wifiOnlyBatch = wifiOnlyBatch,
-                batterySaverMode = batterySaverMode
+                batterySaverMode = batterySaverMode,
+                firebaseMetricsEnabled = currentMetricsEnabled
+            )
+            FirebaseMetrics.logSettingsSaved(
+                uiState.value.settings.copy(
+                    validationMode = validationMode,
+                    concurrency = concurrency,
+                    themeMode = themeMode,
+                    useDynamicColor = useDynamicColor,
+                    telegramWebhookEnabled = telegramConfig.enabled,
+                    batterySaverMode = batterySaverMode,
+                    wifiOnlyBatch = wifiOnlyBatch,
+                    firebaseMetricsEnabled = currentMetricsEnabled
+                )
             )
             val effectiveDelay = validationMode.resolveDelayMs(batchDelayMs)
             val savedMsg = if (validationMode.hasFixedDelay) {
@@ -1201,6 +1316,7 @@ class ValidatorViewModel(
 
     fun setValidationModeQuick(mode: ValidationMode) {
         val currentDelayMs = uiState.value.settings.batchDelayMs
+        FirebaseMetrics.logValidationModeSwitched(mode, "toolbar")
         viewModelScope.launch {
             preferencesRepository.setValidationMode(mode)
             val switchMsg = mode.fixedDelayMs?.let { fixedMs ->
@@ -1221,6 +1337,13 @@ class ValidatorViewModel(
     fun setDynamicColorQuick(enabled: Boolean) {
         viewModelScope.launch {
             preferencesRepository.setDynamicColor(enabled)
+        }
+    }
+
+    fun setFirebaseMetricsQuick(enabled: Boolean) {
+        FirebaseMetrics.setCollectionEnabled(enabled)
+        viewModelScope.launch {
+            preferencesRepository.setFirebaseMetricsEnabled(enabled)
         }
     }
 

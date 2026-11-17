@@ -70,7 +70,8 @@ data class ValidatorSettings(
     val gzipCustomRequests: Boolean = false,
     val wifiOnlyBatch: Boolean = false,
     val batterySaverMode: Boolean = false,
-    val hasPromptedNotifications: Boolean = false
+    val hasPromptedNotifications: Boolean = false,
+    val firebaseMetricsEnabled: Boolean = true
 ) {
     val effectiveDelayMs: Long
         get() = validationMode.resolveDelayMs(batchDelayMs)
@@ -158,6 +159,7 @@ class ValidatorPreferencesRepository(private val context: Context) {
         val WIFI_ONLY_BATCH = booleanPreferencesKey("wifi_only_batch")
         val BATTERY_SAVER_MODE = booleanPreferencesKey("battery_saver_mode")
         val HAS_PROMPTED_NOTIFICATIONS = booleanPreferencesKey("has_prompted_notifications")
+        val FIREBASE_METRICS_ENABLED = booleanPreferencesKey("firebase_metrics_enabled")
     }
 
     val settingsFlow: Flow<ValidatorSettings> = context.dataStore.data.map { prefs ->
@@ -227,7 +229,8 @@ class ValidatorPreferencesRepository(private val context: Context) {
             gzipCustomRequests = prefs[Keys.GZIP_CUSTOM_REQUESTS] ?: false,
             wifiOnlyBatch = prefs[Keys.WIFI_ONLY_BATCH] ?: false,
             batterySaverMode = prefs[Keys.BATTERY_SAVER_MODE] ?: false,
-            hasPromptedNotifications = prefs[Keys.HAS_PROMPTED_NOTIFICATIONS] ?: false
+            hasPromptedNotifications = prefs[Keys.HAS_PROMPTED_NOTIFICATIONS] ?: false,
+            firebaseMetricsEnabled = prefs[Keys.FIREBASE_METRICS_ENABLED] ?: true
         )
     }
 
@@ -245,6 +248,10 @@ class ValidatorPreferencesRepository(private val context: Context) {
 
     suspend fun setHasPromptedNotifications(prompted: Boolean) {
         context.dataStore.edit { it[Keys.HAS_PROMPTED_NOTIFICATIONS] = prompted }
+    }
+
+    suspend fun setFirebaseMetricsEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.FIREBASE_METRICS_ENABLED] = enabled }
     }
 
     suspend fun applyCustomHttpConfig(
@@ -345,7 +352,8 @@ class ValidatorPreferencesRepository(private val context: Context) {
         deduplicateBatchInputs: Boolean = true,
         gzipCustomRequests: Boolean = false,
         wifiOnlyBatch: Boolean = false,
-        batterySaverMode: Boolean = false
+        batterySaverMode: Boolean = false,
+        firebaseMetricsEnabled: Boolean? = null
     ) {
         context.dataStore.edit { prefs ->
             prefs[Keys.VALIDATION_MODE] = validationMode.name
@@ -388,6 +396,7 @@ class ValidatorPreferencesRepository(private val context: Context) {
             prefs[Keys.GZIP_CUSTOM_REQUESTS] = gzipCustomRequests
             prefs[Keys.WIFI_ONLY_BATCH] = wifiOnlyBatch
             prefs[Keys.BATTERY_SAVER_MODE] = batterySaverMode
+            firebaseMetricsEnabled?.let { prefs[Keys.FIREBASE_METRICS_ENABLED] = it }
         }
     }
 }

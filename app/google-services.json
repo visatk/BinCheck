@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "700354676313",
+    "project_id": "binchkapp",
+    "storage_bucket": "binchkapp.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:700354676313:android:9acc76f97f4d1b1316d348",
+        "android_client_info": {
+          "package_name": "com.aistudio.bincheck.vqxkpm"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "700354676313-d5p7qgfr0fdpd7vqpkjkd6oodk5hqhco.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAkQxlIIPtOtwi3ka9Ie0FMbp88uScsgKw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "700354676313-d5p7qgfr0fdpd7vqpkjkd6oodk5hqhco.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

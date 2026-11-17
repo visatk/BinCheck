@@ -17,6 +17,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.example.MainActivity
 import com.example.R
+import com.example.analytics.FirebaseMetrics
 import com.example.data.local.AppDatabase
 import com.example.data.local.ValidationHistoryRepository
 import com.example.domain.BinLookupService
@@ -71,6 +72,10 @@ class BatchValidationWorker(
         val storedSettings = runCatching {
             com.example.data.ValidatorPreferencesRepository(applicationContext).settingsFlow.first()
         }.getOrNull()
+        FirebaseMetrics.init(
+            context = applicationContext,
+            enabled = storedSettings?.firebaseMetricsEnabled ?: true
+        )
         val storedConfig = storedSettings?.toCustomHttpConfig() ?: CustomHttpConfig()
 
         val batchId = inputData.getString(KEY_BATCH_ID) ?: return@withContext Result.failure()
@@ -137,6 +142,14 @@ class BatchValidationWorker(
         val liveCounter = AtomicInteger(0)
         val dieCounter = AtomicInteger(0)
         val unknownCounter = AtomicInteger(0)
+        val dedupSavedCounter = AtomicInteger(0)
+        val startNanos = System.nanoTime()
+        val sourceType = if (sourceName.equals("Console", ignoreCase = true)) "console" else "file"
+        val batchTrace = FirebaseMetrics.startTrace("batch_validation_run").apply {
+            putAttribute("mode", mode.name.lowercase())
+            putAttribute("source_type", sourceType)
+            incrementMetric("total_items", total.toLong())
+        }
         val lastProgressTime = AtomicLong(0L)
         val isPublishingProgress = AtomicBoolean(false)
         val dbBatchFlushSize = if (total >= 250) 100 else DB_BATCH_FLUSH_SIZE
@@ -331,6 +344,9 @@ class BatchValidationWorker(
             forceProgress: Boolean = false
         ): Boolean {
             val (record, wasDedupHit) = validateSingleLine(item.rawLine)
+            if (wasDedupHit) {
+                dedupSavedCounter.incrementAndGet()
+            }
 
             persistRecord(item.sourceName, record)
 
@@ -395,14 +411,46 @@ class BatchValidationWorker(
             runCatching { repository.trimExcessHistory() }
 
             val processedTotal = processedCounter.get()
+            val liveTotal = liveCounter.get()
+            val dieTotal = dieCounter.get()
+            val unknownTotal = unknownCounter.get()
+            val dedupSavedTotal = dedupSavedCounter.get()
+            val durationMs = TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - startNanos).coerceAtLeast(0L))
+
+            batchTrace.incrementMetric("processed_items", processedTotal.toLong())
+            batchTrace.incrementMetric("live_items", liveTotal.toLong())
+            batchTrace.incrementMetric("die_items", dieTotal.toLong())
+            batchTrace.incrementMetric("unknown_items", unknownTotal.toLong())
+            batchTrace.incrementMetric("dedup_saved", dedupSavedTotal.toLong())
+
+            if (isStopped) {
+                FirebaseMetrics.logBatchStopped(
+                    mode = mode,
+                    processed = processedTotal,
+                    total = total
+                )
+            } else {
+                FirebaseMetrics.logBatchCompleted(
+                    mode = mode,
+                    processed = processedTotal,
+                    total = total,
+                    live = liveTotal,
+                    die = dieTotal,
+                    unknown = unknownTotal,
+                    durationMs = durationMs,
+                    dedupSaved = dedupSavedTotal,
+                    outcome = "success"
+                )
+            }
+
             if (!isStopped && processedTotal > 0) {
                 runCatching {
                     postCompletionNotification(
                         processed = processedTotal,
                         total = total,
-                        live = liveCounter.get(),
-                        die = dieCounter.get(),
-                        unknown = unknownCounter.get()
+                        live = liveTotal,
+                        die = dieTotal,
+                        unknown = unknownTotal
                     )
                 }
             }
@@ -412,14 +460,39 @@ class BatchValidationWorker(
                     KEY_BATCH_ID to batchId,
                     KEY_PROCESSED to processedTotal,
                     KEY_TOTAL to total,
-                    KEY_LIVE to liveCounter.get(),
-                    KEY_DIE to dieCounter.get(),
-                    KEY_UNKNOWN to unknownCounter.get()
+                    KEY_LIVE to liveTotal,
+                    KEY_DIE to dieTotal,
+                    KEY_UNKNOWN to unknownTotal
                 )
             )
         } catch (ce: CancellationException) {
+            FirebaseMetrics.logBatchStopped(
+                mode = mode,
+                processed = processedCounter.get(),
+                total = total
+            )
             throw ce
+        } catch (t: Throwable) {
+            FirebaseMetrics.logBatchFailed(
+                mode = mode,
+                processed = processedCounter.get(),
+                total = total,
+                reason = t::class.java.simpleName
+            )
+            FirebaseMetrics.recordNonFatal(
+                tag = "batch_worker_failure",
+                throwable = t,
+                context = mapOf("mode" to mode.name, "total" to total.toString())
+            )
+            Result.failure(
+                workDataOf(
+                    KEY_BATCH_ID to batchId,
+                    KEY_PROCESSED to processedCounter.get(),
+                    KEY_TOTAL to total
+                )
+            )
         } finally {
+            batchTrace.stop()
             withContext(NonCancellable) {
                 runCatching { flushRemainingHistory() }
                 runCatching { repository.clearQueuedBatch(batchId) }
