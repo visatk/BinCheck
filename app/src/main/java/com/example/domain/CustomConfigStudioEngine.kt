@@ -198,7 +198,22 @@ object CustomConfigStudioEngine {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
     )
 
+    internal fun secretOrPlaceholder(raw: String, placeholder: String): String {
+        val clean = raw.trim()
+        val upper = clean.uppercase(Locale.ROOT)
+        return if (clean.isEmpty() || upper == "UNSET" || upper == "NONE" || upper == "NULL" || upper == "NA") {
+            placeholder
+        } else {
+            clean
+        }
+    }
+
     val BUILT_IN_PROFILES: List<CustomConfigProfile> by lazy {
+        val stripeSecret = secretOrPlaceholder(com.example.BuildConfig.STRIPE_SANDBOX_SECRET_KEY, "<STRIPE_SECRET_KEY>")
+        val stripePub = secretOrPlaceholder(com.example.BuildConfig.STRIPE_SANDBOX_PUBLISHABLE_KEY, "<STRIPE_PUBLISHABLE_KEY>")
+        val checkoutSecret = secretOrPlaceholder(com.example.BuildConfig.CHECKOUT_SANDBOX_SECRET_KEY, "<CHECKOUT_SECRET_KEY>")
+        val authNetLogin = secretOrPlaceholder(com.example.BuildConfig.AUTHNET_SANDBOX_API_LOGIN_ID, "<AUTHNET_API_LOGIN_ID>")
+        val authNetKey = secretOrPlaceholder(com.example.BuildConfig.AUTHNET_SANDBOX_TRANSACTION_KEY, "<AUTHNET_TRANSACTION_KEY>")
         listOf(
             CustomConfigProfile(
                 id = "builtin_zero_dollar_sandbox",
@@ -209,7 +224,7 @@ object CustomConfigStudioEngine {
                     profileName = "Stripe $0.00 SetupIntent Auth",
                     url = "https://api.stripe.com/v1/setup_intents",
                     method = HttpRequestMethod.POST_FORM,
-                    headersText = "Authorization: Bearer ${com.example.BuildConfig.STRIPE_SANDBOX_SECRET_KEY}\nAccept: application/json\nIdempotency-Key: {uuid}",
+                    headersText = "Authorization: Bearer $stripeSecret\nAccept: application/json\nIdempotency-Key: {uuid}",
                     bodyTemplate = "confirm=true&usage=off_session&payment_method_data[type]=card&payment_method_data[card][number]={card}&payment_method_data[card][exp_month]={mm}&payment_method_data[card][exp_year]={yyyy}&payment_method_data[card][cvc]={cvv}",
                     timeoutSeconds = 12,
                     maxRetries = 1,
@@ -261,7 +276,7 @@ object CustomConfigStudioEngine {
                     profileName = "2-Step Stripe Token -> SetupIntent",
                     url = "https://api.stripe.com/v1/setup_intents",
                     method = HttpRequestMethod.POST_FORM,
-                    headersText = "Authorization: Bearer ${com.example.BuildConfig.STRIPE_SANDBOX_SECRET_KEY}\nAccept: application/json\nIdempotency-Key: {uuid}",
+                    headersText = "Authorization: Bearer $stripeSecret\nAccept: application/json\nIdempotency-Key: {uuid}",
                     bodyTemplate = "confirm=true&usage=off_session&payment_method_data[type]=card&payment_method_data[card][token]={cap:payment_token}",
                     timeoutSeconds = 15,
                     maxRetries = 1,
@@ -272,7 +287,7 @@ object CustomConfigStudioEngine {
                     preRequestEnabled = true,
                     preRequestUrl = "https://api.stripe.com/v1/tokens",
                     preRequestMethod = HttpRequestMethod.POST_FORM,
-                    preRequestHeaders = "Authorization: Bearer ${com.example.BuildConfig.STRIPE_SANDBOX_PUBLISHABLE_KEY}\nAccept: application/json",
+                    preRequestHeaders = "Authorization: Bearer $stripePub\nAccept: application/json",
                     preRequestBody = "card[number]={card}&card[exp_month]={mm}&card[exp_year]={yyyy}&card[cvc]={cvv}",
                     preRequestParseRulesSpec = serializeParseRules(
                         listOf(
@@ -376,7 +391,7 @@ object CustomConfigStudioEngine {
                     profileName = "Checkout.com $0.00 Card Verify JSON",
                     url = "https://api.sandbox.checkout.com/payments",
                     method = HttpRequestMethod.POST_JSON,
-                    headersText = "Authorization: Bearer ${com.example.BuildConfig.CHECKOUT_SANDBOX_SECRET_KEY}\nAccept: application/json",
+                    headersText = "Authorization: Bearer $checkoutSecret\nAccept: application/json",
                     bodyTemplate = """{"amount":0,"currency":"USD","reference":"{uuid}","source":{"type":"card","number":"{card}","expiry_month":{mm_no_pad},"expiry_year":{yyyy},"cvv":"{cvv}"}}""",
                     timeoutSeconds = 12,
                     maxRetries = 1,
@@ -428,7 +443,7 @@ object CustomConfigStudioEngine {
                     url = "https://apitest.authorize.net/xml/v1/request.api",
                     method = HttpRequestMethod.POST_JSON,
                     headersText = "Accept: application/json",
-                    bodyTemplate = """{"createTransactionRequest":{"merchantAuthentication":{"name":"${com.example.BuildConfig.AUTHNET_SANDBOX_API_LOGIN_ID}","transactionKey":"${com.example.BuildConfig.AUTHNET_SANDBOX_TRANSACTION_KEY}"},"transactionRequest":{"transactionType":"authOnlyTransaction","amount":"0.00","payment":{"creditCard":{"cardNumber":"{card}","expirationDate":"{yyyy}-{mm}","cardCode":"{cvv}"}}}}}""",
+                    bodyTemplate = """{"createTransactionRequest":{"merchantAuthentication":{"name":"$authNetLogin","transactionKey":"$authNetKey"},"transactionRequest":{"transactionType":"authOnlyTransaction","amount":"0.00","payment":{"creditCard":{"cardNumber":"{card}","expirationDate":"{yyyy}-{mm}","cardCode":"{cvv}"}}}}}""",
                     timeoutSeconds = 12,
                     maxRetries = 1,
                     liveKeywords = "Approved,1",

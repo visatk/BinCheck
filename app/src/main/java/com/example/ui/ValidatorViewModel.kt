@@ -352,6 +352,7 @@ class ValidatorViewModel(
         refreshDeviceAndNetworkTelemetry()
         _localState.update {
             it.copy(
+                isSettingsOpen = false,
                 isConfigStudioOpen = true,
                 httpProbeResult = null,
                 statusBannerMessage = null

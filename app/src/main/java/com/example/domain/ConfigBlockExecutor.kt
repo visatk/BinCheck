@@ -1194,7 +1194,7 @@ object ConfigBlockExecutor {
         }
 
         val raw = NetworkClientProvider.awaitRawCall(client, reqBuilder.build())
-        SimpleHttpResult(raw.statusCode, raw.body, raw.headers)
+        SimpleHttpResult(raw.code, raw.body, raw.headers)
     }
 
     private suspend fun queryCaptchaBalance(

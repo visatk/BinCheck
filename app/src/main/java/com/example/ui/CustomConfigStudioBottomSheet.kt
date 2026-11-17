@@ -1,5 +1,8 @@
 package com.example.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -83,11 +86,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -155,11 +156,22 @@ fun CustomConfigStudioBottomSheet(
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
     val haptics = LocalHapticFeedback.current
     val ioScope = rememberCoroutineScope()
     val colorScheme = MaterialTheme.colorScheme
     val consoleColors = LocalConsoleColors.current
+
+    fun copyPlainText(label: String, text: String) {
+        val mgr = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        mgr?.setPrimaryClip(ClipData.newPlainText(label, text))
+    }
+
+    fun readPlainTextClipboard(): String {
+        val mgr = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        val clip = mgr?.primaryClip
+        val item = if (clip != null && clip.itemCount > 0) clip.getItemAt(0) else null
+        return item?.coerceToText(context)?.toString().orEmpty()
+    }
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var statusBanner by rememberSaveable { mutableStateOf<String?>(null) }
@@ -391,7 +403,7 @@ fun CustomConfigStudioBottomSheet(
 
     if (showCurlImportDialog) {
         CurlOrFetchImportDialog(
-            onPasteClipboard = { clipboard.getText()?.text.orEmpty() },
+            onPasteClipboard = { readPlainTextClipboard() },
             onDismiss = { showCurlImportDialog = false },
             onImported = { importedConfig ->
                 showCurlImportDialog = false
@@ -592,7 +604,7 @@ fun CustomConfigStudioBottomSheet(
                             config = buildCurrentConfig(),
                             sampleLine = sampleTestLine
                         )
-                        clipboard.setText(AnnotatedString(curlCmd))
+                        copyPlainText("BinCheck cURL", curlCmd)
                         FirebaseMetrics.logCustomConfigExported(format = "curl")
                         statusBanner = "Copied ready-to-run cURL command to clipboard."
                     },
@@ -613,7 +625,7 @@ fun CustomConfigStudioBottomSheet(
                 OutlinedButton(
                     onClick = {
                         val loli = CustomConfigStudioEngine.exportToLoliScript(buildCurrentConfig())
-                        clipboard.setText(AnnotatedString(loli))
+                        copyPlainText("BinCheck LoliScript", loli)
                         FirebaseMetrics.logCustomConfigExported(format = "loliscript")
                         statusBanner = "Copied OpenBullet LoliScript block to clipboard."
                     },
@@ -1003,12 +1015,12 @@ fun CustomConfigStudioBottomSheet(
                                 },
                                 onCopyJson = {
                                     val json = CustomConfigStudioEngine.exportConfigToJson(buildCurrentConfig())
-                                    clipboard.setText(AnnotatedString(json))
+                                    copyPlainText("BinCheck Config JSON", json)
                                     FirebaseMetrics.logCustomConfigExported(format = "json_clipboard")
                                     statusBanner = "Copied Config JSON to clipboard."
                                 },
                                 onPasteJson = {
-                                    val clip = clipboard.getText()?.text.orEmpty()
+                                    val clip = readPlainTextClipboard()
                                     if (clip.isBlank()) {
                                         statusBanner = "Clipboard is empty."
                                     } else {
@@ -1031,13 +1043,13 @@ fun CustomConfigStudioBottomSheet(
                                         config = buildCurrentConfig(),
                                         sampleLine = sampleTestLine
                                     )
-                                    clipboard.setText(AnnotatedString(curlCmd))
+                                    copyPlainText("BinCheck cURL", curlCmd)
                                     FirebaseMetrics.logCustomConfigExported(format = "curl")
                                     statusBanner = "Copied cURL command to clipboard."
                                 },
                                 onCopyLoliScript = {
                                     val loli = CustomConfigStudioEngine.exportToLoliScript(buildCurrentConfig())
-                                    clipboard.setText(AnnotatedString(loli))
+                                    copyPlainText("BinCheck LoliScript", loli)
                                     FirebaseMetrics.logCustomConfigExported(format = "loliscript")
                                     statusBanner = "Copied LoliScript block to clipboard."
                                 },
@@ -1082,7 +1094,7 @@ fun CustomConfigStudioBottomSheet(
                         ConfigProbeTraceCard(
                             probe = probe,
                             onCopyRawBody = { raw ->
-                                clipboard.setText(AnnotatedString(raw))
+                                copyPlainText("Probe Response Body", raw)
                                 statusBanner = "Copied probe response body."
                             }
                         )
@@ -1259,19 +1271,27 @@ private fun CurlOrFetchImportDialog(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     PresetMiniPill(label = "Stripe cURL") {
+                        val pubKey = CustomConfigStudioEngine.secretOrPlaceholder(
+                            com.example.BuildConfig.STRIPE_SANDBOX_PUBLISHABLE_KEY,
+                            "<STRIPE_PUBLISHABLE_KEY>"
+                        )
                         snippet = """
                             curl -X POST 'https://api.stripe.com/v1/tokens' \
-                              -H 'Authorization: Bearer ${com.example.BuildConfig.STRIPE_SANDBOX_PUBLISHABLE_KEY}' \
+                              -H 'Authorization: Bearer $pubKey' \
                               -H 'Content-Type: application/x-www-form-urlencoded' \
                               --data-raw 'card[number]=4532250055360003&card[exp_month]=08&card[exp_year]=2028&card[cvc]=113'
                         """.trimIndent()
                         errorMsg = null
                     }
                     PresetMiniPill(label = "Checkout Raw HTTP") {
+                        val ckoKey = CustomConfigStudioEngine.secretOrPlaceholder(
+                            com.example.BuildConfig.CHECKOUT_SANDBOX_SECRET_KEY,
+                            "<CHECKOUT_SECRET_KEY>"
+                        )
                         snippet = """
                             POST /payments HTTP/1.1
                             Host: api.sandbox.checkout.com
-                            Authorization: Bearer ${com.example.BuildConfig.CHECKOUT_SANDBOX_SECRET_KEY}
+                            Authorization: Bearer $ckoKey
                             Content-Type: application/json
                             X-Idempotency-Key: {uuid}
 
@@ -1501,9 +1521,13 @@ private fun RequestStudioTabContent(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         PresetMiniPill(label = "Preset: Tokenize Card Form") {
+                            val pubKey = CustomConfigStudioEngine.secretOrPlaceholder(
+                                com.example.BuildConfig.STRIPE_SANDBOX_PUBLISHABLE_KEY,
+                                "<STRIPE_PUBLISHABLE_KEY>"
+                            )
                             onPreRequestUrlChange("https://api.stripe.com/v1/tokens")
                             onPreRequestMethodChange(HttpRequestMethod.POST_FORM)
-                            onPreRequestHeadersChange("Authorization: Bearer ${com.example.BuildConfig.STRIPE_SANDBOX_PUBLISHABLE_KEY}\nAccept: application/json")
+                            onPreRequestHeadersChange("Authorization: Bearer $pubKey\nAccept: application/json")
                             onPreRequestBodyChange("card[number]={card}&card[exp_month]={mm}&card[exp_year]={yyyy}&card[cvc]={cvv}")
                             if (preRequestParseRules.none { it.name == "payment_token" }) {
                                 onAddPreRule(
