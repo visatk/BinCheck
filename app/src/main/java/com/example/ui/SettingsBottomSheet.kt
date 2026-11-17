@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -45,6 +46,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -717,6 +719,34 @@ fun SettingsBottomSheet(
                 }
             }
 
+            var showResetConfirmDialog by remember { mutableStateOf(false) }
+
+            if (showResetConfirmDialog) {
+                AlertDialog(
+                    onDismissRequest = { showResetConfirmDialog = false },
+                    title = { Text("Reset Session Counts?") },
+                    text = {
+                        Text("This clears all Live, Die, and Unknown results from the current session.")
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showResetConfirmDialog = false
+                                onClearAllBuckets()
+                            },
+                            modifier = Modifier.testTag("confirm_reset_counts_button")
+                        ) {
+                            Text("Reset", color = colorScheme.error)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showResetConfirmDialog = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
+            }
+
             // Sticky Studio Action Footer
             HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.45f))
             Row(
@@ -726,7 +756,7 @@ fun SettingsBottomSheet(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 OutlinedButton(
-                    onClick = onClearAllBuckets,
+                    onClick = { showResetConfirmDialog = true },
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)

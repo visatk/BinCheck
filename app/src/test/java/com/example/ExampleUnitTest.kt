@@ -1226,6 +1226,191 @@ class ExampleUnitTest {
         assertEquals(3, probe.blockTrace.size)
         assertEquals("approved", probe.parsedCaptures["st"])
     }
+
+    @Test
+    fun sandboxTestRegistry_returnsHonestUnknownWhenEnvKeysUnconfigured() = runTest {
+        val (bucket, reason) = com.example.domain.SandboxTestRegistry.evaluateSandboxCard(
+            pan = "4532250055360003",
+            mm = "08",
+            yyyy = "2028",
+            cvv = "113",
+            scheme = CardScheme.VISA,
+            useCacheAndDedup = false
+        )
+        assertEquals(ResultBucket.UNKNOWN, bucket)
+        assertFalse("Never synthesize fake LIVE verdict without real gateway key", reason.contains("4/4 OK"))
+    }
+
+    @Test
+    fun splitComboLine_preservesColonsAndDelimitersInPassword() {
+        val (user1, pass1) = CardValidatorEngine.splitComboLine("user@domain.com:p@ss:123:xyz|extra")
+        assertEquals("user@domain.com", user1)
+        assertEquals("p@ss:123:xyz|extra", pass1)
+
+        val (user2, pass2) = CardValidatorEngine.splitComboLine("alice;secret;pass")
+        assertEquals("alice", user2)
+        assertEquals("secret;pass", pass2)
+    }
+
+    @Test
+    fun customConfigStudioEngine_jsonDomHandlesNestedKeyShadowingAccurately() {
+        val payload = """{"meta":{"status":"nested_pending"},"status":"top_approved","items":[{"id":10,"tags":["a","b"]},{"id":20}]}"""
+        val rules = listOf(
+            com.example.domain.CustomParseRule(
+                name = "top_status",
+                mode = com.example.domain.ParseRuleMode.JSON,
+                expression = "status"
+            ),
+            com.example.domain.CustomParseRule(
+                name = "meta_status",
+                mode = com.example.domain.ParseRuleMode.JSON,
+                expression = "meta.status"
+            ),
+            com.example.domain.CustomParseRule(
+                name = "second_item_id",
+                mode = com.example.domain.ParseRuleMode.JSON,
+                expression = "items[1].id"
+            )
+        )
+        val extracted = com.example.domain.CustomConfigStudioEngine.extractCaptures(
+            bodyStr = payload,
+            responseHeaders = emptyMap(),
+            rules = rules
+        )
+        assertEquals("top_approved", extracted["top_status"])
+        assertEquals("nested_pending", extracted["meta_status"])
+        assertEquals("20", extracted["second_item_id"])
+    }
+
+    @Test
+    fun customHttpClient_doesNotLeakProxyAuthorizationHeaderOntoTargetRequest() {
+        val proxy = com.example.domain.ParsedProxyEndpoint(
+            protocol = com.example.domain.ProxyProtocol.HTTP,
+            host = "198.51.100.10",
+            port = 8080,
+            username = "proxyuser",
+            password = "proxypassword"
+        )
+        val request = CustomHttpClient.buildRequest(
+            normalizedLine = "4532250055360003|08|2028|113",
+            pan = "4532250055360003",
+            mm = "08",
+            yyyy = "2028",
+            cvv = "113",
+            scheme = CardScheme.VISA,
+            config = CustomHttpConfig(
+                url = "https://api.example.com/check",
+                method = HttpRequestMethod.POST_JSON
+            ),
+            selectedProxy = proxy
+        )
+        assertNull(request?.header("Proxy-Authorization"))
+    }
+
+    @Test
+    fun cardValidatorEngine_blocksOnlyConfigRespectsSkipLocalLuhnFlag() = runTest {
+        val blocks = listOf(
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.UTIL_SET_VAR,
+                label = "Set Source",
+                inputTarget = "ok_live",
+                outputVar = "SOURCE"
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.CONDITION_KEYCHECK,
+                label = "Match Live",
+                inputTarget = "<SOURCE>",
+                secondaryParam = "CONTAINS",
+                tertiaryParam = "ok_live",
+                verdictOnMatch = ResultBucket.LIVE
+            )
+        )
+        val cfg = CustomHttpConfig(
+            profileName = "Combo Blocks",
+            url = "",
+            skipLocalLuhnPrecheck = true,
+            blocksSpec = com.example.domain.CustomConfigStudioEngine.serializeBlocks(blocks)
+        )
+        val record = CardValidatorEngine.validateLine(
+            rawLine = "member@drkingbd.org:secret:999",
+            mode = ValidationMode.REMOTE_WEBHOOK,
+            webhookUrl = "",
+            autoResolveWildcards = false,
+            customHttpConfig = cfg,
+            useCacheAndDedup = false
+        )
+        assertEquals(ResultBucket.LIVE, record.bucket)
+    }
+
+    @Test
+    fun configBlockExecutor_conditionOnFalseSupportsSkipNextAndStopDie() = runTest {
+        val skipNextBlocks = listOf(
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.CONDITION_IF_NUMBER,
+                label = "Check 200",
+                inputTarget = "404",
+                secondaryParam = "==",
+                tertiaryParam = "200",
+                extraParams = mapOf("onFalse" to "SKIP_NEXT")
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.UTIL_SET_VAR,
+                label = "Should Skip",
+                inputTarget = "should_not_exist",
+                outputVar = "skipped_var"
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.UTIL_SET_VAR,
+                label = "Fallback Step",
+                inputTarget = "reached_after_skip",
+                outputVar = "final_var",
+                captureToOutput = true
+            )
+        )
+        val skipResult = com.example.domain.ConfigBlockExecutor.executeStack(
+            blocks = skipNextBlocks,
+            normalizedLine = "4532250055360003|08|2028|113",
+            pan = "4532250055360003",
+            mm = "08",
+            yyyy = "2028",
+            cvv = "113",
+            scheme = CardScheme.VISA,
+            config = CustomHttpConfig(),
+            dryRunNetwork = true
+        )
+        assertNull(skipResult.variables["skipped_var"])
+        assertEquals("reached_after_skip", skipResult.captures["final_var"])
+
+        val stopDieBlocks = listOf(
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.CONDITION_IF_STRING,
+                label = "Must Contain Approved",
+                inputTarget = "declined_card",
+                secondaryParam = "CONTAINS",
+                tertiaryParam = "approved",
+                extraParams = mapOf("onFalse" to "STOP_DIE")
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.UTIL_SET_VAR,
+                label = "Never Reached",
+                inputTarget = "yes",
+                outputVar = "after_stop"
+            )
+        )
+        val stopResult = com.example.domain.ConfigBlockExecutor.executeStack(
+            blocks = stopDieBlocks,
+            normalizedLine = "4532250055360003|08|2028|113",
+            pan = "4532250055360003",
+            mm = "08",
+            yyyy = "2028",
+            cvv = "113",
+            scheme = CardScheme.VISA,
+            config = CustomHttpConfig(),
+            dryRunNetwork = true
+        )
+        assertEquals(ResultBucket.DIE, stopResult.verdict?.first)
+        assertNull(stopResult.variables["after_stop"])
+    }
 }
 
 

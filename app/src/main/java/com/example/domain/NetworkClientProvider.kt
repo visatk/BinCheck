@@ -22,6 +22,9 @@ import okio.buffer
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.net.Authenticator
+import java.net.PasswordAuthentication
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPOutputStream
@@ -73,6 +76,32 @@ object NetworkClientProvider {
     @Volatile
     private var cachedOkHttpClient: OkHttpClient? = null
     private val scopedClientsByTimeoutSec = ConcurrentHashMap<Int, OkHttpClient>()
+    private val customScopedClientsCache: MutableMap<String, OkHttpClient> =
+        Collections.synchronizedMap(
+            object : LinkedHashMap<String, OkHttpClient>(16, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, OkHttpClient>?): Boolean =
+                    size > 24
+            }
+        )
+    private val socksCredentialsByHostPort = ConcurrentHashMap<String, PasswordAuthentication>()
+    @Volatile
+    private var socksAuthenticatorInstalled = false
+
+    private fun ensureSocksAuthenticatorInstalled() {
+        if (socksAuthenticatorInstalled) return
+        synchronized(this) {
+            if (socksAuthenticatorInstalled) return
+            Authenticator.setDefault(object : Authenticator() {
+                override fun getPasswordAuthentication(): PasswordAuthentication? {
+                    val host = requestingHost.orEmpty().lowercase()
+                    val port = requestingPort
+                    return socksCredentialsByHostPort["$host:$port"]
+                        ?: requestingSite?.hostAddress?.let { ip -> socksCredentialsByHostPort["$ip:$port"] }
+                }
+            })
+            socksAuthenticatorInstalled = true
+        }
+    }
 
     fun init(context: Context) {
         val targetDir = File(context.applicationContext.cacheDir, "bincheck_http_cache")
@@ -82,6 +111,7 @@ object NetworkClientProvider {
                     appCacheDir = targetDir
                     cachedOkHttpClient = null // rebuild once with disk Cache attached
                     scopedClientsByTimeoutSec.clear()
+                    customScopedClientsCache.clear()
                 }
             }
         }
@@ -145,6 +175,12 @@ object NetworkClientProvider {
             return clientWithTimeout(timeoutSeconds)
         }
         val clamped = timeoutSeconds.coerceIn(5, 60)
+        val proxyKey = proxyEndpoint?.let {
+            "${it.protocol.name}:${it.host}:${it.port}:${it.username.hashCode()}:${it.password.hashCode()}"
+        } ?: "direct"
+        val cacheKey = "$clamped|$followRedirects|$proxyKey"
+        customScopedClientsCache[cacheKey]?.let { return it }
+
         val sec = clamped.toLong()
         val builder = baseClient.newBuilder()
             .connectTimeout(sec, TimeUnit.SECONDS)
@@ -156,20 +192,30 @@ object NetworkClientProvider {
 
         if (proxyEndpoint != null) {
             builder.proxy(proxyEndpoint.toJavaNetProxy())
-            val basicHeader = proxyEndpoint.basicAuthorizationHeaderValue()
-            if (basicHeader != null) {
-                builder.proxyAuthenticator { _, response ->
-                    if (response.request.header("Proxy-Authorization") != null) {
-                        null
-                    } else {
-                        response.request.newBuilder()
-                            .header("Proxy-Authorization", basicHeader)
-                            .build()
+            if (proxyEndpoint.protocol == ProxyProtocol.SOCKS5 &&
+                proxyEndpoint.username.isNotEmpty()
+            ) {
+                ensureSocksAuthenticatorInstalled()
+                socksCredentialsByHostPort["${proxyEndpoint.host.lowercase()}:${proxyEndpoint.port}"] =
+                    PasswordAuthentication(proxyEndpoint.username, proxyEndpoint.password.toCharArray())
+            } else {
+                val basicHeader = proxyEndpoint.basicAuthorizationHeaderValue()
+                if (basicHeader != null) {
+                    builder.proxyAuthenticator { _, response ->
+                        if (response.request.header("Proxy-Authorization") != null) {
+                            null
+                        } else {
+                            response.request.newBuilder()
+                                .header("Proxy-Authorization", basicHeader)
+                                .build()
+                        }
                     }
                 }
             }
         }
-        return builder.build()
+        return builder.build().also { built ->
+            customScopedClientsCache[cacheKey] = built
+        }
     }
 
     fun clearDiskHttpCache() {
@@ -290,9 +336,17 @@ object NetworkClientProvider {
                                     fromCache = fromCache
                                 )
                             }
-                            val headersMap = buildMap<String, String> {
-                                for (i in 0 until res.headers.size) {
-                                    put(res.headers.name(i).lowercase(), res.headers.value(i))
+                            val headersMap = LinkedHashMap<String, String>()
+                            for (i in 0 until res.headers.size) {
+                                val key = res.headers.name(i).lowercase()
+                                val value = res.headers.value(i)
+                                val existing = headersMap[key]
+                                headersMap[key] = if (existing == null) {
+                                    value
+                                } else if (key == "set-cookie") {
+                                    "$existing\n$value"
+                                } else {
+                                    "$existing, $value"
                                 }
                             }
                             continuation.resume(

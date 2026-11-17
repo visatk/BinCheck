@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -22,6 +23,7 @@ import com.example.data.local.AppDatabase
 import com.example.data.local.ValidationHistoryRepository
 import com.example.domain.BinLookupService
 import com.example.domain.CardValidatorEngine
+import com.example.domain.CustomConfigStudioEngine
 import com.example.domain.CustomHttpConfig
 import com.example.domain.HttpRequestMethod
 import com.example.domain.NetworkClientProvider
@@ -42,6 +44,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -61,7 +64,15 @@ class BatchValidationWorker(
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()
-        return ForegroundInfo(NOTIFICATION_ID_BATCH_FOREGROUND, notification)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(
+                NOTIFICATION_ID_BATCH_FOREGROUND,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            )
+        } else {
+            ForegroundInfo(NOTIFICATION_ID_BATCH_FOREGROUND, notification)
+        }
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
@@ -79,35 +90,52 @@ class BatchValidationWorker(
         val storedConfig = storedSettings?.toCustomHttpConfig() ?: CustomHttpConfig()
 
         val batchId = inputData.getString(KEY_BATCH_ID) ?: return@withContext Result.failure()
+        val explicitSnapshotFile = inputData.getString(KEY_CONFIG_SNAPSHOT_PATH)
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::File)
+        val defaultSnapshotFile = File(applicationContext.filesDir, "batch_configs/$batchId.json")
+        val snapshotConfig = listOfNotNull(explicitSnapshotFile, defaultSnapshotFile)
+            .firstOrNull { it.isFile && it.canRead() }
+            ?.let { file ->
+                runCatching {
+                    CustomConfigStudioEngine.importConfigFromJson(file.readText()).getOrNull()
+                }.getOrNull()
+            }
+
         val modeName = inputData.getString(KEY_VALIDATION_MODE) ?: storedSettings?.validationMode?.name ?: ValidationMode.LOCAL_DETERMINISTIC.name
         val mode = runCatching { ValidationMode.valueOf(modeName) }
             .getOrDefault(ValidationMode.LOCAL_DETERMINISTIC)
-        val webhookUrl = inputData.getString(KEY_WEBHOOK_URL)?.ifBlank { storedConfig.url } ?: storedConfig.url
-        val httpMethodName = inputData.getString(KEY_HTTP_METHOD) ?: storedConfig.method.name
-        val httpMethod = runCatching { HttpRequestMethod.valueOf(httpMethodName) }
-            .getOrDefault(storedConfig.method)
-        val httpHeaders = inputData.getString(KEY_HTTP_HEADERS) ?: storedConfig.headersText
-        val httpBodyTemplate = inputData.getString(KEY_HTTP_BODY_TEMPLATE) ?: storedConfig.bodyTemplate
-        val httpTimeoutSeconds = inputData.getInt(KEY_HTTP_TIMEOUT_SECONDS, storedConfig.timeoutSeconds).coerceIn(5, 60)
-        val httpMaxRetries = inputData.getInt(KEY_HTTP_MAX_RETRIES, storedConfig.maxRetries).coerceIn(0, 3)
-        val httpLiveKeywords = inputData.getString(KEY_HTTP_LIVE_KEYWORDS)
-            ?.ifBlank { storedConfig.liveKeywords }
-            ?: storedConfig.liveKeywords
-        val httpDieKeywords = inputData.getString(KEY_HTTP_DIE_KEYWORDS)
-            ?.ifBlank { storedConfig.dieKeywords }
-            ?: storedConfig.dieKeywords
-        val gzipRequests = inputData.getBoolean(KEY_GZIP_REQUESTS, storedConfig.compressBodyGzip)
-        val customHttpConfig = storedConfig.copy(
-            url = webhookUrl,
-            method = httpMethod,
-            headersText = httpHeaders,
-            bodyTemplate = httpBodyTemplate,
-            timeoutSeconds = httpTimeoutSeconds,
-            maxRetries = httpMaxRetries,
-            liveKeywords = httpLiveKeywords,
-            dieKeywords = httpDieKeywords,
-            compressBodyGzip = gzipRequests
-        )
+        val customHttpConfig = if (snapshotConfig != null) {
+            snapshotConfig
+        } else {
+            val fallbackUrl = inputData.getString(KEY_WEBHOOK_URL)?.ifBlank { storedConfig.url } ?: storedConfig.url
+            val fallbackMethodName = inputData.getString(KEY_HTTP_METHOD) ?: storedConfig.method.name
+            val fallbackMethod = runCatching { HttpRequestMethod.valueOf(fallbackMethodName) }
+                .getOrDefault(storedConfig.method)
+            val fallbackHeaders = inputData.getString(KEY_HTTP_HEADERS) ?: storedConfig.headersText
+            val fallbackBody = inputData.getString(KEY_HTTP_BODY_TEMPLATE) ?: storedConfig.bodyTemplate
+            val fallbackTimeout = inputData.getInt(KEY_HTTP_TIMEOUT_SECONDS, storedConfig.timeoutSeconds).coerceIn(5, 60)
+            val fallbackRetries = inputData.getInt(KEY_HTTP_MAX_RETRIES, storedConfig.maxRetries).coerceIn(0, 3)
+            val fallbackLive = inputData.getString(KEY_HTTP_LIVE_KEYWORDS)
+                ?.ifBlank { storedConfig.liveKeywords }
+                ?: storedConfig.liveKeywords
+            val fallbackDie = inputData.getString(KEY_HTTP_DIE_KEYWORDS)
+                ?.ifBlank { storedConfig.dieKeywords }
+                ?: storedConfig.dieKeywords
+            val fallbackGzip = inputData.getBoolean(KEY_GZIP_REQUESTS, storedConfig.compressBodyGzip)
+            storedConfig.copy(
+                url = fallbackUrl,
+                method = fallbackMethod,
+                headersText = fallbackHeaders,
+                bodyTemplate = fallbackBody,
+                timeoutSeconds = fallbackTimeout,
+                maxRetries = fallbackRetries,
+                liveKeywords = fallbackLive,
+                dieKeywords = fallbackDie,
+                compressBodyGzip = fallbackGzip
+            )
+        }
+        val webhookUrl = customHttpConfig.url
 
         val autoResolveWildcards = inputData.getBoolean(KEY_AUTO_RESOLVE_WILDCARDS, true)
         val deduplicateInputs = inputData.getBoolean(KEY_DEDUPLICATE_INPUTS, true)
@@ -173,6 +201,10 @@ class BatchValidationWorker(
             ValidationMode.PAYATE_MOCK -> "Payate API (mock.payate.com)"
             ValidationMode.MULTI_API_AUTO -> "Multi-API Failover (Payate + Sandbox)"
             ValidationMode.REMOTE_WEBHOOK -> if (webhookUrl.isNotBlank()) webhookUrl else "Custom HTTP"
+        }
+
+        if (total >= 15 || mode.hasFixedDelay) {
+            runCatching { setForeground(getForegroundInfo()) }
         }
 
         setProgress(
@@ -496,6 +528,8 @@ class BatchValidationWorker(
             withContext(NonCancellable) {
                 runCatching { flushRemainingHistory() }
                 runCatching { repository.clearQueuedBatch(batchId) }
+                runCatching { explicitSnapshotFile?.delete() }
+                runCatching { defaultSnapshotFile.delete() }
             }
         }
     }
@@ -575,6 +609,7 @@ class BatchValidationWorker(
         private const val TELEGRAM_DIGEST_CHUNK_SIZE = 8
 
         const val KEY_BATCH_ID = "batch_id"
+        const val KEY_CONFIG_SNAPSHOT_PATH = "config_snapshot_path"
         const val KEY_VALIDATION_MODE = "validation_mode"
         const val KEY_WEBHOOK_URL = "webhook_url"
         const val KEY_HTTP_METHOD = "http_method"

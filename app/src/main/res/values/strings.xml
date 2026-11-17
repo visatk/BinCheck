@@ -74,7 +74,7 @@
     <string name="pane_results">Results</string>
     <string name="http_payload_presets_label">Payload Presets &amp; Variables</string>
     <string name="telegram_webhook_title">Telegram Alerts</string>
-    <string name="telegram_webhook_subtitle">Send Live hits straight to @SandBoxAutoBot</string>
+    <string name="telegram_webhook_subtitle">Send Live hits straight to your Telegram bot</string>
     <string name="telegram_chat_id_label">Chat or Channel ID</string>
     <string name="telegram_detect_chat">Find My Chat</string>
     <string name="telegram_test_bot">Send Test Alert</string>

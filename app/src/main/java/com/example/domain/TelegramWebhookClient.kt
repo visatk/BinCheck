@@ -26,6 +26,10 @@ object TelegramWebhookClient {
 
     private val detectDeduplicator = RequestDeduplicator<String, TelegramProbeResult>()
 
+    @Volatile
+    var lastDetectedBotUsername: String = ""
+        private set
+
     fun resolveConfiguredBotToken(): String {
         val raw = runCatching { BuildConfig.TELEGRAM_BOT_TOKEN }.getOrDefault("").trim()
         return if (raw.isEmpty() || !raw.contains(':')) "" else raw
@@ -76,6 +80,10 @@ object TelegramWebhookClient {
             }
 
             val botUsername = parseBotUsername(getMeRes.second)
+            if (botUsername.isNotBlank()) {
+                lastDetectedBotUsername = botUsername
+            }
+            val botDisplay = if (botUsername.isNotBlank()) "@$botUsername" else "Telegram Bot"
 
             val updatesReq = Request.Builder()
                 .url("$TELEGRAM_API_BASE/bot$token/getUpdates?limit=15")
@@ -98,9 +106,9 @@ object TelegramWebhookClient {
             )
 
             val msg = if (detectedChatId != null) {
-                "Connected @$botUsername • Detected Chat ID: $detectedChatId"
+                "Connected $botDisplay • Detected Chat ID: $detectedChatId"
             } else {
-                "Connected @$botUsername • Send /start to @$botUsername in Telegram, then tap Detect Chat ID."
+                "Connected $botDisplay • Send /start to $botDisplay in Telegram, then tap Detect Chat ID."
             }
 
             TelegramProbeResult(
@@ -135,9 +143,10 @@ object TelegramWebhookClient {
             )
         }
 
+        val botDisplay = lastDetectedBotUsername.ifBlank { null }?.let { "@$it" } ?: "Telegram Webhook Bot"
         val text = buildString {
             appendLine("<b>BinCheck Webhook Connected</b>")
-            appendLine("Bot: <code>@SandBoxAutoBot</code>")
+            appendLine("Bot: <code>${escapeHtml(botDisplay)}</code>")
             appendLine("Chat ID: <code>${escapeHtml(targetChatId)}</code>")
             append("Status: Ready to deliver batch validation alerts.")
         }
@@ -311,8 +320,8 @@ object TelegramWebhookClient {
     internal fun parseBotUsername(bodyStr: String): String {
         return runCatching {
             val root = JSONObject(bodyStr)
-            root.optJSONObject("result")?.optString("username", "").orEmpty().ifBlank { "SandBoxAutoBot" }
-        }.getOrDefault("SandBoxAutoBot")
+            root.optJSONObject("result")?.optString("username", "").orEmpty().trim()
+        }.getOrDefault("")
     }
 
     internal fun parseLatestChatId(updatesBody: String): String? {

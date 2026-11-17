@@ -42,6 +42,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -224,6 +225,7 @@ fun HistoryLogBottomSheet(
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.error),
                         modifier = Modifier
                             .height(34.dp)
+                            .minimumInteractiveComponentSize()
                             .align(Alignment.CenterVertically)
                             .testTag("clear_all_history_button")
                     ) {
@@ -384,6 +386,7 @@ fun HistoryLogBottomSheet(
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                     modifier = Modifier
                                         .height(36.dp)
+                                        .minimumInteractiveComponentSize()
                                         .testTag("history_load_more_button")
                                 ) {
                                     Text(

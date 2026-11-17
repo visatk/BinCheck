@@ -626,6 +626,172 @@ object CustomConfigStudioEngine {
      * and recursive array extraction (`errors.code` across array items when `recursive = true`).
      * Works identically on Android runtime and pure JVM unit tests without `org.json.JSONObject` Stub! exceptions.
      */
+    private sealed interface JsonNode {
+        data class Obj(val entries: Map<String, JsonNode>) : JsonNode
+        data class Arr(val items: List<JsonNode>) : JsonNode
+        data class Str(val value: String) : JsonNode
+        data class Prim(val value: String?) : JsonNode
+    }
+
+    private fun parseJsonDom(jsonText: String): JsonNode? {
+        val s = jsonText.trim()
+        if (s.isEmpty()) return null
+        var idx = 0
+
+        fun skipWs() {
+            while (idx < s.length && s[idx].isWhitespace()) idx++
+        }
+
+        fun parseString(): String? {
+            if (idx >= s.length || s[idx] != '"') return null
+            idx++ // skip opening "
+            val sb = StringBuilder()
+            while (idx < s.length) {
+                val ch = s[idx]
+                when {
+                    ch == '"' -> {
+                        idx++
+                        return sb.toString()
+                    }
+                    ch == '\\' && idx + 1 < s.length -> {
+                        val next = s[idx + 1]
+                        when (next) {
+                            '"' -> { sb.append('"'); idx += 2 }
+                            '\\' -> { sb.append('\\'); idx += 2 }
+                            '/' -> { sb.append('/'); idx += 2 }
+                            'b' -> { sb.append('\b'); idx += 2 }
+                            'f' -> { sb.append('\u000C'); idx += 2 }
+                            'n' -> { sb.append('\n'); idx += 2 }
+                            'r' -> { sb.append('\r'); idx += 2 }
+                            't' -> { sb.append('\t'); idx += 2 }
+                            'u' -> {
+                                if (idx + 5 < s.length) {
+                                    val code = s.substring(idx + 2, idx + 6).toIntOrNull(16)
+                                    if (code != null) {
+                                        sb.append(code.toChar())
+                                        idx += 6
+                                    } else {
+                                        sb.append(next)
+                                        idx += 2
+                                    }
+                                } else {
+                                    sb.append(next)
+                                    idx += 2
+                                }
+                            }
+                            else -> { sb.append(next); idx += 2 }
+                        }
+                    }
+                    else -> {
+                        sb.append(ch)
+                        idx++
+                    }
+                }
+            }
+            return null
+        }
+
+        fun parseValue(depth: Int): JsonNode? {
+            if (depth > 48) return null
+            skipWs()
+            if (idx >= s.length) return null
+            return when (s[idx]) {
+                '{' -> {
+                    idx++
+                    val map = LinkedHashMap<String, JsonNode>()
+                    skipWs()
+                    if (idx < s.length && s[idx] == '}') {
+                        idx++
+                        return JsonNode.Obj(map)
+                    }
+                    while (idx < s.length) {
+                        skipWs()
+                        val key = parseString() ?: break
+                        skipWs()
+                        if (idx >= s.length || s[idx] != ':') break
+                        idx++
+                        val value = parseValue(depth + 1) ?: JsonNode.Prim(null)
+                        map[key] = value
+                        skipWs()
+                        if (idx < s.length && s[idx] == ',') {
+                            idx++
+                            continue
+                        }
+                        if (idx < s.length && s[idx] == '}') {
+                            idx++
+                            break
+                        }
+                        break
+                    }
+                    JsonNode.Obj(map)
+                }
+                '[' -> {
+                    idx++
+                    val items = ArrayList<JsonNode>()
+                    skipWs()
+                    if (idx < s.length && s[idx] == ']') {
+                        idx++
+                        return JsonNode.Arr(items)
+                    }
+                    while (idx < s.length) {
+                        val value = parseValue(depth + 1) ?: break
+                        items.add(value)
+                        skipWs()
+                        if (idx < s.length && s[idx] == ',') {
+                            idx++
+                            continue
+                        }
+                        if (idx < s.length && s[idx] == ']') {
+                            idx++
+                            break
+                        }
+                        break
+                    }
+                    JsonNode.Arr(items)
+                }
+                '"' -> JsonNode.Str(parseString() ?: return null)
+                else -> {
+                    val start = idx
+                    while (idx < s.length && s[idx] !in charArrayOf(',', '}', ']') && !s[idx].isWhitespace()) {
+                        idx++
+                    }
+                    if (start == idx) return null
+                    val raw = s.substring(start, idx)
+                    when {
+                        raw.equals("null", ignoreCase = true) -> JsonNode.Prim(null)
+                        raw.equals("true", ignoreCase = true) -> JsonNode.Prim("true")
+                        raw.equals("false", ignoreCase = true) -> JsonNode.Prim("false")
+                        else -> JsonNode.Prim(raw)
+                    }
+                }
+            }
+        }
+
+        return parseValue(0)
+    }
+
+    private fun JsonNode.asDisplayString(recursive: Boolean): String? = when (this) {
+        is JsonNode.Str -> value
+        is JsonNode.Prim -> value
+        is JsonNode.Arr -> {
+            val scalars = items.mapNotNull { it.asDisplayString(false)?.takeIf(String::isNotBlank) }
+            if (recursive) {
+                scalars.joinToString(", ").takeIf { it.isNotBlank() }
+            } else {
+                scalars.firstOrNull()
+            }
+        }
+        is JsonNode.Obj -> entries.entries.joinToString(prefix = "{", postfix = "}") { (k, v) ->
+            val renderedVal = when (v) {
+                is JsonNode.Str -> "\"${escapeJson(v.value)}\""
+                is JsonNode.Prim -> v.value ?: "null"
+                is JsonNode.Arr -> "[${v.items.size}]"
+                is JsonNode.Obj -> "{...}"
+            }
+            "\"${escapeJson(k)}\":$renderedVal"
+        }
+    }
+
     internal fun extractJsonPathValue(
         jsonText: String,
         path: String,
@@ -638,265 +804,99 @@ object CustomConfigStudioEngine {
         val segments = normalizedPath.split('.').map { it.trim() }.filter { it.isNotEmpty() }
         if (segments.isEmpty()) return null
 
-        return extractJsonSegments(jsonText.trim(), segments, 0, recursive)
+        val root = parseJsonDom(jsonText) ?: return null
+        return resolveJsonSegments(root, segments, 0, recursive)
     }
 
-    private fun extractJsonSegments(
-        slice: String,
+    private fun resolveJsonSegments(
+        node: JsonNode,
         segments: List<String>,
         segIndex: Int,
         recursive: Boolean
     ): String? {
-        if (segIndex >= segments.size || slice.isEmpty()) return null
+        if (segIndex >= segments.size) {
+            return node.asDisplayString(recursive)
+        }
         val key = segments[segIndex]
         val isLast = segIndex == segments.lastIndex
-        val trimmedSlice = slice.trim()
-
-        // Handle array index segment if current slice is a JSON array `[...]`
-        val arrayIdx = key.toIntOrNull()
-        if (arrayIdx != null && trimmedSlice.startsWith("[")) {
-            val elements = splitTopLevelJsonArray(trimmedSlice)
-            val elem = elements.getOrNull(arrayIdx)?.trim() ?: return null
-            if (isLast) {
-                return cleanJsonScalarOrObject(elem)
-            }
-            return extractJsonSegments(elem, segments, segIndex + 1, recursive)
-        }
-
-        // If current slice is a JSON array and recursive is requested (or non-numeric key on array), map across items
-        if (trimmedSlice.startsWith("[")) {
-            val elements = splitTopLevelJsonArray(trimmedSlice)
-            if (recursive) {
-                val collected = elements.mapNotNull { el ->
-                    extractJsonSegments(el, segments, segIndex, false)
-                }.filter { it.isNotBlank() }
-                return if (collected.isEmpty()) null else collected.joinToString(", ")
-            } else {
-                val firstElem = elements.firstOrNull() ?: return null
-                return extractJsonSegments(firstElem, segments, segIndex, false)
-            }
-        }
-
-        val escapedKey = Regex.escape(key)
-
-        // Check if key points to a nested JSON object `{...}`
-        val objStartMatch = Regex(""""$escapedKey"\s*:\s*\{""").find(trimmedSlice)
-        if (objStartMatch != null) {
-            val braceStart = objStartMatch.range.last
-            val subSlice = extractBalancedGroup(trimmedSlice, braceStart, '{', '}')
-            if (subSlice != null) {
-                return if (isLast) {
-                    subSlice
+        return when (node) {
+            is JsonNode.Obj -> {
+                val child = node.entries[key] ?: return null
+                if (isLast) {
+                    child.asDisplayString(recursive)
                 } else {
-                    extractJsonSegments(subSlice, segments, segIndex + 1, recursive)
+                    resolveJsonSegments(child, segments, segIndex + 1, recursive)
                 }
             }
-        }
-
-        // Check if key points to a nested JSON array `[...]`
-        val arrStartMatch = Regex(""""$escapedKey"\s*:\s*\[""").find(trimmedSlice)
-        if (arrStartMatch != null) {
-            val bracketStart = arrStartMatch.range.last
-            val subArray = extractBalancedGroup(trimmedSlice, bracketStart, '[', ']')
-            if (subArray != null) {
-                return if (isLast) {
-                    val items = splitTopLevelJsonArray(subArray).mapNotNull { cleanJsonScalarOrObject(it) }
-                    if (recursive) items.joinToString(", ") else items.firstOrNull() ?: subArray
+            is JsonNode.Arr -> {
+                val arrayIdx = key.toIntOrNull()
+                if (arrayIdx != null) {
+                    val item = node.items.getOrNull(arrayIdx) ?: return null
+                    if (isLast) item.asDisplayString(false)
+                    else resolveJsonSegments(item, segments, segIndex + 1, recursive)
+                } else if (recursive) {
+                    val collected = node.items.mapNotNull { item ->
+                        resolveJsonSegments(item, segments, segIndex, false)
+                    }.filter { it.isNotBlank() }
+                    if (collected.isEmpty()) null else collected.joinToString(", ")
                 } else {
-                    extractJsonSegments(subArray, segments, segIndex + 1, recursive)
+                    val first = node.items.firstOrNull() ?: return null
+                    resolveJsonSegments(first, segments, segIndex, false)
                 }
             }
+            is JsonNode.Str, is JsonNode.Prim -> null
         }
-
-        // If not the last segment and neither object nor array matched, do not falsely match a flat primitive!
-        if (!isLast) return null
-
-        if (recursive) {
-            val allStr = Regex(""""$escapedKey"\s*:\s*"((?:\\.|[^"\\])*)"""")
-                .findAll(trimmedSlice)
-                .map { unescapeJsonString(it.groupValues[1]) }
-                .filter { it.isNotBlank() }
-                .toList()
-            if (allStr.isNotEmpty()) return allStr.joinToString(", ")
-        }
-
-        val strRegex = Regex(""""$escapedKey"\s*:\s*"((?:\\.|[^"\\])*)"""")
-        val strMatch = strRegex.find(trimmedSlice)
-        if (strMatch != null) {
-            return unescapeJsonString(strMatch.groupValues[1])
-        }
-        val primRegex = Regex(""""$escapedKey"\s*:\s*(-?\d+(?:\.\d+)?|true|false|null)\b""", RegexOption.IGNORE_CASE)
-        val primMatch = primRegex.find(trimmedSlice)
-        if (primMatch != null) {
-            val rawPrim = primMatch.groupValues[1]
-            return if (rawPrim.equals("null", ignoreCase = true)) null else rawPrim
-        }
-        return null
-    }
-
-    private fun cleanJsonScalarOrObject(raw: String): String? {
-        val t = raw.trim()
-        if (t.isEmpty() || t.equals("null", ignoreCase = true)) return null
-        if (t.startsWith("\"") && t.endsWith("\"") && t.length >= 2) {
-            return unescapeJsonString(t.substring(1, t.length - 1))
-        }
-        return t
-    }
-
-    private fun extractBalancedGroup(
-        text: String,
-        openIndex: Int,
-        openChar: Char,
-        closeChar: Char
-    ): String? {
-        if (openIndex < 0 || openIndex >= text.length || text[openIndex] != openChar) return null
-        var depth = 0
-        var inQuotes = false
-        var escaped = false
-        for (i in openIndex until text.length) {
-            val ch = text[i]
-            if (escaped) {
-                escaped = false
-                continue
-            }
-            if (ch == '\\') {
-                escaped = true
-                continue
-            }
-            if (ch == '"') {
-                inQuotes = !inQuotes
-                continue
-            }
-            if (!inQuotes) {
-                if (ch == openChar) depth++
-                else if (ch == closeChar) {
-                    depth--
-                    if (depth == 0) {
-                        return text.substring(openIndex, i + 1)
-                    }
-                }
-            }
-        }
-        return null
-    }
-
-    private fun splitTopLevelJsonArray(arrayText: String): List<String> {
-        val trimmed = arrayText.trim()
-        if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return emptyList()
-        val inner = trimmed.substring(1, trimmed.length - 1).trim()
-        if (inner.isEmpty()) return emptyList()
-
-        val items = mutableListOf<String>()
-        var braceDepth = 0
-        var bracketDepth = 0
-        var inQuotes = false
-        var escaped = false
-        var tokenStart = 0
-
-        for (i in inner.indices) {
-            val ch = inner[i]
-            if (escaped) {
-                escaped = false
-                continue
-            }
-            if (ch == '\\') {
-                escaped = true
-                continue
-            }
-            if (ch == '"') {
-                inQuotes = !inQuotes
-                continue
-            }
-            if (!inQuotes) {
-                when (ch) {
-                    '{' -> braceDepth++
-                    '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
-                    '[' -> bracketDepth++
-                    ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
-                    ',' -> if (braceDepth == 0 && bracketDepth == 0) {
-                        val segment = inner.substring(tokenStart, i).trim()
-                        if (segment.isNotEmpty()) items.add(segment)
-                        tokenStart = i + 1
-                    }
-                }
-            }
-        }
-        val tail = inner.substring(tokenStart).trim()
-        if (tail.isNotEmpty()) items.add(tail)
-        return items
     }
 
     /**
-     * Scans a sample JSON body and discovers up to 12 useful `dotPath -> sampleValue` pairs
+     * Scans a sample JSON body and discovers up to 14 useful `dotPath -> sampleValue` pairs
      * so users can generate Parse Rules and Checkpoints with 1 tap.
      */
     fun discoverJsonKeySuggestions(jsonText: String): List<Pair<String, String>> {
-        val trimmed = jsonText.trim()
-        if (!trimmed.startsWith("{")) return emptyList()
+        val root = parseJsonDom(jsonText) as? JsonNode.Obj ?: return emptyList()
         val results = LinkedHashMap<String, String>()
 
-        fun scanObject(slice: String, prefix: String, depth: Int) {
+        fun scanNode(node: JsonNode, prefix: String, depth: Int) {
             if (depth > 3 || results.size >= 14) return
-            val keyRegex = Regex(""""([A-Za-z0-9_.-]+)"\s*:\s*""")
-            var searchIndex = 1
-            while (searchIndex < slice.length && results.size < 14) {
-                val match = keyRegex.find(slice, searchIndex) ?: break
-                val key = match.groupValues[1]
-                val valStart = match.range.last + 1
-                if (valStart >= slice.length) break
-                val fullPath = if (prefix.isEmpty()) key else "$prefix.$key"
-
-                val nextChar = slice[valStart]
-                when (nextChar) {
-                    '{' -> {
-                        val subObj = extractBalancedGroup(slice, valStart, '{', '}')
-                        if (subObj != null) {
-                            scanObject(subObj, fullPath, depth + 1)
-                            searchIndex = valStart + subObj.length
-                            continue
-                        }
-                    }
-                    '[' -> {
-                        val subArr = extractBalancedGroup(slice, valStart, '[', ']')
-                        if (subArr != null) {
-                            val firstEl = splitTopLevelJsonArray(subArr).firstOrNull()?.trim()
-                            if (firstEl != null && firstEl.startsWith("{")) {
-                                scanObject(firstEl, "$fullPath[0]", depth + 1)
-                            } else if (firstEl != null) {
-                                cleanJsonScalarOrObject(firstEl)?.let { scalar ->
-                                    results.putIfAbsent("$fullPath[0]", scalar.take(36))
+            when (node) {
+                is JsonNode.Obj -> {
+                    for ((key, child) in node.entries) {
+                        if (results.size >= 14) break
+                        val fullPath = if (prefix.isEmpty()) key else "$prefix.$key"
+                        when (child) {
+                            is JsonNode.Obj -> scanNode(child, fullPath, depth + 1)
+                            is JsonNode.Arr -> {
+                                val firstEl = child.items.firstOrNull()
+                                when (firstEl) {
+                                    is JsonNode.Obj -> scanNode(firstEl, "$fullPath[0]", depth + 1)
+                                    is JsonNode.Str -> if (firstEl.value.isNotBlank()) {
+                                        results.putIfAbsent("$fullPath[0]", firstEl.value.take(36))
+                                    }
+                                    is JsonNode.Prim -> firstEl.value?.takeIf { it.isNotBlank() }?.let {
+                                        results.putIfAbsent("$fullPath[0]", it.take(36))
+                                    }
+                                    else -> Unit
                                 }
                             }
-                            searchIndex = valStart + subArr.length
-                            continue
-                        }
-                    }
-                    '"' -> {
-                        val strMatch = Regex("""^"((?:\\.|[^"\\])*)"""").find(slice.substring(valStart))
-                        if (strMatch != null) {
-                            val v = unescapeJsonString(strMatch.groupValues[1]).trim()
-                            if (v.isNotEmpty() && !key.equals("headers", ignoreCase = true)) {
-                                results.putIfAbsent(fullPath, v.take(36))
+                            is JsonNode.Str -> {
+                                val v = child.value.trim()
+                                if (v.isNotEmpty() && !key.equals("headers", ignoreCase = true)) {
+                                    results.putIfAbsent(fullPath, v.take(36))
+                                }
                             }
-                            searchIndex = valStart + strMatch.value.length
-                            continue
-                        }
-                    }
-                    else -> {
-                        val primMatch = Regex("""^(-?\d+(?:\.\d+)?|true|false)\b""", RegexOption.IGNORE_CASE)
-                            .find(slice.substring(valStart))
-                        if (primMatch != null) {
-                            results.putIfAbsent(fullPath, primMatch.groupValues[1])
-                            searchIndex = valStart + primMatch.value.length
-                            continue
+                            is JsonNode.Prim -> {
+                                child.value?.takeIf { it.isNotBlank() }?.let {
+                                    results.putIfAbsent(fullPath, it.take(36))
+                                }
+                            }
                         }
                     }
                 }
-                searchIndex = valStart + 1
+                else -> Unit
             }
         }
 
-        scanObject(trimmed, "", 0)
+        scanNode(root, "", 0)
         return results.entries.map { it.key to it.value }
     }
 
@@ -1879,6 +1879,44 @@ object CustomConfigStudioEngine {
         )
     }
 
+    private fun extractBalancedGroup(
+        source: String,
+        openIndex: Int,
+        openChar: Char,
+        closeChar: Char
+    ): String? {
+        if (openIndex !in source.indices || source[openIndex] != openChar) return null
+        var depth = 0
+        var inQuote: Char? = null
+        var escaped = false
+        for (i in openIndex until source.length) {
+            val ch = source[i]
+            if (escaped) {
+                escaped = false
+                continue
+            }
+            if (inQuote != null) {
+                if (ch == '\\' && inQuote != '`') {
+                    escaped = true
+                } else if (ch == inQuote) {
+                    inQuote = null
+                }
+                continue
+            }
+            when (ch) {
+                '"', '\'', '`' -> inQuote = ch
+                openChar -> depth++
+                closeChar -> {
+                    depth--
+                    if (depth == 0) {
+                        return source.substring(openIndex, i + 1)
+                    }
+                }
+            }
+        }
+        return null
+    }
+
     private fun parseCurlSnippet(snippet: String): RawParsedSnippet {
         // Normalize bash backslash-newline, Windows cmd ^-newline, and PowerShell `-newline continuations
         val cleaned = snippet
@@ -2122,11 +2160,17 @@ object CustomConfigStudioEngine {
     fun isComboInputLine(rawLine: String, config: CustomHttpConfig? = null): Boolean {
         val trimmed = rawLine.trim()
         if (trimmed.isEmpty()) return false
-        val parts = trimmed.split('|', '/', ':', ';').map { it.trim() }.filter { it.isNotEmpty() }
-        if (parts.size in 2..3 && (parts[0].contains('@') || parts[0].any { it.isLetter() })) {
+        val sepIndex = trimmed.indexOfFirst { it == ':' || it == '|' || it == ';' }
+        if (sepIndex <= 0 || sepIndex >= trimmed.lastIndex) return false
+        val firstToken = trimmed.substring(0, sepIndex).trim()
+        val hasFourCardFields = trimmed.split('|', '/', ':', ';').count { it.isNotBlank() } >= 4 &&
+            firstToken.none { it == '@' || it.isLetter() }
+        if (hasFourCardFields) return false
+
+        if (firstToken.contains('@') || firstToken.any { it.isLetter() }) {
             return true
         }
-        if (config != null && parts.size in 2..3) {
+        if (config != null) {
             val combinedTemplates = "${config.url} ${config.headersText} ${config.bodyTemplate}"
             if (combinedTemplates.contains("{email}", ignoreCase = true) ||
                 combinedTemplates.contains("{user}", ignoreCase = true) ||

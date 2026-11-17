@@ -547,8 +547,12 @@ object SandboxTestRegistry {
             return liveEnvOutcome
         }
 
-        val tokSlug = scheme.name.lowercase()
-        return ResultBucket.LIVE to "$0.00 Auth [4/4 OK] • tok_$tokSlug • 200 OK (Stripe+Braintree+Auth.Net+Checkout $mm/${yyyy.takeLast(2)})"
+        val hasConfiguredKeys = SandboxGatewayClient.inspectEnvKeys().hasAnyConfiguredLiveSandbox
+        return if (hasConfiguredKeys) {
+            ResultBucket.UNKNOWN to "$0.00 Auth [Retry] • Configured .env gateway(s) unreachable or timed out ($mm/${yyyy.takeLast(2)})"
+        } else {
+            ResultBucket.UNKNOWN to "$0.00 Auth [Unconfigured] • Add gateway key in Secrets or load Sandbox Vectors"
+        }
     }
 
     private fun countryCodeToFlagEmoji(countryCode: String): String {

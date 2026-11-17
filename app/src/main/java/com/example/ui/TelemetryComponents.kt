@@ -41,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -119,6 +120,7 @@ fun BinCheckTopBar(
                     modifier = Modifier
                         .padding(start = 6.dp)
                         .size(42.dp)
+                        .minimumInteractiveComponentSize()
                         .testTag("open_navigation_drawer_button")
                 ) {
                     Icon(
@@ -209,6 +211,7 @@ fun BinCheckTopBar(
                 shape = MaterialTheme.shapes.small,
                 modifier = Modifier
                     .size(42.dp)
+                    .minimumInteractiveComponentSize()
                     .testTag("topbar_bin_lookup_button")
             ) {
                 Icon(
@@ -307,6 +310,7 @@ fun TopTelemetryStrip(
                 ),
                 modifier = Modifier
                     .heightIn(min = 34.dp)
+                    .minimumInteractiveComponentSize()
                     .semantics {
                         role = Role.Button
                         contentDescription = "Inspect BIN $binDigits"
@@ -382,6 +386,7 @@ fun TopTelemetryStrip(
             border = BorderStroke(0.75.dp, consoleColors.telegramAccent.copy(alpha = 0.35f)),
             modifier = Modifier
                 .heightIn(min = 34.dp)
+                .minimumInteractiveComponentSize()
                 .semantics {
                     role = Role.Button
                     contentDescription = "Open developer channel $devHandle"

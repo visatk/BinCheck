@@ -179,7 +179,7 @@ fun NetworkOptimizationSectionCard(
                 onClick = onClearCaches,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(44.dp)
+                    .height(48.dp)
                     .testTag("clear_network_cache_button"),
                 shape = MaterialTheme.shapes.small
             ) {

@@ -30,6 +30,7 @@ import com.example.domain.BinLookupService
 import com.example.domain.CardScheme
 import com.example.domain.CardValidatorEngine
 import com.example.domain.CustomConfigProfile
+import com.example.domain.CustomConfigStudioEngine
 import com.example.domain.CustomHttpClient
 import com.example.domain.CustomHttpConfig
 import com.example.domain.DeviceNetworkStatus
@@ -70,6 +71,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -861,18 +863,29 @@ class ValidatorViewModel(
                 sourceName = sourceName
             )
 
+            val fullConfig = settings.toCustomHttpConfig()
+            val snapshotFilePath = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dir = File(getApplication<Application>().filesDir, "batch_configs").apply { mkdirs() }
+                    val file = File(dir, "$batchId.json")
+                    file.writeText(CustomConfigStudioEngine.exportConfigToJson(fullConfig))
+                    file.absolutePath
+                }.getOrDefault("")
+            }
+
             val effectiveDelayMs = settings.effectiveDelayMs
             val inputData = workDataOf(
                 BatchValidationWorker.KEY_BATCH_ID to batchId,
+                BatchValidationWorker.KEY_CONFIG_SNAPSHOT_PATH to snapshotFilePath,
                 BatchValidationWorker.KEY_VALIDATION_MODE to settings.validationMode.name,
-                BatchValidationWorker.KEY_WEBHOOK_URL to settings.webhookUrl,
+                BatchValidationWorker.KEY_WEBHOOK_URL to settings.webhookUrl.take(1024),
                 BatchValidationWorker.KEY_HTTP_METHOD to settings.httpMethod.name,
-                BatchValidationWorker.KEY_HTTP_HEADERS to settings.httpHeaders,
-                BatchValidationWorker.KEY_HTTP_BODY_TEMPLATE to settings.httpBodyTemplate,
+                BatchValidationWorker.KEY_HTTP_HEADERS to settings.httpHeaders.take(1500),
+                BatchValidationWorker.KEY_HTTP_BODY_TEMPLATE to settings.httpBodyTemplate.take(1500),
                 BatchValidationWorker.KEY_HTTP_TIMEOUT_SECONDS to settings.httpTimeoutSeconds,
                 BatchValidationWorker.KEY_HTTP_MAX_RETRIES to settings.httpMaxRetries,
-                BatchValidationWorker.KEY_HTTP_LIVE_KEYWORDS to settings.httpLiveKeywords,
-                BatchValidationWorker.KEY_HTTP_DIE_KEYWORDS to settings.httpDieKeywords,
+                BatchValidationWorker.KEY_HTTP_LIVE_KEYWORDS to settings.httpLiveKeywords.take(512),
+                BatchValidationWorker.KEY_HTTP_DIE_KEYWORDS to settings.httpDieKeywords.take(512),
                 BatchValidationWorker.KEY_GZIP_REQUESTS to settings.gzipCustomRequests,
                 BatchValidationWorker.KEY_DEDUPLICATE_INPUTS to settings.deduplicateBatchInputs,
                 BatchValidationWorker.KEY_AUTO_RESOLVE_WILDCARDS to settings.autoResolveWildcards,

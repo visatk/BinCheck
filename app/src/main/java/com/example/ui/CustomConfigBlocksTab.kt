@@ -44,6 +44,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -143,6 +144,7 @@ internal fun BlocksStudioTabContent(
     var editVerdict by rememberSaveable { mutableStateOf(ResultBucket.LIVE) }
     var editExtraHeaders by rememberSaveable { mutableStateOf("") }
     var editFlagBool by rememberSaveable { mutableStateOf(false) }
+    var editOnFalse by rememberSaveable { mutableStateOf("CONTINUE") }
 
     fun loadBlockForEdit(index: Int, blk: ConfigBlock) {
         editingIndex = index
@@ -155,16 +157,31 @@ internal fun BlocksStudioTabContent(
         editCapture = blk.captureToOutput
         editVerdict = blk.verdictOnMatch
         editExtraHeaders = blk.extraParams["headers"].orEmpty()
+        editOnFalse = blk.extraParams["onFalse"]?.uppercase().orEmpty().ifBlank { "CONTINUE" }
         editFlagBool = blk.extraParams["fetchHtml"] == "true" ||
             blk.extraParams["regex"] == "true" ||
             blk.extraParams["recursive"] == "true"
     }
 
-    fun buildEditedBlock(existingId: String? = null): ConfigBlock {
-        val extras = LinkedHashMap<String, String>()
-        if (editType == BlockType.REQUEST_HTTP && editExtraHeaders.isNotBlank()) {
-            extras["headers"] = editExtraHeaders.trim()
+    fun buildEditedBlock(existingBlock: ConfigBlock? = null): ConfigBlock {
+        val extras = LinkedHashMap(existingBlock?.extraParams.orEmpty())
+        if (editType == BlockType.REQUEST_HTTP) {
+            if (editExtraHeaders.isNotBlank()) {
+                extras["headers"] = editExtraHeaders.trim()
+            } else {
+                extras.remove("headers")
+            }
         }
+        if (editType.category == BlockCategory.CONDITIONS && editType != BlockType.CONDITION_KEYCHECK) {
+            if (editOnFalse == "CONTINUE") {
+                extras.remove("onFalse")
+            } else {
+                extras["onFalse"] = editOnFalse
+            }
+        }
+        extras.remove("fetchHtml")
+        extras.remove("regex")
+        extras.remove("recursive")
         if (editFlagBool) {
             when (editType) {
                 BlockType.BROWSER_NAVIGATE -> extras["fetchHtml"] = "true"
@@ -174,10 +191,10 @@ internal fun BlocksStudioTabContent(
             }
         }
         return ConfigBlock(
-            id = existingId ?: UUID.randomUUID().toString().take(8),
+            id = existingBlock?.id ?: UUID.randomUUID().toString().take(8),
             type = editType,
             label = editLabel.trim().ifEmpty { editType.displayName },
-            enabled = true,
+            enabled = existingBlock?.enabled ?: true,
             inputTarget = editInput,
             secondaryParam = editSecondary,
             tertiaryParam = editTertiary,
@@ -397,7 +414,7 @@ internal fun BlocksStudioTabContent(
                                         captureToOutput = bType.category == BlockCategory.PARSING
                                     )
                                     onAddBlock(newBlock)
-                                    loadBlockForEdit(blocks.size, newBlock)
+                                    loadBlockForEdit(blocks.lastIndex.coerceAtLeast(0), newBlock)
                                 }
                                 .testTag("add_block_type_${bType.name.lowercase()}")
                         ) {
@@ -447,10 +464,12 @@ internal fun BlocksStudioTabContent(
                                             captureToOutput = bType.category == BlockCategory.PARSING
                                         )
                                         onAddBlock(newBlock)
-                                        loadBlockForEdit(blocks.size, newBlock)
+                                        loadBlockForEdit(blocks.lastIndex.coerceAtLeast(0), newBlock)
                                     },
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                    modifier = Modifier.height(30.dp)
+                                    modifier = Modifier
+                                        .height(30.dp)
+                                        .minimumInteractiveComponentSize()
                                 ) {
                                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(13.dp))
                                     Spacer(modifier = Modifier.width(2.dp))
@@ -498,7 +517,9 @@ internal fun BlocksStudioTabContent(
                     TextButton(
                         onClick = { editingIndex = -1 },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        modifier = Modifier.height(28.dp)
+                        modifier = Modifier
+                            .height(28.dp)
+                            .minimumInteractiveComponentSize()
                     ) {
                         Text("Close", style = MaterialTheme.typography.labelSmall)
                     }
@@ -576,6 +597,32 @@ internal fun BlocksStudioTabContent(
                             }
                         }
                     }
+                } else if (editType.category == BlockCategory.CONDITIONS) {
+                    val branchOptions = listOf(
+                        "CONTINUE" to "Continue",
+                        "SKIP_NEXT" to "Skip Next",
+                        "STOP_DIE" to "Stop DIE",
+                        "STOP_UNKNOWN" to "Stop UNK"
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "Branch Flow When Condition Is False",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = cs.onSurfaceVariant
+                        )
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            branchOptions.forEachIndexed { idx, (key, label) ->
+                                SegmentedButton(
+                                    selected = editOnFalse == key,
+                                    onClick = { editOnFalse = key },
+                                    shape = SegmentedButtonDefaults.itemShape(idx, branchOptions.size),
+                                    modifier = Modifier.testTag("block_editor_on_false_${key.lowercase()}")
+                                ) {
+                                    Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                                }
+                            }
+                        }
+                    }
                 }
 
                 Row(
@@ -623,7 +670,7 @@ internal fun BlocksStudioTabContent(
                     FilledTonalButton(
                         onClick = {
                             if (editingIndex in blocks.indices) {
-                                val updated = buildEditedBlock(blocks[editingIndex].id)
+                                val updated = buildEditedBlock(blocks[editingIndex])
                                 onUpdateBlock(editingIndex, updated)
                                 editingIndex = -1
                             }
@@ -659,7 +706,9 @@ internal fun BlocksStudioTabContent(
                         dryRunResult = null
                     },
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                    modifier = Modifier.height(32.dp)
+                    modifier = Modifier
+                        .height(32.dp)
+                        .minimumInteractiveComponentSize()
                 ) {
                     Text("Clear", style = MaterialTheme.typography.labelSmall)
                 }
@@ -700,6 +749,7 @@ internal fun BlocksStudioTabContent(
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                     modifier = Modifier
                         .height(32.dp)
+                        .minimumInteractiveComponentSize()
                         .testTag("config_studio_dry_run_blocks_button")
                 ) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
@@ -734,84 +784,56 @@ internal fun BlocksStudioTabContent(
                         .clickable { loadBlockForEdit(idx, blk) }
                         .testTag("block_stack_item_$idx")
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 10.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp)
-                            ) {
-                                Text(
-                                    text = "#${idx + 1}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontFamily = JetBrainsMonoFamily,
-                                    color = cs.onSurfaceVariant
-                                )
-                                Surface(
-                                    color = catAccent.copy(alpha = 0.14f),
-                                    shape = MaterialTheme.shapes.extraSmall
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                                 ) {
                                     Text(
-                                        text = blk.category.shortBadge,
+                                        text = "#${idx + 1}",
                                         style = MaterialTheme.typography.labelSmall,
                                         fontFamily = JetBrainsMonoFamily,
+                                        color = cs.onSurfaceVariant
+                                    )
+                                    Surface(
+                                        color = catAccent.copy(alpha = 0.14f),
+                                        shape = MaterialTheme.shapes.extraSmall
+                                    ) {
+                                        Text(
+                                            text = blk.category.shortBadge,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontFamily = JetBrainsMonoFamily,
+                                            fontWeight = FontWeight.Bold,
+                                            color = catAccent,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                    Text(
+                                        text = blk.label,
+                                        style = MaterialTheme.typography.bodySmall,
                                         fontWeight = FontWeight.Bold,
-                                        color = catAccent,
-                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                                 Text(
-                                    text = blk.label,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
+                                    text = blk.compactSummary(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = JetBrainsMonoFamily,
+                                    color = cs.onSurfaceVariant,
+                                    maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            Text(
-                                text = blk.compactSummary(),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontFamily = JetBrainsMonoFamily,
-                                color = cs.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(
-                                onClick = { loadBlockForEdit(idx, blk) },
-                                modifier = Modifier.size(30.dp)
-                            ) {
-                                Icon(Icons.Default.Edit, contentDescription = "Edit block", modifier = Modifier.size(14.dp))
-                            }
-                            IconButton(
-                                onClick = { onMoveBlock(idx, idx - 1) },
-                                enabled = idx > 0,
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.KeyboardArrowDown,
-                                    contentDescription = "Move up",
-                                    modifier = Modifier
-                                        .size(15.dp)
-                                        .graphicsLayer { rotationZ = 180f }
-                                )
-                            }
-                            IconButton(
-                                onClick = { onMoveBlock(idx, idx + 1) },
-                                enabled = idx < blocks.lastIndex,
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.KeyboardArrowDown,
-                                    contentDescription = "Move down",
-                                    modifier = Modifier.size(15.dp)
                                 )
                             }
                             Switch(
@@ -820,18 +842,63 @@ internal fun BlocksStudioTabContent(
                                     onUpdateBlock(idx, blk.copy(enabled = checked))
                                 }
                             )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { loadBlockForEdit(idx, blk) },
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .size(34.dp)
+                            ) {
+                                Icon(Icons.Default.Edit, contentDescription = "Edit block", modifier = Modifier.size(16.dp))
+                            }
+                            IconButton(
+                                onClick = { onMoveBlock(idx, idx - 1) },
+                                enabled = idx > 0,
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .size(34.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.KeyboardArrowDown,
+                                    contentDescription = "Move up",
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .graphicsLayer { rotationZ = 180f }
+                                )
+                            }
+                            IconButton(
+                                onClick = { onMoveBlock(idx, idx + 1) },
+                                enabled = idx < blocks.lastIndex,
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .size(34.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.KeyboardArrowDown,
+                                    contentDescription = "Move down",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                             IconButton(
                                 onClick = {
                                     if (editingIndex == idx) editingIndex = -1
                                     onRemoveBlock(idx)
                                 },
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .size(34.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Close,
                                     contentDescription = "Remove block",
                                     tint = consoleColors.dieAccent,
-                                    modifier = Modifier.size(14.dp)
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
                         }

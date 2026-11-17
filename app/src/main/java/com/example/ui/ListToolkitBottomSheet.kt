@@ -50,6 +50,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -83,6 +84,7 @@ import com.example.domain.ToolkitTransformResult
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalConsoleColors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Calendar
@@ -202,12 +204,15 @@ fun ListToolkitBottomSheet(
     }
 
     LaunchedEffect(sourceText, options, shuffleNonce) {
+        if (isEditingSource && sourceText.length > 500) {
+            delay(150L)
+        }
         val randomSeed = if (options.sortOrder == ListSortOrder.SHUFFLE) {
             Random(System.nanoTime() + shuffleNonce)
         } else {
             Random.Default
         }
-        if (sourceText.length <= 4_000) {
+        if (sourceText.length <= 800) {
             transformResult = ListToolkitEngine.transform(
                 rawInput = sourceText,
                 options = options,
@@ -335,6 +340,7 @@ fun ListToolkitBottomSheet(
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                         modifier = Modifier
                             .height(32.dp)
+                            .minimumInteractiveComponentSize()
                             .testTag("toolkit_select_file_button")
                     ) {
                         Icon(

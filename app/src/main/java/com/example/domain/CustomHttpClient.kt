@@ -147,6 +147,16 @@ object CustomHttpClient {
             append('|').append(config.preRequestUrl.hashCode())
             append('|').append(config.preRequestBody.hashCode())
             append('|').append(config.compressBodyGzip)
+            append('|').append(config.followRedirects)
+            append('|').append(config.userAgent.hashCode())
+            append('|').append(config.proxyEnabled)
+            append('|').append(config.proxyProtocol.name)
+            append('|').append(config.proxyRotation.name)
+            append('|').append(config.proxyListText.hashCode())
+            append('|').append(config.preRequestMethod.name)
+            append('|').append(config.preRequestHeaders.hashCode())
+            append('|').append(config.preRequestParseRulesSpec.hashCode())
+            append('|').append(config.skipLocalLuhnPrecheck)
             append('|').append(config.blocksSpec.hashCode())
             append('|').append(normalizedLine)
         }
@@ -222,7 +232,8 @@ object CustomHttpClient {
                 timeoutSeconds = config.timeoutSeconds,
                 maxRetries = config.maxRetries.coerceAtMost(1),
                 userAgent = config.userAgent,
-                followRedirects = config.followRedirects
+                followRedirects = config.followRedirects,
+                compressBodyGzip = config.compressBodyGzip
             )
             val preOutcome = executeWithRetries(
                 normalizedLine = normalizedLine,
@@ -520,7 +531,8 @@ object CustomHttpClient {
                 timeoutSeconds = config.timeoutSeconds,
                 maxRetries = 0,
                 userAgent = config.userAgent,
-                followRedirects = config.followRedirects
+                followRedirects = config.followRedirects,
+                compressBodyGzip = config.compressBodyGzip
             )
             val preOutcome = executeWithRetries(
                 normalizedLine = normalizedSample,
@@ -1038,13 +1050,8 @@ object CustomHttpClient {
         if (step1Cookies.isNotBlank() && headers["Cookie"] == null) {
             runCatching { builder.header("Cookie", step1Cookies) }
         }
-        if (selectedProxy != null && selectedProxy.protocol == ProxyProtocol.HTTP) {
-            selectedProxy.basicAuthorizationHeaderValue()?.let { basicAuth ->
-                if (headers["Proxy-Authorization"] == null) {
-                    runCatching { builder.header("Proxy-Authorization", basicAuth) }
-                }
-            }
-        }
+        // Proxy-Authorization is supplied exclusively via OkHttpClient.proxyAuthenticator on 407 challenges
+        // so proxy credentials are never leaked to origin HTTP servers.
 
         when (resolvedMethod) {
             HttpRequestMethod.GET -> builder.get()
@@ -1185,11 +1192,10 @@ object CustomHttpClient {
         val cardDashed = CustomConfigStudioEngine.formatDashedPan(pan)
         val mmNoPad = mm.toIntOrNull()?.toString() ?: mm.trimStart('0').ifEmpty { mm }
 
-        // Support credential combo lines (email:pass or user|pass) seamlessly
-        val comboParts = normalizedLine.split(':', '|', ';', limit = 3)
-        val emailOrUser = comboParts.getOrElse(0) { "" }.trim()
+        // Support credential combo lines (email:pass or user|pass) preserving delimiters inside password
+        val (emailOrUser, parsedPass) = CardValidatorEngine.splitComboLine(normalizedLine)
         val comboUser = if (emailOrUser.contains('@')) emailOrUser.substringBefore('@') else emailOrUser
-        val comboPass = comboParts.getOrElse(1) { "" }.trim()
+        val comboPass = if (parsedPass == "---" && !normalizedLine.contains(':') && !normalizedLine.contains('|') && !normalizedLine.contains(';')) "" else parsedPass
 
         val uuidStr = if (template.contains("{uuid}", ignoreCase = true) || template.contains("{guid}", ignoreCase = true)) {
             CustomConfigStudioEngine.generateUuidToken()

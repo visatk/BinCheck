@@ -21,15 +21,18 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.analytics.FirebaseMetrics
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalConsoleColors
 
@@ -91,9 +94,24 @@ fun MetricsTelemetrySectionCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            val badgeBg = if (metricsEnabled) consoleColors.liveContainer else colorScheme.surfaceContainerHigh
-            val badgeFg = if (metricsEnabled) consoleColors.liveAccent else colorScheme.onSurfaceVariant
-            val statusWord = if (metricsEnabled) "ON" else "OFF"
+            val context = LocalContext.current
+            val firebaseConfigured = remember(context) { FirebaseMetrics.isRuntimeConfigured(context) }
+            val activeLive = metricsEnabled && firebaseConfigured
+            val badgeBg = when {
+                activeLive -> consoleColors.liveContainer
+                metricsEnabled -> consoleColors.unknownContainer
+                else -> colorScheme.surfaceContainerHigh
+            }
+            val badgeFg = when {
+                activeLive -> consoleColors.liveAccent
+                metricsEnabled -> consoleColors.unknownAccent
+                else -> colorScheme.onSurfaceVariant
+            }
+            val statusWord = when {
+                activeLive -> "ON"
+                metricsEnabled -> "LOCAL"
+                else -> "OFF"
+            }
 
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -102,6 +120,9 @@ fun MetricsTelemetrySectionCard(
                 MetricsPillBadge("Analytics: $statusWord", badgeBg, badgeFg)
                 MetricsPillBadge("Crashlytics: $statusWord", badgeBg, badgeFg)
                 MetricsPillBadge("Perf: $statusWord", badgeBg, badgeFg)
+                if (metricsEnabled && !firebaseConfigured) {
+                    MetricsPillBadge("No google-services.json", consoleColors.unknownContainer, consoleColors.unknownAccent)
+                }
                 MetricsPillBadge("PII Scrubbed", colorScheme.secondaryContainer, colorScheme.onSecondaryContainer)
             }
         }

@@ -67,8 +67,25 @@ object ConfigBlockExecutor {
 
         val selectedProxy = CustomConfigStudioEngine.selectProxyForRequest(config)
 
+        var skipNextStep = false
+        var stopPipeline = false
+
         for ((idx, block) in blocks.withIndex()) {
+            if (stopPipeline) break
             val stepStart = System.nanoTime()
+            if (skipNextStep) {
+                skipNextStep = false
+                steps.add(
+                    BlockExecutionStep(
+                        index = idx + 1,
+                        block = block,
+                        status = BlockStepStatus.SKIPPED,
+                        detail = "Skipped by preceding condition",
+                        durationMs = 0L
+                    )
+                )
+                continue
+            }
             if (!block.enabled) {
                 steps.add(
                     BlockExecutionStep(
@@ -120,6 +137,21 @@ object ConfigBlockExecutor {
             var status = BlockStepStatus.SUCCESS
             var detail = ""
             var outputPreview = ""
+
+            fun applyConditionFlow(matched: Boolean) {
+                if (matched) return
+                when (block.extraParams["onFalse"]?.trim()?.uppercase(Locale.ROOT)) {
+                    "SKIP_NEXT" -> skipNextStep = true
+                    "STOP_DIE" -> {
+                        if (winningVerdict == null) winningVerdict = ResultBucket.DIE to "Block: ${block.label}"
+                        stopPipeline = true
+                    }
+                    "STOP_UNKNOWN" -> {
+                        if (winningVerdict == null) winningVerdict = ResultBucket.UNKNOWN to "Block: ${block.label}"
+                        stopPipeline = true
+                    }
+                }
+            }
 
             when (block.type) {
                 // =============================================================
@@ -406,6 +438,7 @@ object ConfigBlockExecutor {
                     status = if (matched) BlockStepStatus.MATCHED else BlockStepStatus.SUCCESS
                     detail = "'${left.take(20)}' $op '${right.take(20)}' -> $matched"
                     outputPreview = matched.toString()
+                    applyConditionFlow(matched)
                 }
 
                 BlockType.CONDITION_IF_NUMBER -> {
@@ -415,6 +448,7 @@ object ConfigBlockExecutor {
                     if (leftNum == null || rightNum == null) {
                         status = BlockStepStatus.FAILED
                         detail = "Non-numeric operand"
+                        applyConditionFlow(false)
                     } else {
                         val matched = when (op) {
                             "==", "=" -> leftNum == rightNum
@@ -429,6 +463,7 @@ object ConfigBlockExecutor {
                         status = if (matched) BlockStepStatus.MATCHED else BlockStepStatus.SUCCESS
                         detail = "$leftNum $op $rightNum -> $matched"
                         outputPreview = matched.toString()
+                        applyConditionFlow(matched)
                     }
                 }
 
@@ -444,6 +479,7 @@ object ConfigBlockExecutor {
                     status = if (matched) BlockStepStatus.MATCHED else BlockStepStatus.SUCCESS
                     detail = "HTTP ${cur ?: "none"} ${if (matched) "matched" else "did not match"} [$codes]"
                     outputPreview = matched.toString()
+                    applyConditionFlow(matched)
                 }
 
                 BlockType.CONDITION_IF_EXISTS -> {
@@ -458,6 +494,7 @@ object ConfigBlockExecutor {
                     status = if (exists) BlockStepStatus.MATCHED else BlockStepStatus.SUCCESS
                     detail = "Var '$varName' exists = $exists"
                     outputPreview = exists.toString()
+                    applyConditionFlow(exists)
                 }
 
                 // =============================================================
@@ -514,7 +551,8 @@ object ConfigBlockExecutor {
                             cookieHeader = formatCookieJar(cookies),
                             timeoutSeconds = config.timeoutSeconds,
                             followRedirects = config.followRedirects,
-                            proxyEndpoint = selectedProxy
+                            proxyEndpoint = selectedProxy,
+                            compressBodyGzip = config.compressBodyGzip
                         )
                         if (reqOutcome.isSuccess) {
                             val resp = reqOutcome.getOrThrow()
@@ -1148,7 +1186,8 @@ object ConfigBlockExecutor {
         cookieHeader: String,
         timeoutSeconds: Int,
         followRedirects: Boolean,
-        proxyEndpoint: ParsedProxyEndpoint?
+        proxyEndpoint: ParsedProxyEndpoint?,
+        compressBodyGzip: Boolean = false
     ): Result<SimpleHttpResult> = runCatching {
         val client = NetworkClientProvider.clientWithCustomOptions(
             timeoutSeconds = timeoutSeconds,
@@ -1165,9 +1204,18 @@ object ConfigBlockExecutor {
         if (cookieHeader.isNotBlank()) {
             reqBuilder.header("Cookie", cookieHeader)
         }
+        var explicitContentType: String? = null
+        var hasContentEncoding = false
         headersText.lines().map { it.trim() }.filter { it.contains(':') }.forEach { line ->
             val idx = line.indexOf(':')
-            reqBuilder.header(line.substring(0, idx).trim(), line.substring(idx + 1).trim())
+            val hdrName = line.substring(0, idx).trim()
+            val hdrVal = line.substring(idx + 1).trim()
+            if (hdrName.equals("Content-Type", ignoreCase = true)) {
+                explicitContentType = hdrVal
+            } else if (hdrName.equals("Content-Encoding", ignoreCase = true)) {
+                hasContentEncoding = true
+            }
+            reqBuilder.header(hdrName, hdrVal)
         }
 
         if (isMultipart) {
@@ -1178,23 +1226,59 @@ object ConfigBlockExecutor {
             }
             reqBuilder.post(mpBuilder.build())
         } else {
+            val defaultMediaTypeStr = if (method == "POST_FORM") {
+                "application/x-www-form-urlencoded; charset=utf-8"
+            } else {
+                "application/json; charset=utf-8"
+            }
+            val resolvedMediaType = (explicitContentType?.toMediaType() ?: defaultMediaTypeStr.toMediaType())
+
+            fun buildTextBody(payload: String) = if (compressBodyGzip && payload.isNotEmpty()) {
+                if (!hasContentEncoding) {
+                    reqBuilder.header("Content-Encoding", "gzip")
+                }
+                NetworkClientProvider.createGzipRequestBody(payload, resolvedMediaType)
+            } else {
+                payload.toRequestBody(resolvedMediaType)
+            }
+
             when (method) {
                 "GET" -> reqBuilder.get()
                 "HEAD" -> reqBuilder.head()
                 "DELETE" -> if (bodyStr.isNotBlank()) {
-                    reqBuilder.delete(bodyStr.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                    reqBuilder.delete(buildTextBody(bodyStr))
                 } else {
                     reqBuilder.delete()
                 }
-                "PUT" -> reqBuilder.put(bodyStr.toRequestBody("application/json; charset=utf-8".toMediaType()))
-                "PATCH" -> reqBuilder.patch(bodyStr.toRequestBody("application/json; charset=utf-8".toMediaType()))
-                "POST_FORM" -> reqBuilder.post(bodyStr.toRequestBody("application/x-www-form-urlencoded; charset=utf-8".toMediaType()))
-                else -> reqBuilder.post(bodyStr.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                "PUT" -> reqBuilder.put(buildTextBody(bodyStr))
+                "PATCH" -> reqBuilder.patch(buildTextBody(bodyStr))
+                "POST_FORM" -> reqBuilder.post(buildTextBody(bodyStr))
+                else -> reqBuilder.post(buildTextBody(bodyStr))
             }
         }
 
         val raw = NetworkClientProvider.awaitRawCall(client, reqBuilder.build())
         SimpleHttpResult(raw.code, raw.body, raw.headers)
+    }
+
+    private fun escapeJsonString(value: String): String {
+        val sb = StringBuilder(value.length + 8)
+        for (ch in value) {
+            when (ch) {
+                '\\' -> sb.append("\\\\")
+                '"' -> sb.append("\\\"")
+                '\b' -> sb.append("\\b")
+                '\n' -> sb.append("\\n")
+                '\r' -> sb.append("\\r")
+                '\t' -> sb.append("\\t")
+                else -> if (ch < ' ') {
+                    sb.append(String.format(Locale.US, "\\u%04x", ch.code))
+                } else {
+                    sb.append(ch)
+                }
+            }
+        }
+        return sb.toString()
     }
 
     private suspend fun queryCaptchaBalance(
@@ -1208,14 +1292,15 @@ object ConfigBlockExecutor {
             proxyEndpoint = null
         )
         val lower = provider.lowercase(Locale.ROOT)
+        val escapedKey = escapeJsonString(apiKey)
         val req = if (lower.contains("capsolver")) {
-            val json = """{"clientKey":"$apiKey"}"""
+            val json = """{"clientKey":"$escapedKey"}"""
             Request.Builder()
                 .url("https://api.capsolver.com/getBalance")
                 .post(json.toRequestBody("application/json".toMediaType()))
                 .build()
         } else if (lower.contains("anti")) {
-            val json = """{"clientKey":"$apiKey"}"""
+            val json = """{"clientKey":"$escapedKey"}"""
             Request.Builder()
                 .url("https://api.anti-captcha.com/getBalance")
                 .post(json.toRequestBody("application/json".toMediaType()))
@@ -1247,11 +1332,14 @@ object ConfigBlockExecutor {
             proxyEndpoint = null
         )
         val lower = provider.lowercase(Locale.ROOT)
+        val maxPollAttempts = 15
+        val pollIntervalMs = 2_000L
+
         if (lower.contains("capsolver") || lower.contains("anti")) {
-            val endpoint = if (lower.contains("capsolver")) {
-                "https://api.capsolver.com/createTask"
+            val baseUrl = if (lower.contains("capsolver")) {
+                "https://api.capsolver.com"
             } else {
-                "https://api.anti-captcha.com/createTask"
+                "https://api.anti-captcha.com"
             }
             val taskType = when (type) {
                 BlockType.CAPTCHA_RECAPTCHA_V2 -> "ReCaptchaV2TaskProxyLess"
@@ -1261,19 +1349,57 @@ object ConfigBlockExecutor {
                 BlockType.CAPTCHA_IMAGE -> "ImageToTextTask"
                 else -> "FunCaptchaTaskProxyLess"
             }
+            val escKey = escapeJsonString(apiKey)
+            val escSiteKey = escapeJsonString(siteKeyOrImage)
+            val escPageUrl = escapeJsonString(pageUrl)
             val payload = if (type == BlockType.CAPTCHA_IMAGE) {
-                """{"clientKey":"$apiKey","task":{"type":"$taskType","body":"$siteKeyOrImage"}}"""
+                """{"clientKey":"$escKey","task":{"type":"$taskType","body":"$escSiteKey"}}"""
             } else {
-                """{"clientKey":"$apiKey","task":{"type":"$taskType","websiteURL":"$pageUrl","websiteKey":"$siteKeyOrImage"}}"""
+                """{"clientKey":"$escKey","task":{"type":"$taskType","websiteURL":"$escPageUrl","websiteKey":"$escSiteKey"}}"""
             }
-            val req = Request.Builder()
-                .url(endpoint)
+            val createReq = Request.Builder()
+                .url("$baseUrl/createTask")
                 .post(payload.toRequestBody("application/json".toMediaType()))
                 .build()
-            val raw = NetworkClientProvider.awaitRawCall(client, req)
-            CustomConfigStudioEngine.extractJsonPathValue(raw.body, "solution.gRecaptchaResponse")
-                ?: CustomConfigStudioEngine.extractJsonPathValue(raw.body, "taskId")
-                ?: raw.body.take(80)
+            val createRaw = NetworkClientProvider.awaitRawCall(client, createReq)
+
+            val immediateToken = extractCaptchaSolutionToken(createRaw.body)
+            if (!immediateToken.isNullOrBlank()) return@runCatching immediateToken
+
+            val createErr = CustomConfigStudioEngine.extractJsonPathValue(createRaw.body, "errorDescription")
+                ?: CustomConfigStudioEngine.extractJsonPathValue(createRaw.body, "errorCode")
+            val errId = CustomConfigStudioEngine.extractJsonPathValue(createRaw.body, "errorId")?.toIntOrNull()
+            if (errId != null && errId != 0) {
+                throw IllegalStateException(createErr ?: "Captcha createTask failed ($errId)")
+            }
+
+            val taskId = CustomConfigStudioEngine.extractJsonPathValue(createRaw.body, "taskId")
+                ?.takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException(createErr ?: "Captcha taskId missing: ${createRaw.body.take(80)}")
+
+            val escTaskId = escapeJsonString(taskId)
+            val pollPayload = """{"clientKey":"$escKey","taskId":"$escTaskId"}"""
+            repeat(maxPollAttempts) {
+                delay(pollIntervalMs)
+                val pollReq = Request.Builder()
+                    .url("$baseUrl/getTaskResult")
+                    .post(pollPayload.toRequestBody("application/json".toMediaType()))
+                    .build()
+                val pollRaw = NetworkClientProvider.awaitRawCall(client, pollReq)
+                val pollErrId = CustomConfigStudioEngine.extractJsonPathValue(pollRaw.body, "errorId")?.toIntOrNull()
+                if (pollErrId != null && pollErrId != 0) {
+                    val desc = CustomConfigStudioEngine.extractJsonPathValue(pollRaw.body, "errorDescription")
+                        ?: "Captcha error ($pollErrId)"
+                    throw IllegalStateException(desc)
+                }
+                val taskStatus = CustomConfigStudioEngine.extractJsonPathValue(pollRaw.body, "status")
+                if (taskStatus.equals("ready", ignoreCase = true)) {
+                    extractCaptchaSolutionToken(pollRaw.body)?.let { solved ->
+                        return@runCatching solved
+                    }
+                }
+            }
+            throw IllegalStateException("Captcha solve timed out waiting for taskId=$taskId")
         } else {
             val methodParam = when (type) {
                 BlockType.CAPTCHA_HCAPTCHA -> "hcaptcha"
@@ -1282,8 +1408,9 @@ object ConfigBlockExecutor {
                 BlockType.CAPTCHA_IMAGE -> "base64"
                 else -> "userrecaptcha"
             }
+            val encodedKey = URLEncoder.encode(apiKey, "UTF-8")
             val formStr = buildString {
-                append("key=").append(URLEncoder.encode(apiKey, "UTF-8"))
+                append("key=").append(encodedKey)
                 append("&method=").append(methodParam)
                 if (type == BlockType.CAPTCHA_IMAGE) {
                     append("&body=").append(URLEncoder.encode(siteKeyOrImage, "UTF-8"))
@@ -1294,14 +1421,46 @@ object ConfigBlockExecutor {
                 }
                 append("&json=1")
             }
-            val req = Request.Builder()
+            val inReq = Request.Builder()
                 .url("https://2captcha.com/in.php")
                 .post(formStr.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
                 .build()
-            val raw = NetworkClientProvider.awaitRawCall(client, req)
-            CustomConfigStudioEngine.extractJsonPathValue(raw.body, "request")
-                ?: raw.body.take(80)
+            val inRaw = NetworkClientProvider.awaitRawCall(client, inReq)
+            val statusFlag = CustomConfigStudioEngine.extractJsonPathValue(inRaw.body, "status")?.toIntOrNull()
+            val reqValue = CustomConfigStudioEngine.extractJsonPathValue(inRaw.body, "request").orEmpty()
+            if (statusFlag == 0) {
+                throw IllegalStateException(reqValue.ifBlank { "2Captcha submission error" })
+            }
+            if (reqValue.isBlank()) {
+                throw IllegalStateException("2Captcha taskId missing: ${inRaw.body.take(80)}")
+            }
+            // If non-numeric short/immediate solution returned in unit mocks, accept if already solved; else poll res.php
+            val encodedTaskId = URLEncoder.encode(reqValue, "UTF-8")
+            repeat(maxPollAttempts) {
+                delay(pollIntervalMs)
+                val resReq = Request.Builder()
+                    .url("https://2captcha.com/res.php?key=$encodedKey&action=get&id=$encodedTaskId&json=1")
+                    .get()
+                    .build()
+                val resRaw = NetworkClientProvider.awaitRawCall(client, resReq)
+                val pollStatus = CustomConfigStudioEngine.extractJsonPathValue(resRaw.body, "status")?.toIntOrNull()
+                val pollReqVal = CustomConfigStudioEngine.extractJsonPathValue(resRaw.body, "request").orEmpty()
+                if (pollStatus == 1 && pollReqVal.isNotBlank()) {
+                    return@runCatching pollReqVal
+                }
+                if (pollStatus == 0 && pollReqVal.isNotBlank() && !pollReqVal.equals("CAPCHA_NOT_READY", ignoreCase = true)) {
+                    throw IllegalStateException(pollReqVal)
+                }
+            }
+            throw IllegalStateException("2Captcha timed out waiting for task $reqValue")
         }
+    }
+
+    private fun extractCaptchaSolutionToken(rawJson: String): String? {
+        return CustomConfigStudioEngine.extractJsonPathValue(rawJson, "solution.gRecaptchaResponse")
+            ?.takeIf { it.isNotBlank() }
+            ?: CustomConfigStudioEngine.extractJsonPathValue(rawJson, "solution.token")?.takeIf { it.isNotBlank() }
+            ?: CustomConfigStudioEngine.extractJsonPathValue(rawJson, "solution.text")?.takeIf { it.isNotBlank() }
     }
 
     private suspend fun executeTcpExchange(

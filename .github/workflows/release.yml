@@ -47,7 +47,7 @@ jobs:
 
           if [ -n "${SDKMANAGER}" ]; then
             yes | "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" --licenses > /dev/null || true
-            "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" "platform-tools" "build-tools;35.0.0" || true
+            "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" "platform-tools" "build-tools;36.0.0" || true
           fi
 
       - name: Setup Gradle
@@ -81,6 +81,7 @@ jobs:
             STORE_PASS="${SECRET_STORE_PASSWORD:-androidrelease}"
             KEY_PASS="${SECRET_KEY_PASSWORD:-androidrelease}"
           else
+            echo "::warning::KEYSTORE_BASE64 secret missing; generating ephemeral upload keystore. Future app updates require matching signing keys."
             STORE_PASS="androidrelease"
             KEY_PASS="androidrelease"
             rm -f "${KEYSTORE_FILE}"
@@ -105,8 +106,8 @@ jobs:
             cp .env.example .env
           fi
 
-      - name: Run Unit Tests
-        run: gradle :app:testDebugUnitTest --no-daemon
+      - name: Run Unit Tests & Android Lint
+        run: gradle :app:testDebugUnitTest :app:lintDebug --no-daemon
 
       - name: Build Signed Release APK & AAB
         run: gradle :app:assembleRelease :app:bundleRelease --no-daemon

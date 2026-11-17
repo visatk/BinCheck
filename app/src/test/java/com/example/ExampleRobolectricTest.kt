@@ -1269,5 +1269,180 @@ class ExampleRobolectricTest {
         assertEquals(1, blocks.size)
         assertEquals(com.example.domain.BlockType.FUNC_HASH, blocks[0].type)
     }
+
+    @Test
+    fun `appDatabase MIGRATION_1_2 creates bin_cache table cleanly`() = runTest {
+        val dbFile = context.getDatabasePath("migration_test_v1_v2.db")
+        if (dbFile.exists()) dbFile.delete()
+        val sqliteDb = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(dbFile, null)
+        try {
+            val supportDb = androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory()
+                .create(
+                    androidx.sqlite.db.SupportSQLiteOpenHelper.Configuration.builder(context)
+                        .name(dbFile.absolutePath)
+                        .callback(object : androidx.sqlite.db.SupportSQLiteOpenHelper.Callback(1) {
+                            override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                                db.execSQL(
+                                    "CREATE TABLE IF NOT EXISTS `validation_history` (`id` TEXT NOT NULL PRIMARY KEY)"
+                                )
+                            }
+                            override fun onUpgrade(db: androidx.sqlite.db.SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+                        })
+                        .build()
+                ).writableDatabase
+            AppDatabase.MIGRATION_1_2.migrate(supportDb)
+            supportDb.query("SELECT COUNT(*) FROM `bin_cache`").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+            supportDb.close()
+        } finally {
+            sqliteDb.close()
+            if (dbFile.exists()) dbFile.delete()
+        }
+    }
+
+    @Test
+    fun `batchValidationWorker loads full config snapshot and deletes snapshot file on finish`() = runTest {
+        val batchId = "snapshot_test_batch_${System.currentTimeMillis()}"
+        val blocks = listOf(
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.UTIL_SET_VAR,
+                label = "Snapshot Source",
+                inputTarget = "snapshot_ok_hit",
+                outputVar = "SOURCE"
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.CONDITION_KEYCHECK,
+                label = "Snapshot Match",
+                inputTarget = "<SOURCE>",
+                secondaryParam = "CONTAINS",
+                tertiaryParam = "snapshot_ok_hit",
+                verdictOnMatch = ResultBucket.LIVE
+            )
+        )
+        val snapshotConfig = CustomHttpConfig(
+            profileName = "Snapshot Batch Config",
+            url = "",
+            skipLocalLuhnPrecheck = true,
+            blocksSpec = com.example.domain.CustomConfigStudioEngine.serializeBlocks(blocks)
+        )
+        val snapshotDir = java.io.File(context.filesDir, "batch_configs").apply { mkdirs() }
+        val snapshotFile = java.io.File(snapshotDir, "$batchId.json").apply {
+            writeText(com.example.domain.CustomConfigStudioEngine.exportConfigToJson(snapshotConfig))
+        }
+
+        val db = AppDatabase.getInstance(context)
+        val repo = ValidationHistoryRepository(db.validationHistoryDao())
+        repo.clearAllHistory()
+        repo.enqueueBatch(
+            batchId = batchId,
+            lines = listOf("4532250055360003|08|2028|113"),
+            sourceName = "snapshot.txt"
+        )
+
+        val worker = TestListenableWorkerBuilder<BatchValidationWorker>(context)
+            .setInputData(
+                workDataOf(
+                    BatchValidationWorker.KEY_BATCH_ID to batchId,
+                    BatchValidationWorker.KEY_VALIDATION_MODE to ValidationMode.REMOTE_WEBHOOK.name,
+                    BatchValidationWorker.KEY_CONFIG_SNAPSHOT_PATH to snapshotFile.absolutePath,
+                    BatchValidationWorker.KEY_BATCH_DELAY_MS to 0L
+                )
+            )
+            .build()
+
+        val result = worker.doWork()
+        assertTrue(result is ListenableWorker.Result.Success)
+        assertTrue("Expected snapshot file to be cleaned up", !snapshotFile.exists())
+        val items = repo.observeHistory(HistoryFilter.ALL).first().filter { entry ->
+            entry.message.contains("Snapshot Match", ignoreCase = true) || entry.status == ResultBucket.LIVE.name
+        }
+        assertTrue(items.isNotEmpty())
+        repo.clearAllHistory()
+    }
+
+    @Test
+    fun `settingsBottomSheet requires confirmation dialog before clearing all buckets`() {
+        var cleared = false
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                SettingsBottomSheet(
+                    settings = ValidatorSettings(),
+                    networkStats = NetworkTelemetrySnapshot(),
+                    deviceNetworkStatus = DeviceNetworkStatus(),
+                    isTestingEndpoint = false,
+                    httpProbeResult = null,
+                    isTestingTelegram = false,
+                    telegramProbeResult = null,
+                    onDismiss = {},
+                    onTestEndpoint = {},
+                    onDetectTelegramChat = {},
+                    onTestTelegramWebhook = {},
+                    onClearCaches = {},
+                    onSaveSettings = { _, _, _, _, _, _, _, _, _, _, _, _, _, _ -> },
+                    onGenerateBatchToConsole = { _, _ -> },
+                    onClearAllBuckets = { cleared = true }
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("settings_tab_system").performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("clear_all_buckets_button").performClick()
+        composeTestRule.waitForIdle()
+        assertTrue("Clearing buckets should not fire before confirmation", !cleared)
+
+        composeTestRule.onNodeWithTag("confirm_reset_counts_button").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        assertTrue("Confirmation button must trigger onClearAllBuckets", cleared)
+    }
+
+    @Test
+    fun `customConfigBlocksTab persists onFalse condition branch flow`() {
+        var appliedConfig: CustomHttpConfig? = null
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                com.example.ui.CustomConfigStudioBottomSheet(
+                    initialConfig = CustomHttpConfig(profileName = "Condition Branch UI"),
+                    savedProfiles = emptyList(),
+                    isTestingEndpoint = false,
+                    probeResult = null,
+                    onTestConfig = { _, _ -> },
+                    onClearProbeResult = {},
+                    onSaveAndUseConfig = { cfg -> appliedConfig = cfg },
+                    onSaveProfile = {},
+                    onDeleteProfile = {},
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("config_studio_tab_blocks").performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("block_category_conditions").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("add_block_type_condition_if_number").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        // Tap block stack item #0 to open editor, choose SKIP_NEXT, and update block
+        composeTestRule.onNodeWithTag("block_stack_item_0").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("block_editor_on_false_skip_next").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("block_editor_save_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("config_studio_apply_button").performClick()
+        composeTestRule.waitForIdle()
+
+        val savedBlocks = appliedConfig?.parsedBlocks().orEmpty()
+        assertEquals(1, savedBlocks.size)
+        assertEquals("SKIP_NEXT", savedBlocks[0].extraParams["onFalse"])
+    }
 }
+
 

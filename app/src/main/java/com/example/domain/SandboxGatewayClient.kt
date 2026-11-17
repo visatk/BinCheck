@@ -247,16 +247,13 @@ object SandboxGatewayClient {
             return@withContext block()
         }
 
-        var resultHolder: Pair<ResultBucket, String>? = null
-        val (_, coalesced) = deduplicator.getOrExecute(cacheKey) {
-            val res = block()
-            resultHolder = res
-            res ?: (ResultBucket.UNKNOWN to "")
+        val (dedupResult, coalesced) = deduplicator.getOrExecute(cacheKey) {
+            block() ?: (ResultBucket.UNKNOWN to "")
         }
         if (coalesced) {
             NetworkClientProvider.telemetry.recordDeduplicatedSaved()
         }
-        resultHolder
+        dedupResult.takeIf { it.second.isNotBlank() }
     }
 
     private suspend fun executeStripeZeroAuth(

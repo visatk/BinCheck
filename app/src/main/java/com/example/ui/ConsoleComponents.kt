@@ -59,6 +59,7 @@ import androidx.compose.material3.SplitButtonDefaults
 import androidx.compose.material3.SplitButtonLayout
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -399,15 +400,19 @@ fun ConsoleInputCard(
                     )
 
                     val editorScrollState = rememberScrollState()
-                    val displayLineCount = remember(uiState.rawInputText) {
-                        uiState.rawInputText.count { it == '\n' }.plus(1).coerceIn(1, 500)
+                    val totalNewlines = remember(uiState.rawInputText) {
+                        uiState.rawInputText.count { it == '\n' }.plus(1).coerceAtLeast(1)
                     }
-                    val lineNumbersText = remember(displayLineCount) {
-                        buildString(displayLineCount * 4) {
+                    val displayLineCount = totalNewlines.coerceAtMost(2_000)
+                    val lineNumbersText = remember(displayLineCount, totalNewlines) {
+                        buildString(displayLineCount * 5) {
                             for (i in 1..displayLineCount) {
                                 if (i > 1) append('\n')
                                 if (i < 10) append('0')
                                 append(i)
+                            }
+                            if (totalNewlines > 2_000) {
+                                append("\n...")
                             }
                         }
                     }
@@ -927,6 +932,7 @@ private fun ConsoleMiniActionPill(
         border = if (borderColor != Color.Transparent) BorderStroke(0.75.dp, borderColor) else null,
         modifier = Modifier
             .heightIn(min = 34.dp)
+            .minimumInteractiveComponentSize()
             .clip(CircleShape)
             .semantics {
                 contentDescription = label

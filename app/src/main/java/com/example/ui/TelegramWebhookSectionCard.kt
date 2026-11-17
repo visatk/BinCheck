@@ -132,6 +132,14 @@ fun TelegramWebhookSectionCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
+            val resolvedBotHandle = probeResult?.botUsername?.ifBlank { null }
+                ?: TelegramWebhookClient.lastDetectedBotUsername.ifBlank { null }
+            val botStatusLabel = when {
+                tokenConfigured && resolvedBotHandle != null -> "@$resolvedBotHandle • Bot token ready"
+                tokenConfigured -> "Bot token ready • Tap Detect Chat ID to verify handle"
+                else -> "Add TELEGRAM_BOT_TOKEN in Secrets"
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -143,11 +151,7 @@ fun TelegramWebhookSectionCard(
                     .padding(horizontal = 10.dp, vertical = 7.dp)
             ) {
                 Text(
-                    text = if (tokenConfigured) {
-                        "@SandBoxAutoBot • Bot token ready"
-                    } else {
-                        "@SandBoxAutoBot • Add TELEGRAM_BOT_TOKEN in Secrets"
-                    },
+                    text = botStatusLabel,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = if (tokenConfigured) consoleColors.liveAccent else consoleColors.unknownAccent,

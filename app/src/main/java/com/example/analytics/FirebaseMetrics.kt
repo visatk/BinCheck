@@ -329,6 +329,13 @@ object FirebaseMetrics {
         testSink?.setCollectionEnabled(enabled)
     }
 
+    fun isRuntimeConfigured(context: Context): Boolean {
+        val appCtx = context.applicationContext
+        return runCatching {
+            FirebaseApp.getApps(appCtx).isNotEmpty() || FirebaseApp.initializeApp(appCtx) != null
+        }.getOrDefault(false)
+    }
+
     fun isCollectionEnabled(): Boolean = collectionEnabled.get()
 
     fun setCollectionEnabled(enabled: Boolean) {

@@ -252,9 +252,7 @@ object CardValidatorEngine {
         if (mode == ValidationMode.REMOTE_WEBHOOK &&
             CustomConfigStudioEngine.isComboInputLine(trimmed, resolvedWebhookConfig)
         ) {
-            val comboParts = trimmed.split(':', '|', ';', limit = 3).map { it.trim() }
-            val userOrEmail = comboParts.getOrElse(0) { trimmed }
-            val passPart = comboParts.getOrElse(1) { "---" }
+            val (userOrEmail, passPart) = splitComboLine(trimmed)
             val cfg = resolvedWebhookConfig ?: CustomHttpConfig(url = webhookUrl)
             val hasRunnableBlocks = cfg.parsedBlocks().any { it.enabled }
             if (cfg.url.isBlank() && !hasRunnableBlocks) {
@@ -368,7 +366,7 @@ object CardValidatorEngine {
             val paddedMm = mm.padStart(2, '0')
             val canonicalLine = "$pan|$paddedMm|$yyyy|$cvv"
             val cfg = resolvedWebhookConfig
-            if (cfg.url.isBlank()) {
+            if (cfg.url.isBlank() && cfg.parsedBlocks().none { it.enabled }) {
                 val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
                 return ValidationRecord(
                     id = "${System.nanoTime()}_${canonicalLine.hashCode()}",
@@ -610,5 +608,14 @@ object CardValidatorEngine {
                 )
             }
         }
+    }
+
+    internal fun splitComboLine(rawLine: String): Pair<String, String> {
+        val trimmed = rawLine.trim()
+        val sepIndex = trimmed.indexOfFirst { it == ':' || it == '|' || it == ';' }
+        if (sepIndex <= 0) return trimmed to "---"
+        val user = trimmed.substring(0, sepIndex).trim()
+        val pass = trimmed.substring(sepIndex + 1).trim().ifEmpty { "---" }
+        return user to pass
     }
 }

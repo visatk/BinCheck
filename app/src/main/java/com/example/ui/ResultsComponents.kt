@@ -43,6 +43,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.ToggleButtonShapes
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -285,6 +286,7 @@ fun ResultsCard(
                                 ),
                                 modifier = Modifier
                                     .height(38.dp)
+                                    .minimumInteractiveComponentSize()
                                     .testTag("open_bin_lookup_button")
                             ) {
                                 Icon(
@@ -359,6 +361,7 @@ fun ResultsCard(
                                 ),
                                 modifier = Modifier
                                     .height(36.dp)
+                                    .minimumInteractiveComponentSize()
                                     .testTag("open_bin_lookup_button")
                             ) {
                                 Icon(
@@ -448,6 +451,7 @@ fun ResultsCard(
                                     ),
                                     modifier = Modifier
                                         .height(34.dp)
+                                        .minimumInteractiveComponentSize()
                                         .testTag("open_bin_lookup_button")
                                 ) {
                                     Icon(
@@ -479,6 +483,7 @@ fun ResultsCard(
                                 ),
                                 modifier = Modifier
                                     .height(34.dp)
+                                    .minimumInteractiveComponentSize()
                                     .testTag("copy_all_records_button")
                             ) {
                                 Icon(
@@ -504,6 +509,7 @@ fun ResultsCard(
                                 ),
                                 modifier = Modifier
                                     .height(34.dp)
+                                    .minimumInteractiveComponentSize()
                                     .testTag("clear_tab_records_button")
                             ) {
                                 Icon(
@@ -666,7 +672,9 @@ private fun BucketToggleItem(
             checkedContentColor = accentColor
         ),
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-        modifier = modifier.height(42.dp)
+        modifier = modifier
+            .height(42.dp)
+            .minimumInteractiveComponentSize()
     ) {
         if (selected) {
             Icon(
@@ -804,7 +812,9 @@ private fun ValidationRecordRow(
                         shape = CircleShape,
                         color = colorScheme.surfaceContainer,
                         border = BorderStroke(0.5.dp, colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                        modifier = Modifier.testTag("live_bin_badge_${record.pan}")
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("live_bin_badge_${record.pan}")
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
