@@ -468,6 +468,16 @@ object CustomConfigStudioEngine {
     }
 
     // =========================================================================
+    // 0. Config Maker Block Stack Serialization Delegates
+    // =========================================================================
+
+    fun serializeBlocks(blocks: List<ConfigBlock>): String =
+        ConfigBlockSerialization.serializeBlocks(blocks)
+
+    fun parseBlocks(spec: String): List<ConfigBlock> =
+        ConfigBlockSerialization.parseBlocks(spec)
+
+    // =========================================================================
     // 1. Parse Rules Serialization & Extraction
     // =========================================================================
 
@@ -1503,12 +1513,17 @@ object CustomConfigStudioEngine {
 
     private fun isLoliScriptSnippet(snippet: String): Boolean {
         val upper = snippet.uppercase(Locale.ROOT)
-        return upper.contains("REQUEST ") && (
+        return (upper.contains("REQUEST ") && (
             upper.contains("HEADER ") ||
                 upper.contains("CONTENT ") ||
                 upper.contains("KEYCHECK") ||
                 upper.contains("PARSE ")
-            )
+            )) ||
+            upper.contains("FUNCTION ") ||
+            upper.contains("BROWSERACTION ") ||
+            upper.contains("ELEMENTACTION ") ||
+            upper.contains("SELENIUM ") ||
+            upper.contains("SOLVECAPTCHA ")
     }
 
     private fun parseLoliScriptSnippet(snippet: String, autoTokenize: Boolean): CustomHttpConfig {
@@ -1540,9 +1555,130 @@ object CustomConfigStudioEngine {
 
         val reqMatch = Regex("""REQUEST\s+(GET|POST|PUT|DELETE|PATCH)\s+"([^"]+)"""", RegexOption.IGNORE_CASE)
             .find(snippet)
-            ?: throw IllegalArgumentException("Could not find REQUEST <METHOD> \"<URL>\" in LoliScript.")
-        val rawMethod = reqMatch.groupValues[1].uppercase(Locale.ROOT)
-        val url = convertLoliTokens(reqMatch.groupValues[2].trim())
+        val rawMethod = reqMatch?.groupValues?.getOrNull(1)?.uppercase(Locale.ROOT) ?: "GET"
+        val url = reqMatch?.groupValues?.getOrNull(2)?.trim()?.let { convertLoliTokens(it) }.orEmpty()
+
+        val importedBlocks = mutableListOf<ConfigBlock>()
+        Regex("""FUNCTION\s+([A-Za-z0-9_-]+)(?:\s+([A-Za-z0-9_-]+))?\s+"((?:\\.|[^"\\])*)"(?:\s*->\s*(VAR|CAP)\s+"([^"]+)")?""", RegexOption.IGNORE_CASE)
+            .findAll(snippet).forEach { m ->
+                val fnName = m.groupValues[1].uppercase(Locale.ROOT)
+                val subArg = m.groupValues[2].uppercase(Locale.ROOT)
+                val valStr = convertLoliTokens(unescapeJsonString(m.groupValues[3]))
+                val isCap = m.groupValues[4].equals("CAP", ignoreCase = true)
+                val outVar = m.groupValues[5].ifBlank { "fn_out" }
+                val blk = when {
+                    fnName == "HASH" -> ConfigBlock(type = BlockType.FUNC_HASH, inputTarget = valStr, secondaryParam = subArg.ifBlank { "SHA-256" }, outputVar = outVar, captureToOutput = isCap)
+                    fnName == "BASE64ENCODE" -> ConfigBlock(type = BlockType.FUNC_BASE64_ENCODE, inputTarget = valStr, outputVar = outVar, captureToOutput = isCap)
+                    fnName == "BASE64DECODE" -> ConfigBlock(type = BlockType.FUNC_BASE64_DECODE, inputTarget = valStr, outputVar = outVar, captureToOutput = isCap)
+                    fnName == "URLENCODE" -> ConfigBlock(type = BlockType.FUNC_URL_ENCODE, inputTarget = valStr, secondaryParam = "ENCODE", outputVar = outVar, captureToOutput = isCap)
+                    fnName == "RANDOMSTRING" -> ConfigBlock(type = BlockType.FUNC_RANDOM_STRING, inputTarget = "HEX", secondaryParam = "16", outputVar = outVar, captureToOutput = isCap)
+                    fnName == "CURRENTUNIXTIME" -> ConfigBlock(type = BlockType.FUNC_TIMESTAMP, inputTarget = "UNIX_S", outputVar = outVar, captureToOutput = isCap)
+                    fnName == "COMPUTE" -> ConfigBlock(type = BlockType.FUNC_MATH_EVAL, inputTarget = valStr, outputVar = outVar, captureToOutput = isCap)
+                    else -> ConfigBlock(type = BlockType.FUNC_CONSTANT, inputTarget = valStr, outputVar = outVar, captureToOutput = isCap)
+                }
+                importedBlocks.add(blk)
+            }
+
+        Regex("""BROWSERACTION\s+([A-Za-z]+)(?:\s+"((?:\\.|[^"\\])*)")?(?:\s+"((?:\\.|[^"\\])*)")?(?:\s*->\s*(VAR|CAP)\s+"([^"]+)")?""", RegexOption.IGNORE_CASE)
+            .findAll(snippet).forEach { m ->
+                val action = m.groupValues[1].uppercase(Locale.ROOT)
+                val arg1 = convertLoliTokens(unescapeJsonString(m.groupValues[2]))
+                val arg2 = convertLoliTokens(unescapeJsonString(m.groupValues[3]))
+                val isCap = m.groupValues[4].equals("CAP", ignoreCase = true)
+                val outVar = m.groupValues[5]
+                val bType = when (action) {
+                    "OPEN" -> BlockType.BROWSER_OPEN
+                    "NAVIGATE" -> BlockType.BROWSER_NAVIGATE
+                    "CLICK" -> BlockType.BROWSER_CLICK
+                    "SENDKEYS", "TYPE" -> BlockType.BROWSER_TYPE
+                    "WAITFORELEMENT" -> BlockType.BROWSER_WAIT_ELEMENT
+                    "EXECUTEJS" -> BlockType.BROWSER_EXEC_JS
+                    "GETCOOKIES" -> BlockType.BROWSER_GET_COOKIES
+                    "SCREENSHOT" -> BlockType.BROWSER_SCREENSHOT
+                    else -> BlockType.BROWSER_CLOSE
+                }
+                importedBlocks.add(
+                    ConfigBlock(
+                        type = bType,
+                        inputTarget = arg1,
+                        secondaryParam = arg2,
+                        outputVar = outVar.ifBlank { bType.defaultOutputVar },
+                        captureToOutput = isCap
+                    )
+                )
+            }
+
+        Regex("""(?:SELENIUM|ELEMENTACTION)\s+([A-Za-z]+)(?:\s+"((?:\\.|[^"\\])*)")?(?:\s+"((?:\\.|[^"\\])*)")?(?:\s*->\s*(VAR|CAP)\s+"([^"]+)")?""", RegexOption.IGNORE_CASE)
+            .findAll(snippet).forEach { m ->
+                val action = m.groupValues[1].uppercase(Locale.ROOT)
+                val arg1 = convertLoliTokens(unescapeJsonString(m.groupValues[2]))
+                val arg2 = convertLoliTokens(unescapeJsonString(m.groupValues[3]))
+                val isCap = m.groupValues[4].equals("CAP", ignoreCase = true)
+                val outVar = m.groupValues[5]
+                val sType = when (action) {
+                    "OPEN" -> BlockType.SELENIUM_OPEN
+                    "NAVIGATE" -> BlockType.SELENIUM_NAVIGATE
+                    "FIND" -> BlockType.SELENIUM_FIND_ELEMENT
+                    "SENDKEYS" -> BlockType.SELENIUM_SEND_KEYS
+                    "CLICK" -> BlockType.SELENIUM_CLICK
+                    "WAIT" -> BlockType.SELENIUM_WAIT
+                    "EXECUTEJS" -> BlockType.SELENIUM_EXEC_SCRIPT
+                    "GETCOOKIES" -> BlockType.SELENIUM_GET_COOKIES
+                    else -> BlockType.SELENIUM_QUIT
+                }
+                importedBlocks.add(
+                    ConfigBlock(
+                        type = sType,
+                        inputTarget = arg1,
+                        secondaryParam = arg2,
+                        outputVar = outVar.ifBlank { sType.defaultOutputVar },
+                        captureToOutput = isCap
+                    )
+                )
+            }
+
+        Regex("""SOLVECAPTCHA\s+([A-Za-z0-9_]+)\s+"((?:\\.|[^"\\])*)"(?:\s+"((?:\\.|[^"\\])*)")?(?:\s*->\s*(VAR|CAP)\s+"([^"]+)")?""", RegexOption.IGNORE_CASE)
+            .findAll(snippet).forEach { m ->
+                val cType = runCatching { BlockType.valueOf(m.groupValues[1].uppercase(Locale.ROOT)) }
+                    .getOrDefault(BlockType.CAPTCHA_RECAPTCHA_V2)
+                val arg1 = convertLoliTokens(unescapeJsonString(m.groupValues[2]))
+                val arg2 = convertLoliTokens(unescapeJsonString(m.groupValues[3]))
+                val isCap = m.groupValues[4].equals("CAP", ignoreCase = true)
+                val outVar = m.groupValues[5]
+                importedBlocks.add(
+                    ConfigBlock(
+                        type = cType,
+                        inputTarget = arg1,
+                        secondaryParam = arg2.ifBlank { "2Captcha" },
+                        outputVar = outVar.ifBlank { cType.defaultOutputVar },
+                        captureToOutput = isCap
+                    )
+                )
+            }
+
+        Regex("""SHELL\s+"((?:\\.|[^"\\])*)"(?:\s+"((?:\\.|[^"\\])*)")?(?:\s*->\s*(VAR|CAP)\s+"([^"]+)")?""", RegexOption.IGNORE_CASE)
+            .findAll(snippet).forEach { m ->
+                importedBlocks.add(
+                    ConfigBlock(
+                        type = BlockType.INTEROP_SHELL,
+                        inputTarget = convertLoliTokens(unescapeJsonString(m.groupValues[1])),
+                        secondaryParam = convertLoliTokens(unescapeJsonString(m.groupValues[2])),
+                        outputVar = m.groupValues[4].ifBlank { "shell_stdout" },
+                        captureToOutput = m.groupValues[3].equals("CAP", ignoreCase = true)
+                    )
+                )
+            }
+
+        Regex("""DELAY\s+"?(\d+)"?""", RegexOption.IGNORE_CASE).findAll(snippet).forEach { m ->
+            importedBlocks.add(ConfigBlock(type = BlockType.UTIL_DELAY, inputTarget = m.groupValues[1]))
+        }
+        Regex("""LOG\s+"((?:\\.|[^"\\])*)"""", RegexOption.IGNORE_CASE).findAll(snippet).forEach { m ->
+            importedBlocks.add(ConfigBlock(type = BlockType.UTIL_LOG, inputTarget = convertLoliTokens(unescapeJsonString(m.groupValues[1]))))
+        }
+
+        if (reqMatch == null && importedBlocks.isEmpty()) {
+            throw IllegalArgumentException("Could not find REQUEST <METHOD> \"<URL>\" or block directives in LoliScript.")
+        }
 
         var userAgent = CustomHttpConfig.DEFAULT_USER_AGENT
         val headers = mutableListOf<String>()
@@ -1679,7 +1815,8 @@ object CustomConfigStudioEngine {
             followRedirects = true,
             parseRulesSpec = serializeParseRules(parseRules),
             checkpointRulesSpec = serializeCheckpointRules(checkpoints),
-            skipLocalLuhnPrecheck = usesCombo
+            skipLocalLuhnPrecheck = usesCombo,
+            blocksSpec = serializeBlocks(importedBlocks)
         )
     }
 
@@ -2228,12 +2365,87 @@ object CustomConfigStudioEngine {
                     }
                 }
             }
+
+            val blocks = config.parsedBlocks()
+            if (blocks.isNotEmpty()) {
+                append("\n# --- Config Maker Blocks (${blocks.size}) ---\n")
+                for (blk in blocks) {
+                    if (!blk.enabled) append("# [DISABLED] ")
+                    val outKind = if (blk.captureToOutput) "CAP" else "VAR"
+                    val outVar = blk.outputVar.ifBlank { "out" }
+                    when (blk.type) {
+                        BlockType.BROWSER_OPEN -> append("BROWSERACTION Open\n")
+                        BlockType.BROWSER_NAVIGATE -> append("BROWSERACTION Navigate \"${escapeJson(toLoliTokens(blk.inputTarget))}\"\n")
+                        BlockType.BROWSER_CLICK -> append("BROWSERACTION Click \"${escapeJson(blk.inputTarget)}\"\n")
+                        BlockType.BROWSER_TYPE -> append("BROWSERACTION SendKeys \"${escapeJson(blk.inputTarget)}\" \"${escapeJson(toLoliTokens(blk.secondaryParam))}\"\n")
+                        BlockType.BROWSER_WAIT_ELEMENT -> append("BROWSERACTION WaitForElement \"${escapeJson(blk.inputTarget)}\"\n")
+                        BlockType.BROWSER_EXEC_JS -> append("BROWSERACTION ExecuteJS \"${escapeJson(toLoliTokens(blk.inputTarget))}\" -> $outKind \"$outVar\"\n")
+                        BlockType.BROWSER_GET_COOKIES -> append("BROWSERACTION GetCookies \"${escapeJson(blk.inputTarget)}\" -> $outKind \"$outVar\"\n")
+                        BlockType.BROWSER_SCREENSHOT -> append("BROWSERACTION Screenshot \"${escapeJson(blk.inputTarget)}\" -> $outKind \"$outVar\"\n")
+                        BlockType.BROWSER_CLOSE -> append("BROWSERACTION Close\n")
+                        BlockType.CAPTCHA_RECAPTCHA_V2,
+                        BlockType.CAPTCHA_RECAPTCHA_V3,
+                        BlockType.CAPTCHA_HCAPTCHA,
+                        BlockType.CAPTCHA_TURNSTILE,
+                        BlockType.CAPTCHA_IMAGE,
+                        BlockType.CAPTCHA_FUNCAPTCHA,
+                        BlockType.CAPTCHA_BALANCE -> append("SOLVECAPTCHA ${blk.type.name} \"${escapeJson(toLoliTokens(blk.inputTarget))}\" \"${escapeJson(blk.secondaryParam)}\" -> $outKind \"$outVar\"\n")
+                        BlockType.CONDITION_KEYCHECK -> append("KEYCHECK\n  KEYCHAIN ${if (blk.verdictOnMatch == ResultBucket.LIVE) "Success" else "Failure"} OR\n    KEY \"${escapeJson(toLoliTokens(blk.tertiaryParam))}\"\n")
+                        BlockType.CONDITION_IF_STRING,
+                        BlockType.CONDITION_IF_NUMBER,
+                        BlockType.CONDITION_IF_STATUS,
+                        BlockType.CONDITION_IF_EXISTS -> append("IF \"${escapeJson(toLoliTokens(blk.inputTarget))}\" ${blk.secondaryParam.ifBlank { "EQUALS" }} \"${escapeJson(toLoliTokens(blk.tertiaryParam))}\"\n")
+                        BlockType.FUNC_HASH -> append("FUNCTION Hash ${blk.secondaryParam.ifBlank { "SHA-256" }} \"${escapeJson(toLoliTokens(blk.inputTarget))}\" -> $outKind \"$outVar\"\n")
+                        BlockType.FUNC_HMAC -> append("FUNCTION HMAC \"${escapeJson(toLoliTokens(blk.inputTarget))}\" \"${escapeJson(blk.secondaryParam)}\" -> $outKind \"$outVar\"\n")
+                        BlockType.FUNC_BASE64_ENCODE -> append("FUNCTION Base64Encode \"${escapeJson(toLoliTokens(blk.inputTarget))}\" -> $outKind \"$outVar\"\n")
+                        BlockType.FUNC_BASE64_DECODE -> append("FUNCTION Base64Decode \"${escapeJson(toLoliTokens(blk.inputTarget))}\" -> $outKind \"$outVar\"\n")
+                        BlockType.FUNC_URL_ENCODE -> append("FUNCTION URLEncode \"${escapeJson(toLoliTokens(blk.inputTarget))}\" -> $outKind \"$outVar\"\n")
+                        BlockType.FUNC_RANDOM_STRING -> append("FUNCTION RandomString \"${escapeJson(blk.inputTarget)}\" -> $outKind \"$outVar\"\n")
+                        BlockType.FUNC_TIMESTAMP -> append("FUNCTION CurrentUnixTime \"${escapeJson(blk.inputTarget)}\" -> $outKind \"$outVar\"\n")
+                        BlockType.FUNC_STRING_REPLACE -> append("FUNCTION Replace \"${escapeJson(blk.secondaryParam)}\" \"${escapeJson(blk.tertiaryParam)}\" \"${escapeJson(toLoliTokens(blk.inputTarget))}\" -> $outKind \"$outVar\"\n")
+                        BlockType.FUNC_STRING_CASE -> append("FUNCTION ${blk.secondaryParam.ifBlank { "Lowercase" }} \"${escapeJson(toLoliTokens(blk.inputTarget))}\" -> $outKind \"$outVar\"\n")
+                        BlockType.FUNC_MATH_EVAL -> append("FUNCTION Compute \"${escapeJson(toLoliTokens(blk.inputTarget))}\" -> $outKind \"$outVar\"\n")
+                        BlockType.FUNC_CONSTANT -> append("FUNCTION Constant \"${escapeJson(toLoliTokens(blk.inputTarget))}\" -> $outKind \"$outVar\"\n")
+                        BlockType.INTEROP_SHELL -> append("SHELL \"${escapeJson(toLoliTokens(blk.inputTarget))}\" \"${escapeJson(toLoliTokens(blk.secondaryParam))}\" -> $outKind \"$outVar\"\n")
+                        BlockType.INTEROP_SCRIPT,
+                        BlockType.INTEROP_WEBHOOK_POST,
+                        BlockType.INTEROP_TCP_SOCKET,
+                        BlockType.INTEROP_INTENT_EXPORT -> append("INTEROP ${blk.type.name} \"${escapeJson(toLoliTokens(blk.inputTarget))}\" -> $outKind \"$outVar\"\n")
+                        BlockType.PARSE_LR -> append("PARSE \"<SOURCE>\" LR \"${escapeJson(blk.inputTarget)}\" \"${escapeJson(blk.secondaryParam)}\" -> $outKind \"$outVar\"\n")
+                        BlockType.PARSE_JSON -> append("PARSE \"<SOURCE>\" JSON \"${escapeJson(blk.inputTarget)}\" -> $outKind \"$outVar\"\n")
+                        BlockType.PARSE_REGEX -> append("PARSE \"<SOURCE>\" REGEX \"${escapeJson(blk.inputTarget)}\" -> $outKind \"$outVar\"\n")
+                        BlockType.PARSE_CSS -> append("PARSE \"<SOURCE>\" CSS \"${escapeJson(blk.inputTarget)}\" -> $outKind \"$outVar\"\n")
+                        BlockType.PARSE_HEADER,
+                        BlockType.PARSE_COOKIE -> append("PARSE \"<HEADERS>\" LR \"${escapeJson(blk.inputTarget)}\" \"\" -> $outKind \"$outVar\"\n")
+                        BlockType.REQUEST_HTTP -> append("REQUEST ${blk.secondaryParam.ifBlank { "GET" }} \"${escapeJson(toLoliTokens(blk.inputTarget))}\"\n")
+                        BlockType.REQUEST_SET_COOKIE -> append("COOKIE \"${escapeJson(blk.inputTarget)}=${escapeJson(toLoliTokens(blk.secondaryParam))}\"\n")
+                        BlockType.REQUEST_CLEAR_COOKIES -> append("UTILITY ClearCookies\n")
+                        BlockType.REQUEST_MULTIPART -> append("REQUEST POST \"${escapeJson(toLoliTokens(blk.inputTarget))}\"\n")
+                        BlockType.SELENIUM_OPEN -> append("SELENIUM Open \"${escapeJson(blk.inputTarget)}\"\n")
+                        BlockType.SELENIUM_NAVIGATE -> append("SELENIUM Navigate \"${escapeJson(toLoliTokens(blk.inputTarget))}\"\n")
+                        BlockType.SELENIUM_FIND_ELEMENT -> append("ELEMENTACTION Find \"${escapeJson(blk.inputTarget)}\" -> $outKind \"$outVar\"\n")
+                        BlockType.SELENIUM_SEND_KEYS -> append("ELEMENTACTION SendKeys \"${escapeJson(blk.inputTarget)}\" \"${escapeJson(toLoliTokens(blk.secondaryParam))}\"\n")
+                        BlockType.SELENIUM_CLICK -> append("ELEMENTACTION Click \"${escapeJson(blk.inputTarget)}\"\n")
+                        BlockType.SELENIUM_WAIT -> append("ELEMENTACTION Wait \"${escapeJson(blk.inputTarget)}\"\n")
+                        BlockType.SELENIUM_EXEC_SCRIPT -> append("SELENIUM ExecuteJS \"${escapeJson(toLoliTokens(blk.inputTarget))}\" -> $outKind \"$outVar\"\n")
+                        BlockType.SELENIUM_GET_COOKIES -> append("SELENIUM GetCookies \"${escapeJson(blk.inputTarget)}\" -> $outKind \"$outVar\"\n")
+                        BlockType.SELENIUM_QUIT -> append("SELENIUM Quit\n")
+                        BlockType.UTIL_DELAY -> append("DELAY \"${escapeJson(blk.inputTarget)}\"\n")
+                        BlockType.UTIL_LOG -> append("LOG \"${escapeJson(toLoliTokens(blk.inputTarget))}\"\n")
+                        BlockType.UTIL_SET_VAR -> append("UTILITY SetVar \"${escapeJson(toLoliTokens(blk.inputTarget))}\" -> $outKind \"$outVar\"\n")
+                        BlockType.UTIL_CLEAR_VAR -> append("UTILITY ClearVar \"${escapeJson(blk.inputTarget)}\"\n")
+                        BlockType.UTIL_LIST_OP -> append("UTILITY List ${blk.secondaryParam.ifBlank { "COUNT" }} \"${escapeJson(toLoliTokens(blk.inputTarget))}\" -> $outKind \"$outVar\"\n")
+                        BlockType.UTIL_FILE_APPEND -> append("UTILITY FileAppend \"${escapeJson(toLoliTokens(blk.inputTarget))}\"\n")
+                    }
+                }
+            }
         }
     }
 
     fun exportConfigToJson(config: CustomHttpConfig): String {
         val parseRules = parseParseRules(config.parseRulesSpec)
         val checkpoints = parseCheckpointRules(config.checkpointRulesSpec)
+        val blocks = parseBlocks(config.blocksSpec)
 
         return buildString(640) {
             append("{\n")
@@ -2263,8 +2475,10 @@ object CustomConfigStudioEngine {
             append("  \"preRequestBody\": \"${escapeJson(config.preRequestBody)}\",\n")
             append("  \"preRequestParseRulesSpec\": \"${escapeJson(config.preRequestParseRulesSpec)}\",\n")
             append("  \"skipLocalLuhnPrecheck\": ${config.skipLocalLuhnPrecheck},\n")
+            append("  \"blocksSpec\": \"${escapeJson(config.blocksSpec)}\",\n")
             append("  \"parseRulesCount\": ${parseRules.size},\n")
-            append("  \"checkpointsCount\": ${checkpoints.size}\n")
+            append("  \"checkpointsCount\": ${checkpoints.size},\n")
+            append("  \"blocksCount\": ${blocks.size}\n")
             append("}")
         }
     }
@@ -2319,6 +2533,7 @@ object CustomConfigStudioEngine {
         val preRequestParseRulesSpec = extractJsonPathValue(trimmed, "preRequestParseRulesSpec").orEmpty()
         val skipLocalLuhnPrecheck = extractJsonPathValue(trimmed, "skipLocalLuhnPrecheck")
             ?.toBooleanStrictOrNull() ?: false
+        val blocksSpec = extractJsonPathValue(trimmed, "blocksSpec").orEmpty()
 
         CustomHttpConfig(
             profileName = profileName,
@@ -2345,7 +2560,8 @@ object CustomConfigStudioEngine {
             preRequestHeaders = preRequestHeaders,
             preRequestBody = preRequestBody,
             preRequestParseRulesSpec = preRequestParseRulesSpec,
-            skipLocalLuhnPrecheck = skipLocalLuhnPrecheck
+            skipLocalLuhnPrecheck = skipLocalLuhnPrecheck,
+            blocksSpec = blocksSpec
         )
     }
 

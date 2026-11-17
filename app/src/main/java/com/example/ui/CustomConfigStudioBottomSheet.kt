@@ -95,6 +95,7 @@ import androidx.compose.ui.unit.dp
 import com.example.analytics.FirebaseMetrics
 import com.example.domain.CheckpointCondition
 import com.example.domain.CheckpointEvaluationResult
+import com.example.domain.ConfigBlock
 import com.example.domain.CustomCheckpointRule
 import com.example.domain.CustomConfigProfile
 import com.example.domain.CustomConfigStudioEngine
@@ -117,6 +118,7 @@ import kotlinx.coroutines.withContext
 
 private enum class ConfigStudioTab(val title: String) {
     REQUEST("Request"),
+    BLOCKS("Blocks"),
     PARSE("Parse"),
     CHECKPOINTS("Checkpoints"),
     PROXY("Proxy"),
@@ -222,6 +224,11 @@ fun CustomConfigStudioBottomSheet(
             addAll(initialConfig.parsedCheckpointRules())
         }
     }
+    val configBlocks = remember {
+        mutableStateListOf<ConfigBlock>().apply {
+            addAll(initialConfig.parsedBlocks())
+        }
+    }
 
     fun buildCurrentConfig(): CustomHttpConfig = CustomHttpConfig(
         profileName = profileName.trim().ifEmpty { "Custom Config" },
@@ -248,7 +255,8 @@ fun CustomConfigStudioBottomSheet(
         preRequestHeaders = preRequestHeaders.trim(),
         preRequestBody = preRequestBody.trim(),
         preRequestParseRulesSpec = CustomConfigStudioEngine.serializeParseRules(preRequestParseRules.toList()),
-        skipLocalLuhnPrecheck = skipLocalLuhnPrecheck
+        skipLocalLuhnPrecheck = skipLocalLuhnPrecheck,
+        blocksSpec = CustomConfigStudioEngine.serializeBlocks(configBlocks.toList())
     )
 
     fun loadConfigIntoEditor(cfg: CustomHttpConfig, message: String, preserveRulesIfEmpty: Boolean = false) {
@@ -271,11 +279,14 @@ fun CustomConfigStudioBottomSheet(
         }
         val importedParse = cfg.parsedParseRules()
         val importedCheckpoints = cfg.parsedCheckpointRules()
-        if (!preserveRulesIfEmpty || importedParse.isNotEmpty() || importedCheckpoints.isNotEmpty()) {
+        val importedBlocks = cfg.parsedBlocks()
+        if (!preserveRulesIfEmpty || importedParse.isNotEmpty() || importedCheckpoints.isNotEmpty() || importedBlocks.isNotEmpty()) {
             parseRules.clear()
             parseRules.addAll(importedParse)
             checkpointRules.clear()
             checkpointRules.addAll(importedCheckpoints)
+            configBlocks.clear()
+            configBlocks.addAll(importedBlocks)
         }
         if (!preserveRulesIfEmpty) {
             proxyEnabled = cfg.proxyEnabled
@@ -486,7 +497,7 @@ fun CustomConfigStudioBottomSheet(
                             color = colorScheme.onSurface
                         )
                         Text(
-                            text = "2-Step HTTP • 6-Mode Parser • Keycheck Debugger • Proxy Pool",
+                            text = "2-Step HTTP • 9-Category Blocks • 6-Mode Parser • Keycheck",
                             style = MaterialTheme.typography.labelSmall,
                             color = colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -657,6 +668,17 @@ fun CustomConfigStudioBottomSheet(
                 Text("→", style = MaterialTheme.typography.labelSmall, color = colorScheme.outline)
                 PipelineStagePill(
                     step = "2",
+                    label = "Blocks (${configBlocks.size})",
+                    active = selectedTab == ConfigStudioTab.BLOCKS.ordinal,
+                    accent = colorScheme.tertiary,
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        selectedTab = ConfigStudioTab.BLOCKS.ordinal
+                    }
+                )
+                Text("→", style = MaterialTheme.typography.labelSmall, color = colorScheme.outline)
+                PipelineStagePill(
+                    step = "3",
                     label = "Parse (${parseRules.size})",
                     active = selectedTab == ConfigStudioTab.PARSE.ordinal,
                     accent = consoleColors.telegramAccent,
@@ -667,7 +689,7 @@ fun CustomConfigStudioBottomSheet(
                 )
                 Text("→", style = MaterialTheme.typography.labelSmall, color = colorScheme.outline)
                 PipelineStagePill(
-                    step = "3",
+                    step = "4",
                     label = "Keycheck (${checkpointRules.size})",
                     active = selectedTab == ConfigStudioTab.CHECKPOINTS.ordinal,
                     accent = consoleColors.liveAccent,
@@ -678,7 +700,7 @@ fun CustomConfigStudioBottomSheet(
                 )
                 Text("→", style = MaterialTheme.typography.labelSmall, color = colorScheme.outline)
                 PipelineStagePill(
-                    step = "4",
+                    step = "5",
                     label = if (proxyEnabled) "Proxy ($validProxyCount)" else "Direct",
                     active = selectedTab == ConfigStudioTab.PROXY.ordinal,
                     accent = if (proxyEnabled) consoleColors.unknownAccent else colorScheme.onSurfaceVariant,
@@ -740,6 +762,7 @@ fun CustomConfigStudioBottomSheet(
                 ConfigStudioTab.entries.forEachIndexed { idx, tab ->
                     val badgeCount = when (tab) {
                         ConfigStudioTab.REQUEST -> if (preRequestEnabled) 2 else 0
+                        ConfigStudioTab.BLOCKS -> configBlocks.size
                         ConfigStudioTab.PARSE -> parseRules.size
                         ConfigStudioTab.CHECKPOINTS -> checkpointRules.size
                         ConfigStudioTab.PROXY -> if (proxyEnabled) validProxyCount.coerceAtLeast(1) else 0
@@ -849,6 +872,31 @@ fun CustomConfigStudioBottomSheet(
                                 liveRequestPreview = liveRequestPreview
                             )
 
+                            ConfigStudioTab.BLOCKS -> BlocksStudioTabContent(
+                                blocks = configBlocks,
+                                sampleTestLine = sampleTestLine,
+                                dryRunBodyText = dryRunBodyText,
+                                dryRunStatusCode = dryRunStatusCode,
+                                currentConfig = buildCurrentConfig(),
+                                onAddBlock = { configBlocks.add(it) },
+                                onUpdateBlock = { idx, updated ->
+                                    if (idx in configBlocks.indices) configBlocks[idx] = updated
+                                },
+                                onMoveBlock = { from, to ->
+                                    if (from in configBlocks.indices && to in configBlocks.indices) {
+                                        val item = configBlocks.removeAt(from)
+                                        configBlocks.add(to, item)
+                                    }
+                                },
+                                onRemoveBlock = { idx ->
+                                    if (idx in configBlocks.indices) configBlocks.removeAt(idx)
+                                },
+                                onReplaceAllBlocks = { replacement ->
+                                    configBlocks.clear()
+                                    configBlocks.addAll(replacement)
+                                }
+                            )
+
                             ConfigStudioTab.PARSE -> ParseStudioTabContent(
                                 parseRules = parseRules,
                                 dryRunBodyText = dryRunBodyText,
@@ -923,7 +971,8 @@ fun CustomConfigStudioBottomSheet(
                                         name = cfg.profileName,
                                         description = desc.ifBlank {
                                             val stepTag = if (cfg.preRequestEnabled) "2-Step ${cfg.method.label}" else cfg.method.label
-                                            "$stepTag • ${parseRules.size} captures • ${checkpointRules.size} checkpoints"
+                                            val blkTag = if (configBlocks.isNotEmpty()) " • ${configBlocks.size} blocks" else ""
+                                            "$stepTag$blkTag • ${parseRules.size} captures • ${checkpointRules.size} checkpoints"
                                         },
                                         config = cfg,
                                         isBuiltIn = false
@@ -1057,7 +1106,7 @@ fun CustomConfigStudioBottomSheet(
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onTestConfig(buildCurrentConfig(), sampleTestLine)
                     },
-                    enabled = url.isNotBlank() && !isTestingEndpoint,
+                    enabled = (url.isNotBlank() || configBlocks.any { it.enabled }) && !isTestingEndpoint,
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 48.dp)
@@ -3506,6 +3555,13 @@ private fun ProfileItemCard(
                             color = consoleColors.unknownAccent
                         )
                     }
+                    val blockCount = profile.config.parsedBlocks().size
+                    if (blockCount > 0) {
+                        StudioSummaryPill(
+                            label = "${blockCount}BLK",
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
                     StudioSummaryPill(
                         label = profile.config.method.label,
                         color = MaterialTheme.colorScheme.primary
@@ -3700,6 +3756,16 @@ private fun ConfigProbeTraceCard(
                         modifier = Modifier.padding(8.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
+                        if (probe.blockTrace.isNotEmpty()) {
+                            Text(
+                                text = "BLOCK STACK TRACE:\n" + probe.blockTrace.joinToString("\n") { st ->
+                                    "#${st.index} [${st.status.name}] ${st.block.category.shortBadge}/${st.block.label}: ${st.detail}"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = JetBrainsMonoFamily,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                        }
                         if (probe.checkpointTrace.isNotEmpty()) {
                             Text(
                                 text = "KEYCHECK TRACE:\n" + probe.checkpointTrace.joinToString("\n") { st ->

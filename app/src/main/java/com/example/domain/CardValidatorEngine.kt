@@ -256,7 +256,8 @@ object CardValidatorEngine {
             val userOrEmail = comboParts.getOrElse(0) { trimmed }
             val passPart = comboParts.getOrElse(1) { "---" }
             val cfg = resolvedWebhookConfig ?: CustomHttpConfig(url = webhookUrl)
-            if (cfg.url.isBlank()) {
+            val hasRunnableBlocks = cfg.parsedBlocks().any { it.enabled }
+            if (cfg.url.isBlank() && !hasRunnableBlocks) {
                 val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
                 return ValidationRecord(
                     id = "${System.nanoTime()}_${trimmed.hashCode()}",
@@ -291,7 +292,7 @@ object CardValidatorEngine {
         if (parts.size < 4) {
             if (mode == ValidationMode.REMOTE_WEBHOOK && resolvedWebhookConfig?.skipLocalLuhnPrecheck == true) {
                 val cfg = resolvedWebhookConfig
-                if (cfg.url.isNotBlank()) {
+                if (cfg.url.isNotBlank() || cfg.parsedBlocks().any { it.enabled }) {
                     return CustomHttpClient.executeValidation(
                         rawLine = trimmed,
                         normalizedLine = trimmed,
@@ -534,7 +535,8 @@ object CardValidatorEngine {
                 val resolvedConfig = (customHttpConfig ?: CustomHttpConfig(url = webhookUrl)).let { cfg ->
                     if (cfg.url.isBlank() && webhookUrl.isNotBlank()) cfg.copy(url = webhookUrl) else cfg
                 }
-                if (resolvedConfig.url.isBlank()) {
+                val hasRunnableBlocks = resolvedConfig.parsedBlocks().any { it.enabled }
+                if (resolvedConfig.url.isBlank() && !hasRunnableBlocks) {
                     val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
                     ValidationRecord(
                         id = "${System.nanoTime()}_${canonicalLine.hashCode()}",

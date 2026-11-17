@@ -42,7 +42,8 @@ data class CustomHttpConfig(
     val preRequestHeaders: String = "",
     val preRequestBody: String = "",
     val preRequestParseRulesSpec: String = "",
-    val skipLocalLuhnPrecheck: Boolean = false
+    val skipLocalLuhnPrecheck: Boolean = false,
+    val blocksSpec: String = ""
 ) {
     fun parsedParseRules(): List<CustomParseRule> =
         CustomConfigStudioEngine.parseParseRules(parseRulesSpec)
@@ -55,6 +56,9 @@ data class CustomHttpConfig(
 
     fun parsedProxyPool(): List<ParsedProxyEndpoint> =
         CustomConfigStudioEngine.parseProxyPool(proxyListText, proxyProtocol)
+
+    fun parsedBlocks(): List<ConfigBlock> =
+        CustomConfigStudioEngine.parseBlocks(blocksSpec)
 
     companion object {
         const val DEFAULT_PROFILE_NAME = "Custom Webhook"
@@ -92,7 +96,8 @@ data class HttpProbeResult(
     val step1LatencyMs: Long = 0L,
     val step1Summary: String = "",
     val step1Captures: Map<String, String> = emptyMap(),
-    val checkpointTrace: List<CheckpointEvalStep> = emptyList()
+    val checkpointTrace: List<CheckpointEvalStep> = emptyList(),
+    val blockTrace: List<BlockExecutionStep> = emptyList()
 )
 
 object CustomHttpClient {
@@ -142,6 +147,7 @@ object CustomHttpClient {
             append('|').append(config.preRequestUrl.hashCode())
             append('|').append(config.preRequestBody.hashCode())
             append('|').append(config.compressBodyGzip)
+            append('|').append(config.blocksSpec.hashCode())
             append('|').append(normalizedLine)
         }
         if (useCacheAndDedup) {
@@ -290,6 +296,51 @@ object CustomHttpClient {
             }
         }
 
+        val enabledBlocks = config.parsedBlocks().filter { it.enabled }
+
+        if (config.url.isBlank() && enabledBlocks.isNotEmpty()) {
+            val blockRes = ConfigBlockExecutor.executeStack(
+                blocks = enabledBlocks,
+                normalizedLine = normalizedLine,
+                pan = pan,
+                mm = mm,
+                yyyy = yyyy,
+                cvv = cvv,
+                scheme = scheme,
+                config = config,
+                initialCaptures = step1Captures,
+                initialCookies = step1Cookies,
+                dryRunNetwork = false
+            )
+            val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos).coerceAtLeast(1L)
+            val statusCode = blockRes.lastStatusCode ?: 200
+            val (bucket, reasonTag) = blockRes.verdict ?: classifyResponse(
+                statusCode = statusCode,
+                bodyStr = blockRes.lastSourceBody,
+                config = config,
+                precomputedCaptures = blockRes.captures,
+                responseHeaders = blockRes.lastHeaders,
+                latencyMs = elapsed
+            )
+            val capSuffix = blockRes.captures.entries.take(4)
+                .joinToString(" ") { (k, v) -> "[$k=${v.take(28)}]" }
+                .let { if (it.isNotEmpty()) " $it" else "" }
+            val summary = "Blocks (${blockRes.steps.size}) • ${bucket.name} ($reasonTag)$capSuffix"
+            return ValidationRecord(
+                id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
+                rawLine = rawLine,
+                normalizedLine = normalizedLine,
+                pan = pan,
+                month = mm,
+                year = yyyy,
+                cvv = cvv,
+                scheme = scheme,
+                bucket = bucket,
+                message = summary,
+                latencyMs = elapsed
+            )
+        }
+
         val outcome = executeWithRetries(
             normalizedLine = normalizedLine,
             pan = pan,
@@ -358,24 +409,58 @@ object CustomHttpClient {
                     putAll(step1Captures)
                     putAll(step2Captures)
                 }
+                var finalBody = outcome.body
+                var finalStatus = outcome.statusCode
+                var finalHeaders = outcome.headers
+                var blockVerdict: Pair<ResultBucket, String>? = null
+                val blockCapSummary = StringBuilder()
+
+                if (enabledBlocks.isNotEmpty()) {
+                    val blockRes = ConfigBlockExecutor.executeStack(
+                        blocks = enabledBlocks,
+                        normalizedLine = normalizedLine,
+                        pan = pan,
+                        mm = mm,
+                        yyyy = yyyy,
+                        cvv = cvv,
+                        scheme = scheme,
+                        config = config,
+                        initialSourceBody = outcome.body,
+                        initialStatusCode = outcome.statusCode,
+                        initialHeaders = outcome.headers,
+                        initialCaptures = combinedCaptures,
+                        initialCookies = step1Cookies,
+                        dryRunNetwork = false
+                    )
+                    combinedCaptures.putAll(blockRes.captures)
+                    finalBody = blockRes.lastSourceBody
+                    finalStatus = blockRes.lastStatusCode ?: outcome.statusCode
+                    finalHeaders = blockRes.lastHeaders
+                    blockVerdict = blockRes.verdict
+                    blockRes.captures.entries.filter { it.key !in step2Captures && it.key !in step1Captures }.take(3).forEach { (k, v) ->
+                        blockCapSummary.append(" [").append(k).append('=').append(v.take(28)).append(']')
+                    }
+                }
+
                 val allVisibleRules = config.parsedPreRequestParseRules() + parseRules
-                val (bucket, reasonTag) = classifyResponse(
-                    statusCode = outcome.statusCode,
-                    bodyStr = outcome.body,
+                val (bucket, reasonTag) = blockVerdict ?: classifyResponse(
+                    statusCode = finalStatus,
+                    bodyStr = finalBody,
                     config = config,
                     precomputedCaptures = combinedCaptures,
-                    responseHeaders = outcome.headers,
+                    responseHeaders = finalHeaders,
                     latencyMs = elapsed
                 )
                 val captureSuffix = CustomConfigStudioEngine.formatCapturesForSummary(combinedCaptures, allVisibleRules)
-                    .let { if (it.isNotEmpty()) " $it" else "" }
+                    .let { if (it.isNotEmpty()) " $it" else "" } + blockCapSummary.toString()
+                val blocksBadge = if (enabledBlocks.isNotEmpty()) " • ${enabledBlocks.size}Blk" else ""
                 val proxySuffix = if (outcome.proxyLabel != "Direct") " • Proxy" else ""
                 val retrySuffix = if (outcome.attempts > 1) " • ${outcome.attempts}x" else ""
                 val cacheSuffix = if (outcome.fromCache) " • DiskCache" else ""
                 val summary = when (bucket) {
-                    ResultBucket.LIVE -> "HTTP ${outcome.statusCode} • Live ($reasonTag)$captureSuffix$step1Badge$proxySuffix$retrySuffix$cacheSuffix"
-                    ResultBucket.DIE -> "HTTP ${outcome.statusCode} • Die ($reasonTag)$captureSuffix$step1Badge$proxySuffix$retrySuffix$cacheSuffix"
-                    ResultBucket.UNKNOWN -> "HTTP ${outcome.statusCode} • Unknown ($reasonTag)$captureSuffix$step1Badge$proxySuffix$retrySuffix$cacheSuffix"
+                    ResultBucket.LIVE -> "HTTP $finalStatus • Live ($reasonTag)$captureSuffix$step1Badge$blocksBadge$proxySuffix$retrySuffix$cacheSuffix"
+                    ResultBucket.DIE -> "HTTP $finalStatus • Die ($reasonTag)$captureSuffix$step1Badge$blocksBadge$proxySuffix$retrySuffix$cacheSuffix"
+                    ResultBucket.UNKNOWN -> "HTTP $finalStatus • Unknown ($reasonTag)$captureSuffix$step1Badge$blocksBadge$proxySuffix$retrySuffix$cacheSuffix"
                 }
                 ValidationRecord(
                     id = "${System.nanoTime()}_${normalizedLine.hashCode()}",
@@ -470,6 +555,66 @@ object CustomHttpClient {
                     step1Summary = "Step 1 Circuit Open"
                 }
             }
+        }
+
+        val enabledBlocks = config.parsedBlocks().filter { it.enabled }
+        if (config.url.isBlank() && enabledBlocks.isNotEmpty()) {
+            val startNanos = System.nanoTime()
+            val blockRes = ConfigBlockExecutor.executeStack(
+                blocks = enabledBlocks,
+                normalizedLine = normalizedSample,
+                pan = pan,
+                mm = mm,
+                yyyy = yyyy,
+                cvv = cvv,
+                scheme = scheme,
+                config = config,
+                initialCaptures = step1Captures,
+                initialCookies = step1Cookies,
+                dryRunNetwork = false
+            )
+            val latencyMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos).coerceAtLeast(1L)
+            val statusCode = blockRes.lastStatusCode ?: 200
+            val evalDetailed = CustomConfigStudioEngine.evaluateCheckpointsDetailed(
+                statusCode = statusCode,
+                bodyStr = blockRes.lastSourceBody,
+                captures = blockRes.captures,
+                rules = config.parsedCheckpointRules(),
+                responseHeaders = blockRes.lastHeaders,
+                latencyMs = latencyMs
+            )
+            val (bucket, reasonTag) = blockRes.verdict ?: classifyResponse(
+                statusCode = statusCode,
+                bodyStr = blockRes.lastSourceBody,
+                config = config,
+                precomputedCaptures = blockRes.captures,
+                responseHeaders = blockRes.lastHeaders,
+                latencyMs = latencyMs
+            )
+            val preview = blockRes.lastSourceBody.replace(Regex("\\s+"), " ").trim().take(360)
+            return HttpProbeResult(
+                isReachable = true,
+                statusCode = blockRes.lastStatusCode,
+                detectedBucket = bucket,
+                latencyMs = latencyMs + step1LatencyMs,
+                summary = "Block Stack (${blockRes.steps.size}x) -> ${bucket.name} ($reasonTag)",
+                responsePreview = preview.ifEmpty {
+                    blockRes.logs.joinToString(" | ").ifEmpty { "(Block stack completed)" }
+                },
+                parsedCaptures = blockRes.captures,
+                matchedCheckpoint = reasonTag,
+                proxyUsed = selectedProxy?.displayLabel ?: "Direct",
+                requestSummary = "BLOCK STACK (${enabledBlocks.size} block(s))",
+                rawResponseBody = blockRes.lastSourceBody.take(8_192),
+                responseHeaders = blockRes.lastHeaders,
+                step1Executed = step1Executed,
+                step1StatusCode = step1StatusCode,
+                step1LatencyMs = step1LatencyMs,
+                step1Summary = step1Summary,
+                step1Captures = step1Captures,
+                checkpointTrace = evalDetailed.steps,
+                blockTrace = blockRes.steps
+            )
         }
 
         val builtReq = buildRequest(
@@ -576,39 +721,70 @@ object CustomHttpClient {
                     putAll(step1Captures)
                     putAll(step2Captures)
                 }
+                var finalBody = outcome.body
+                var finalStatus = outcome.statusCode
+                var finalHeaders = outcome.headers
+                var blockTrace: List<BlockExecutionStep> = emptyList()
+                var blockVerdict: Pair<ResultBucket, String>? = null
+
+                if (enabledBlocks.isNotEmpty()) {
+                    val blockRes = ConfigBlockExecutor.executeStack(
+                        blocks = enabledBlocks,
+                        normalizedLine = normalizedSample,
+                        pan = pan,
+                        mm = mm,
+                        yyyy = yyyy,
+                        cvv = cvv,
+                        scheme = scheme,
+                        config = config,
+                        initialSourceBody = outcome.body,
+                        initialStatusCode = outcome.statusCode,
+                        initialHeaders = outcome.headers,
+                        initialCaptures = combinedCaptures,
+                        initialCookies = step1Cookies,
+                        dryRunNetwork = false
+                    )
+                    combinedCaptures.putAll(blockRes.captures)
+                    finalBody = blockRes.lastSourceBody
+                    finalStatus = blockRes.lastStatusCode ?: outcome.statusCode
+                    finalHeaders = blockRes.lastHeaders
+                    blockTrace = blockRes.steps
+                    blockVerdict = blockRes.verdict
+                }
+
                 val evalDetailed = CustomConfigStudioEngine.evaluateCheckpointsDetailed(
-                    statusCode = outcome.statusCode,
-                    bodyStr = outcome.body,
+                    statusCode = finalStatus,
+                    bodyStr = finalBody,
                     captures = combinedCaptures,
                     rules = config.parsedCheckpointRules(),
-                    responseHeaders = outcome.headers,
+                    responseHeaders = finalHeaders,
                     latencyMs = latencyMs
                 )
-                val (bucket, reasonTag) = classifyResponse(
-                    statusCode = outcome.statusCode,
-                    bodyStr = outcome.body,
+                val (bucket, reasonTag) = blockVerdict ?: classifyResponse(
+                    statusCode = finalStatus,
+                    bodyStr = finalBody,
                     config = config,
                     precomputedCaptures = combinedCaptures,
-                    responseHeaders = outcome.headers,
+                    responseHeaders = finalHeaders,
                     latencyMs = latencyMs
                 )
-                val preview = outcome.body
+                val preview = finalBody
                     .replace(Regex("\\s+"), " ")
                     .trim()
                     .take(360)
                 HttpProbeResult(
                     isReachable = true,
-                    statusCode = outcome.statusCode,
+                    statusCode = finalStatus,
                     detectedBucket = bucket,
                     latencyMs = latencyMs + step1LatencyMs,
-                    summary = "HTTP ${outcome.statusCode} -> ${bucket.name} ($reasonTag)",
+                    summary = "HTTP $finalStatus -> ${bucket.name} ($reasonTag)",
                     responsePreview = preview.ifEmpty { "(Empty response body)" },
                     parsedCaptures = combinedCaptures,
                     matchedCheckpoint = reasonTag,
                     proxyUsed = outcome.proxyLabel,
                     requestSummary = reqSummary,
-                    rawResponseBody = outcome.body.take(8_192),
-                    responseHeaders = outcome.headers,
+                    rawResponseBody = finalBody.take(8_192),
+                    responseHeaders = finalHeaders,
                     requestHeadersSummary = reqHeadersSummary,
                     requestBodyPreview = reqBodyPreview,
                     step1Executed = step1Executed,
@@ -616,7 +792,8 @@ object CustomHttpClient {
                     step1LatencyMs = step1LatencyMs,
                     step1Summary = step1Summary,
                     step1Captures = step1Captures,
-                    checkpointTrace = evalDetailed.steps
+                    checkpointTrace = evalDetailed.steps,
+                    blockTrace = blockTrace
                 )
             }
         }

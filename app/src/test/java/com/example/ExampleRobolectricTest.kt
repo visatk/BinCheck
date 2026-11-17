@@ -1188,6 +1188,10 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("config_studio_open_curl_import_button").assertIsDisplayed()
         composeTestRule.onNodeWithTag("config_studio_prerequest_switch").performScrollTo().assertIsDisplayed()
 
+        composeTestRule.onNodeWithTag("config_studio_tab_blocks").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("config_studio_block_palette").performScrollTo().assertIsDisplayed()
+
         composeTestRule.onNodeWithTag("config_studio_tab_parse").performClick()
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("config_studio_parse_name_input").performScrollTo().assertIsDisplayed()
@@ -1210,6 +1214,60 @@ class ExampleRobolectricTest {
         assertEquals("Test Studio Profile", appliedConfig?.profileName)
         assertEquals(true, appliedConfig?.preRequestEnabled)
         assertEquals("https://api.stripe.com/v1/tokens", appliedConfig?.preRequestUrl)
+    }
+
+    @Test
+    fun `customConfigStudioBottomSheet shows all 9 block categories and executes dry run stack`() {
+        var appliedConfig: CustomHttpConfig? = null
+
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                com.example.ui.CustomConfigStudioBottomSheet(
+                    initialConfig = CustomHttpConfig(profileName = "9-Cat Blocks Profile"),
+                    savedProfiles = emptyList(),
+                    isTestingEndpoint = false,
+                    probeResult = null,
+                    onTestConfig = { _, _ -> },
+                    onClearProbeResult = {},
+                    onSaveAndUseConfig = { cfg -> appliedConfig = cfg },
+                    onSaveProfile = {},
+                    onDeleteProfile = {},
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("config_studio_tab_blocks").performClick()
+        composeTestRule.waitForIdle()
+
+        val categories = listOf(
+            "browser", "captchas", "conditions", "functions",
+            "interop", "parsing", "requests", "selenium", "utility"
+        )
+        categories.forEach { cat ->
+            composeTestRule.onNodeWithTag("block_category_$cat").performScrollTo().assertIsDisplayed()
+        }
+
+        // Select Functions and add Hash block
+        composeTestRule.onNodeWithTag("block_category_functions").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("add_block_type_func_hash").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        // Verify block added to stack & run Dry-Run Stack
+        composeTestRule.onNodeWithTag("block_stack_item_0").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("config_studio_dry_run_blocks_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("config_studio_block_dry_run_trace").performScrollTo().assertIsDisplayed()
+
+        // Apply config & verify blocksSpec persisted
+        composeTestRule.onNodeWithTag("config_studio_apply_button").performClick()
+        composeTestRule.waitForIdle()
+
+        val blocks = appliedConfig?.parsedBlocks().orEmpty()
+        assertEquals(1, blocks.size)
+        assertEquals(com.example.domain.BlockType.FUNC_HASH, blocks[0].type)
     }
 }
 

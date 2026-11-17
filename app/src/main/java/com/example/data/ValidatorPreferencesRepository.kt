@@ -54,6 +54,7 @@ data class ValidatorSettings(
     val httpPreRequestBody: String = "",
     val httpPreRequestParseRulesSpec: String = "",
     val httpSkipLocalLuhnPrecheck: Boolean = false,
+    val httpBlocksSpec: String = "",
     val savedConfigProfilesRaw: String = "",
     val autoResolveWildcards: Boolean = true,
     val autoBinLookupForLive: Boolean = true,
@@ -101,7 +102,8 @@ data class ValidatorSettings(
         preRequestHeaders = httpPreRequestHeaders,
         preRequestBody = httpPreRequestBody,
         preRequestParseRulesSpec = httpPreRequestParseRulesSpec,
-        skipLocalLuhnPrecheck = httpSkipLocalLuhnPrecheck
+        skipLocalLuhnPrecheck = httpSkipLocalLuhnPrecheck,
+        blocksSpec = httpBlocksSpec
     )
 
     fun savedCustomProfiles(): List<CustomConfigProfile> =
@@ -142,6 +144,7 @@ class ValidatorPreferencesRepository(private val context: Context) {
         val HTTP_PRE_REQUEST_BODY = stringPreferencesKey("http_pre_request_body")
         val HTTP_PRE_REQUEST_PARSE_RULES_SPEC = stringPreferencesKey("http_pre_request_parse_rules_spec")
         val HTTP_SKIP_LOCAL_LUHN_PRECHECK = booleanPreferencesKey("http_skip_local_luhn_precheck")
+        val HTTP_BLOCKS_SPEC = stringPreferencesKey("http_blocks_spec")
         val SAVED_CONFIG_PROFILES_RAW = stringPreferencesKey("saved_config_profiles_raw")
         val AUTO_RESOLVE_WILDCARDS = booleanPreferencesKey("auto_resolve_wildcards")
         val AUTO_BIN_LOOKUP_FOR_LIVE = booleanPreferencesKey("auto_bin_lookup_for_live")
@@ -213,6 +216,7 @@ class ValidatorPreferencesRepository(private val context: Context) {
             httpPreRequestBody = prefs[Keys.HTTP_PRE_REQUEST_BODY] ?: "",
             httpPreRequestParseRulesSpec = prefs[Keys.HTTP_PRE_REQUEST_PARSE_RULES_SPEC] ?: "",
             httpSkipLocalLuhnPrecheck = prefs[Keys.HTTP_SKIP_LOCAL_LUHN_PRECHECK] ?: false,
+            httpBlocksSpec = prefs[Keys.HTTP_BLOCKS_SPEC] ?: "",
             savedConfigProfilesRaw = prefs[Keys.SAVED_CONFIG_PROFILES_RAW] ?: "",
             autoResolveWildcards = prefs[Keys.AUTO_RESOLVE_WILDCARDS] ?: true,
             autoBinLookupForLive = prefs[Keys.AUTO_BIN_LOOKUP_FOR_LIVE] ?: true,
@@ -287,6 +291,7 @@ class ValidatorPreferencesRepository(private val context: Context) {
             prefs[Keys.HTTP_PRE_REQUEST_BODY] = config.preRequestBody.trim()
             prefs[Keys.HTTP_PRE_REQUEST_PARSE_RULES_SPEC] = config.preRequestParseRulesSpec
             prefs[Keys.HTTP_SKIP_LOCAL_LUHN_PRECHECK] = config.skipLocalLuhnPrecheck
+            prefs[Keys.HTTP_BLOCKS_SPEC] = config.blocksSpec
         }
     }
 
@@ -338,6 +343,7 @@ class ValidatorPreferencesRepository(private val context: Context) {
         httpPreRequestBody: String? = null,
         httpPreRequestParseRulesSpec: String? = null,
         httpSkipLocalLuhnPrecheck: Boolean? = null,
+        httpBlocksSpec: String? = null,
         autoResolveWildcards: Boolean,
         autoBinLookupForLive: Boolean = true,
         batchDelayMs: Long,
@@ -381,6 +387,7 @@ class ValidatorPreferencesRepository(private val context: Context) {
             httpPreRequestBody?.let { prefs[Keys.HTTP_PRE_REQUEST_BODY] = it.trim() }
             httpPreRequestParseRulesSpec?.let { prefs[Keys.HTTP_PRE_REQUEST_PARSE_RULES_SPEC] = it }
             httpSkipLocalLuhnPrecheck?.let { prefs[Keys.HTTP_SKIP_LOCAL_LUHN_PRECHECK] = it }
+            httpBlocksSpec?.let { prefs[Keys.HTTP_BLOCKS_SPEC] = it }
             prefs[Keys.AUTO_RESOLVE_WILDCARDS] = autoResolveWildcards
             prefs[Keys.AUTO_BIN_LOOKUP_FOR_LIVE] = autoBinLookupForLive
             prefs[Keys.BATCH_DELAY_MS] = batchDelayMs.coerceIn(0L, ValidationMode.MAX_CUSTOM_DELAY_MS)

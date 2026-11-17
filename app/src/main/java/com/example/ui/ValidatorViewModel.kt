@@ -1268,6 +1268,7 @@ class ValidatorViewModel(
                 httpPreRequestBody = httpConfig.preRequestBody,
                 httpPreRequestParseRulesSpec = httpConfig.preRequestParseRulesSpec,
                 httpSkipLocalLuhnPrecheck = httpConfig.skipLocalLuhnPrecheck,
+                httpBlocksSpec = httpConfig.blocksSpec,
                 autoResolveWildcards = autoResolveWildcards,
                 autoBinLookupForLive = autoBinLookupForLive,
                 batchDelayMs = batchDelayMs,

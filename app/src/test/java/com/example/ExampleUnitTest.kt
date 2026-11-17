@@ -1003,6 +1003,224 @@ class ExampleUnitTest {
         assertTrue(evalResult.steps[1].matched)
         assertTrue(evalResult.steps[1].isWinner)
     }
+
+    @Test
+    fun configBlocks_coverAllNineCategoriesAndRoundTripSerialization() {
+        val categories = com.example.domain.BlockCategory.entries
+        assertEquals(9, categories.size)
+        categories.forEach { cat ->
+            val types = com.example.domain.BlockType.forCategory(cat)
+            assertTrue("Category ${cat.displayName} must have blocks", types.isNotEmpty())
+        }
+        assertEquals("Blocks for browser automation", com.example.domain.BlockCategory.BROWSER.description)
+        assertEquals("Blocks for solving captchas", com.example.domain.BlockCategory.CAPTCHAS.description)
+        assertEquals("Blocks that have to do with checking conditions", com.example.domain.BlockCategory.CONDITIONS.description)
+        assertEquals("General purpose functions", com.example.domain.BlockCategory.FUNCTIONS.description)
+        assertEquals("Blocks for interoperability with other programs", com.example.domain.BlockCategory.INTEROP.description)
+        assertEquals("Blocks for extracting data from strings", com.example.domain.BlockCategory.PARSING.description)
+        assertEquals("Blocks for performing network requests", com.example.domain.BlockCategory.REQUESTS.description)
+        assertEquals("Blocks for browser automation with Selenium", com.example.domain.BlockCategory.SELENIUM.description)
+        assertEquals("Utility blocks for miscellaneous purposes", com.example.domain.BlockCategory.UTILITY.description)
+
+        val blocks = listOf(
+            com.example.domain.ConfigBlock(
+                id = "b1",
+                type = com.example.domain.BlockType.BROWSER_NAVIGATE,
+                label = "Open Checkout",
+                inputTarget = "https://example.com/pay",
+                extraParams = mapOf("fetchHtml" to "true")
+            ),
+            com.example.domain.ConfigBlock(
+                id = "b2",
+                type = com.example.domain.BlockType.REQUEST_HTTP,
+                label = "Post Auth",
+                inputTarget = "https://api.example.com/v1/auth",
+                secondaryParam = "POST_JSON",
+                tertiaryParam = "{\"card\":\"{card}\"\n}",
+                outputVar = "SOURCE",
+                extraParams = mapOf("headers" to "Authorization: Bearer abc\nX-Test: 1")
+            ),
+            com.example.domain.ConfigBlock(
+                id = "b3",
+                type = com.example.domain.BlockType.CONDITION_KEYCHECK,
+                label = "Check Live",
+                inputTarget = "<SOURCE>",
+                secondaryParam = "CONTAINS",
+                tertiaryParam = "approved",
+                verdictOnMatch = ResultBucket.LIVE
+            )
+        )
+
+        val spec = com.example.domain.CustomConfigStudioEngine.serializeBlocks(blocks)
+        val restored = com.example.domain.CustomConfigStudioEngine.parseBlocks(spec)
+        assertEquals(3, restored.size)
+        assertEquals("true", restored[0].extraParams["fetchHtml"])
+        assertEquals("{\"card\":\"{card}\"\n}", restored[1].tertiaryParam)
+        assertEquals("Authorization: Bearer abc\nX-Test: 1", restored[1].extraParams["headers"])
+        assertEquals(ResultBucket.LIVE, restored[2].verdictOnMatch)
+
+        val cfg = CustomHttpConfig(profileName = "Blocks RoundTrip", blocksSpec = spec)
+        val json = com.example.domain.CustomConfigStudioEngine.exportConfigToJson(cfg)
+        val restoredCfg = com.example.domain.CustomConfigStudioEngine.importConfigFromJson(json).getOrThrow()
+        assertEquals(3, restoredCfg.parsedBlocks().size)
+
+        val loli = com.example.domain.CustomConfigStudioEngine.exportToLoliScript(cfg)
+        assertTrue(loli.contains("BROWSERACTION Navigate"))
+        assertTrue(loli.contains("REQUEST POST_JSON"))
+        assertTrue(loli.contains("KEYCHECK"))
+    }
+
+    @Test
+    fun configBlockExecutor_executesFunctionsParsingConditionsAndUtilityLive() = kotlinx.coroutines.test.runTest {
+        val blocks = listOf(
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.FUNC_HASH,
+                label = "Card SHA256",
+                inputTarget = "{card}|{mm}",
+                secondaryParam = "SHA-256",
+                outputVar = "sig",
+                captureToOutput = true
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.FUNC_BASE64_ENCODE,
+                label = "B64",
+                inputTarget = "hello:{pan4}",
+                outputVar = "b64"
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.FUNC_BASE64_DECODE,
+                label = "B64 Dec",
+                inputTarget = "{var:b64}",
+                outputVar = "b64_back",
+                captureToOutput = true
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.FUNC_MATH_EVAL,
+                label = "Compute Cents",
+                inputTarget = "(12 + 8) * 5",
+                secondaryParam = "0",
+                outputVar = "cents",
+                captureToOutput = true
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.PARSE_JSON,
+                label = "Parse Outcome",
+                inputTarget = "outcome.status",
+                secondaryParam = "<SOURCE>",
+                outputVar = "gw_status",
+                captureToOutput = true
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.CONDITION_IF_NUMBER,
+                label = "Check 200",
+                inputTarget = "{var:STATUS_CODE}",
+                secondaryParam = "==",
+                tertiaryParam = "200",
+                outputVar = "is_200"
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.CONDITION_KEYCHECK,
+                label = "Approved Verdict",
+                inputTarget = "{var:gw_status}",
+                secondaryParam = "EQUALS",
+                tertiaryParam = "succeeded",
+                verdictOnMatch = ResultBucket.LIVE
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.UTIL_LIST_OP,
+                label = "Count Lista Parts",
+                inputTarget = "{lista}",
+                secondaryParam = "COUNT",
+                tertiaryParam = "|",
+                outputVar = "field_count",
+                captureToOutput = true
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.UTIL_LOG,
+                label = "Trace Log",
+                inputTarget = "Done {pan4} cents={var:cents}"
+            )
+        )
+
+        val result = com.example.domain.ConfigBlockExecutor.executeStack(
+            blocks = blocks,
+            normalizedLine = "4532250055360003|08|2028|113",
+            pan = "4532250055360003",
+            mm = "08",
+            yyyy = "2028",
+            cvv = "113",
+            scheme = com.example.domain.CardScheme.VISA,
+            config = CustomHttpConfig(),
+            initialSourceBody = """{"outcome":{"status":"succeeded"}}""",
+            initialStatusCode = 200,
+            dryRunNetwork = true
+        )
+
+        assertEquals(9, result.steps.size)
+        assertEquals(64, result.captures["sig"]?.length)
+        assertEquals("hello:0003", result.captures["b64_back"])
+        assertEquals("100", result.captures["cents"])
+        assertEquals("succeeded", result.captures["gw_status"])
+        assertEquals("4", result.captures["field_count"])
+        assertEquals("true", result.variables["is_200"])
+        assertEquals(ResultBucket.LIVE, result.verdict?.first)
+        assertEquals("Done 0003 cents=100", result.logs.first())
+    }
+
+    @Test
+    fun customHttpClient_runsStandalonePureBlockConfigWhenUrlIsBlank() = kotlinx.coroutines.test.runTest {
+        val blocks = listOf(
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.UTIL_SET_VAR,
+                label = "Set Mock Source",
+                inputTarget = """{"status":"approved"}""",
+                outputVar = "SOURCE"
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.PARSE_JSON,
+                label = "Extract Status",
+                inputTarget = "status",
+                secondaryParam = "<SOURCE>",
+                outputVar = "st",
+                captureToOutput = true
+            ),
+            com.example.domain.ConfigBlock(
+                type = com.example.domain.BlockType.CONDITION_KEYCHECK,
+                label = "Approved Keycheck",
+                inputTarget = "<SOURCE>",
+                secondaryParam = "CONTAINS",
+                tertiaryParam = "approved",
+                verdictOnMatch = ResultBucket.LIVE
+            )
+        )
+        val cfg = CustomHttpConfig(
+            profileName = "Pure Block Pipeline",
+            url = "",
+            blocksSpec = com.example.domain.CustomConfigStudioEngine.serializeBlocks(blocks)
+        )
+
+        val record = CustomHttpClient.executeValidation(
+            rawLine = "4532250055360003|08|2028|113",
+            normalizedLine = "4532250055360003|08|2028|113",
+            pan = "4532250055360003",
+            mm = "08",
+            yyyy = "2028",
+            cvv = "113",
+            scheme = com.example.domain.CardScheme.VISA,
+            config = cfg,
+            startNanos = System.nanoTime(),
+            useCacheAndDedup = false
+        )
+
+        assertEquals(ResultBucket.LIVE, record.bucket)
+        assertTrue(record.message.contains("[st=approved]"))
+
+        val probe = CustomHttpClient.testEndpoint(cfg, "4532250055360003|08|2028|113")
+        assertTrue(probe.isReachable)
+        assertEquals(ResultBucket.LIVE, probe.detectedBucket)
+        assertEquals(3, probe.blockTrace.size)
+        assertEquals("approved", probe.parsedCaptures["st"])
+    }
 }
 
 
