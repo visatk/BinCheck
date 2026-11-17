@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/bincheck_app_icon_1794588466984"
+        android:drawable="@drawable/bincheck_launcher_icon_1794915006996"
         android:gravity="center" />
 </layer-list>

@@ -12,7 +12,6 @@ import java.net.Socket
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.security.MessageDigest
-import java.util.Base64
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
@@ -1500,23 +1499,24 @@ object ConfigBlockExecutor {
     private fun decodeBase64Safe(input: String): String? = runCatching {
         val clean = input.trim().filterNot { it.isWhitespace() }
         if (clean.isEmpty()) return ""
-        val bytes = runCatching {
-            Base64.getDecoder().decode(clean)
-        }.getOrElse {
-            decodeBase64Fallback(clean) ?: return null
-        }
+        val bytes = decodeBase64Fallback(clean) ?: return null
         String(bytes, Charsets.UTF_8)
     }.getOrNull()
 
     private fun decodeBase64Fallback(clean: String): ByteArray? {
-        if (clean.length % 4 != 0) return null
-        val out = ArrayList<Byte>((clean.length * 3) / 4)
+        val padded = when (clean.length % 4) {
+            0 -> clean
+            2 -> "$clean=="
+            3 -> "$clean="
+            else -> return null
+        }
+        val out = ArrayList<Byte>((padded.length * 3) / 4)
         var i = 0
-        while (i < clean.length) {
-            val c0 = base64CharIndex(clean[i])
-            val c1 = base64CharIndex(clean[i + 1])
-            val c2 = if (clean[i + 2] == '=') -2 else base64CharIndex(clean[i + 2])
-            val c3 = if (clean[i + 3] == '=') -2 else base64CharIndex(clean[i + 3])
+        while (i < padded.length) {
+            val c0 = base64CharIndex(padded[i])
+            val c1 = base64CharIndex(padded[i + 1])
+            val c2 = if (padded[i + 2] == '=') -2 else base64CharIndex(padded[i + 2])
+            val c3 = if (padded[i + 3] == '=') -2 else base64CharIndex(padded[i + 3])
             if (c0 < 0 || c1 < 0 || c2 == -1 || c3 == -1) return null
             out.add(((c0 shl 2) or (c1 ushr 4)).toByte())
             if (c2 >= 0) {

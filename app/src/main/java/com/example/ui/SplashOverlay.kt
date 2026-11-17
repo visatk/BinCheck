@@ -84,7 +84,7 @@ internal object SplashBitmapCache {
                 }
                 BitmapFactory.decodeResource(
                     context.resources,
-                    R.drawable.bincheck_app_icon_1794588466984,
+                    R.drawable.bincheck_launcher_icon_1794915006996,
                     opts
                 )?.asImageBitmap()
             }.getOrNull()?.also { decoded ->

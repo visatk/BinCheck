@@ -4,7 +4,6 @@ import java.net.InetSocketAddress
 import java.net.Proxy
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
-import java.util.Base64
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
@@ -153,11 +152,7 @@ data class ParsedProxyEndpoint(
     fun basicAuthorizationHeaderValue(): String? {
         if (!requiresAuth) return null
         val raw = "$username:$password".toByteArray(Charsets.UTF_8)
-        val encoded = runCatching {
-            Base64.getEncoder().encodeToString(raw)
-        }.getOrElse {
-            encodeBase64Fallback(raw)
-        }
+        val encoded = encodeBase64Fallback(raw)
         return "Basic $encoded"
     }
 }
@@ -2136,8 +2131,7 @@ object CustomConfigStudioEngine {
 
     fun encodeBase64(text: String): String {
         val raw = text.toByteArray(Charsets.UTF_8)
-        return runCatching { Base64.getEncoder().encodeToString(raw) }
-            .getOrElse { encodeBase64Fallback(raw) }
+        return encodeBase64Fallback(raw)
     }
 
     fun sha256Hex(text: String): String = digestHex("SHA-256", text)
