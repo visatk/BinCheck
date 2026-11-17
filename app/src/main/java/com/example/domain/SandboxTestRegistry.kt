@@ -5,11 +5,9 @@ package com.example.domain
  * and deterministic gateway simulation across major global payment processors:
  * - Stripe Test Mode (`tok_visa`, `tok_mastercard`, `tok_amex`, `3DS2`, `insufficient_funds`, `incorrect_cvc`, `processing_error`)
  * - Braintree / PayPal Sandbox (`1000 Approved`, `2000 Do Not Honor`, `2001 Insufficient Funds`)
- * - Adyen Test Platform (`Authorised`, `Refused: 05 Do Not Honor`)
- * - Square Sandbox (`CAPTURED / AVS_ACCEPTED`, `CVV_FAILURE`, `GENERIC_DECLINE`)
  * - Authorize.Net & CyberSource (`1-1 Approved`, `100 ACCEPT`, `2-2 Declined`)
  * - Checkout.com & Worldpay (`10000 Approved`, `Worldpay AUTHORISED`, `20005 Do Not Honour`)
- * - HTTP Echo & Mock Gateways (`Payate Sandbox`, `Chkr Sandbox`, `HttpBin Echo`, `Postman Echo`)
+ * - HTTP Echo & Mock Gateways (`Payate Sandbox`, `HttpBin Echo`, `Postman Echo`)
  */
 enum class SandboxProvider(
     val id: String,
@@ -32,20 +30,6 @@ enum class SandboxProvider(
         zeroAuthProtocol = "verifyCard=true ($0.00 Auth)",
         subtitle = "Official $0.00 verifyCard 1000 Approved, 2000 Do Not Honor & 2001 Insufficient Funds vectors"
     ),
-    ADYEN(
-        id = "adyen",
-        displayName = "Adyen $0 Auth",
-        shortLabel = "Adyen",
-        zeroAuthProtocol = "Zero-Value Auth (value=0)",
-        subtitle = "Official $0.00 Zero-Value Auth PSP Authorised Visa/MC/Amex & Refused 05 Do Not Honor vectors"
-    ),
-    SQUARE(
-        id = "square",
-        displayName = "Square $0 Auth",
-        shortLabel = "Square",
-        zeroAuthProtocol = "Card-on-File $0.00 Verify",
-        subtitle = "Official $0.00 Card-on-File CAPTURED / AVS_ACCEPTED, CVV_FAILURE & GENERIC_DECLINE vectors"
-    ),
     AUTHNET_CYBERSOURCE(
         id = "authnet",
         displayName = "Auth.Net & CyberSource $0",
@@ -62,10 +46,10 @@ enum class SandboxProvider(
     ),
     ALL_SANDBOXES(
         id = "all",
-        displayName = "All 6 Sandboxes ($0 Auth)",
+        displayName = "All 4 Sandboxes ($0 Auth)",
         shortLabel = "All $0 Auth",
-        zeroAuthProtocol = "All 6 Gateways $0.00 Auth Consensus",
-        subtitle = "Runs $0.00 Zero-Dollar Auth across Stripe, Braintree, Adyen, Square, Auth.Net & Checkout.com"
+        zeroAuthProtocol = "All 4 Gateways $0.00 Auth Consensus",
+        subtitle = "Runs $0.00 Zero-Dollar Auth across Stripe, Braintree, Auth.Net & Checkout.com"
     )
 }
 
@@ -359,119 +343,7 @@ object SandboxTestRegistry {
             issuerBank = "BRAINTREE PAYPAL SANDBOX"
         ),
 
-        // 3. Adyen Test Platform Official Test Cards
-        SandboxTestVector(
-            provider = SandboxProvider.ADYEN,
-            pan = "4444333322221111",
-            defaultMm = "03",
-            defaultYyyy = "2030",
-            defaultCvv = "737",
-            scheme = CardScheme.VISA,
-            expectedBucket = ResultBucket.LIVE,
-            gatewayCode = "Adyen Authorised • 00",
-            description = "Adyen Test Visa (Authorised)",
-            issuerBank = "ADYEN NV TEST ISSUER",
-            countryName = "Netherlands",
-            countryCode = "NL",
-            currency = "EUR"
-        ),
-        SandboxTestVector(
-            provider = SandboxProvider.ADYEN,
-            pan = "5100080000000000",
-            defaultMm = "03",
-            defaultYyyy = "2030",
-            defaultCvv = "737",
-            scheme = CardScheme.MASTERCARD,
-            expectedBucket = ResultBucket.LIVE,
-            gatewayCode = "Adyen Authorised • 00",
-            description = "Adyen Test Mastercard (Authorised)",
-            issuerBank = "ADYEN NV TEST ISSUER",
-            countryName = "Netherlands",
-            countryCode = "NL",
-            currency = "EUR"
-        ),
-        SandboxTestVector(
-            provider = SandboxProvider.ADYEN,
-            pan = "370000000000002",
-            defaultMm = "03",
-            defaultYyyy = "2030",
-            defaultCvv = "7373",
-            scheme = CardScheme.AMEX,
-            expectedBucket = ResultBucket.LIVE,
-            gatewayCode = "Adyen Authorised • 00",
-            description = "Adyen Test Amex (Authorised)",
-            issuerBank = "ADYEN NV TEST ISSUER",
-            countryName = "Netherlands",
-            countryCode = "NL",
-            currency = "EUR"
-        ),
-        SandboxTestVector(
-            provider = SandboxProvider.ADYEN,
-            pan = "4929000000006",
-            defaultMm = "03",
-            defaultYyyy = "2030",
-            defaultCvv = "737",
-            scheme = CardScheme.VISA,
-            expectedBucket = ResultBucket.DIE,
-            gatewayCode = "Adyen Refused • 05 Do Not Honor",
-            description = "Adyen Refused Test Vector",
-            issuerBank = "ADYEN NV TEST ISSUER",
-            countryName = "United Kingdom",
-            countryCode = "GB",
-            currency = "GBP"
-        ),
-
-        // 4. Square Sandbox Official Test Cards
-        SandboxTestVector(
-            provider = SandboxProvider.SQUARE,
-            pan = "4532015500164667",
-            defaultMm = "12",
-            defaultYyyy = "2029",
-            defaultCvv = "667",
-            scheme = CardScheme.VISA,
-            expectedBucket = ResultBucket.LIVE,
-            gatewayCode = "Square CAPTURED • AVS_ACCEPTED",
-            description = "Square Sandbox Visa Approved",
-            issuerBank = "SQUARE BLOCK SANDBOX"
-        ),
-        SandboxTestVector(
-            provider = SandboxProvider.SQUARE,
-            pan = "5409886734157306",
-            defaultMm = "12",
-            defaultYyyy = "2029",
-            defaultCvv = "306",
-            scheme = CardScheme.MASTERCARD,
-            expectedBucket = ResultBucket.LIVE,
-            gatewayCode = "Square CAPTURED • AVS_ACCEPTED",
-            description = "Square Sandbox Mastercard Approved",
-            issuerBank = "SQUARE BLOCK SANDBOX"
-        ),
-        SandboxTestVector(
-            provider = SandboxProvider.SQUARE,
-            pan = "4024007140623397",
-            defaultMm = "12",
-            defaultYyyy = "2029",
-            defaultCvv = "397",
-            scheme = CardScheme.VISA,
-            expectedBucket = ResultBucket.DIE,
-            gatewayCode = "Square DECLINED • CVV_FAILURE",
-            description = "Square Sandbox CVV Failure",
-            issuerBank = "SQUARE BLOCK SANDBOX"
-        ),
-        SandboxTestVector(
-            provider = SandboxProvider.SQUARE,
-            pan = "5105105105105100",
-            defaultMm = "12",
-            defaultYyyy = "2029",
-            defaultCvv = "100",
-            scheme = CardScheme.MASTERCARD,
-            expectedBucket = ResultBucket.DIE,
-            gatewayCode = "Square DECLINED • GENERIC_DECLINE",
-            description = "Square Sandbox Generic Decline",
-            issuerBank = "SQUARE BLOCK SANDBOX"
-        ),
-
-        // 5. Authorize.Net & CyberSource Official Test Cards
+        // 3. Authorize.Net & CyberSource Official Test Cards
         SandboxTestVector(
             provider = SandboxProvider.AUTHNET_CYBERSOURCE,
             pan = "4007000000027",
@@ -509,7 +381,7 @@ object SandboxTestRegistry {
             issuerBank = "VISA CYBERSOURCE SANDBOX"
         ),
 
-        // 6. Checkout.com & Worldpay Official Test Cards
+        // 4. Checkout.com & Worldpay Official Test Cards
         SandboxTestVector(
             provider = SandboxProvider.CHECKOUT_WORLDPAY,
             pan = "4543474002399999",
@@ -571,16 +443,6 @@ object SandboxTestRegistry {
             description = "Payate $0.00 Zero-Dollar Auth JSON sandbox endpoint"
         ),
         HttpSandboxEndpointPreset(
-            id = "chkr_sandbox",
-            label = "Chkr $0 Auth",
-            url = "https://api.chkr.cc/",
-            method = HttpRequestMethod.POST_JSON,
-            bodyTemplate = """{"data":"{lista}","amount":0,"auth_type":"zero_dollar"}""",
-            liveKeywords = CustomHttpConfig.DEFAULT_LIVE_KEYWORDS,
-            dieKeywords = CustomHttpConfig.DEFAULT_DIE_KEYWORDS,
-            description = "Chkr.cc $0.00 Zero-Dollar Auth card verification endpoint"
-        ),
-        HttpSandboxEndpointPreset(
             id = "httpbin_echo",
             label = "HttpBin $0 Echo",
             url = "https://httpbin.org/post",
@@ -620,9 +482,8 @@ object SandboxTestRegistry {
     }
 
     /**
-     * Evaluates a parsed card line using $0.00 Zero-Dollar Authorization ($0 Auth) across all 6 sandboxes:
-     * Stripe SetupIntent ($0), Braintree verifyCard ($0), Adyen Zero-Value Auth ($0),
-     * Square Card-on-File ($0), Authorize.Net authOnly ($0), and Checkout.com/Worldpay ($0).
+     * Evaluates a parsed card line using $0.00 Zero-Dollar Authorization ($0 Auth) across all 4 sandboxes:
+     * Stripe SetupIntent ($0), Braintree verifyCard ($0), Authorize.Net authOnly ($0), and Checkout.com/Worldpay ($0).
      */
     suspend fun evaluateSandboxCard(
         pan: String,
@@ -655,7 +516,7 @@ object SandboxTestRegistry {
                 )
             }
             val consensusPrefix = when (known.expectedBucket) {
-                ResultBucket.LIVE -> "$0.00 Auth [6/6 OK]"
+                ResultBucket.LIVE -> "$0.00 Auth [4/4 OK]"
                 ResultBucket.DIE -> "$0.00 Auth [Declined]"
                 ResultBucket.UNKNOWN -> "$0.00 Auth [Retry]"
             }
@@ -677,17 +538,17 @@ object SandboxTestRegistry {
             return liveEnvOutcome
         }
 
-        // Multi-Sandbox $0.00 Zero-Dollar Auth consensus across all 6 gateways for custom Luhn-valid cards
+        // Multi-Sandbox $0.00 Zero-Dollar Auth consensus across all 4 gateways for custom Luhn-valid cards
         return when {
             cvv == "000" || cvv == "0000" ->
-                ResultBucket.DIE to "$0.00 Auth [0/6] • card_declined: incorrect_cvc (Stripe/Braintree/Adyen/Square/Auth.Net/Checkout CVC Fail)"
+                ResultBucket.DIE to "$0.00 Auth [0/4] • card_declined: incorrect_cvc (Stripe/Braintree/Auth.Net/Checkout CVC Fail)"
             cvv == "999" || cvv == "9999" ->
-                ResultBucket.UNKNOWN to "$0.00 Auth [Retry] • api_error: processing_error (All 6 Sandboxes Timeout)"
+                ResultBucket.UNKNOWN to "$0.00 Auth [Retry] • api_error: processing_error (All 4 Sandboxes Timeout)"
             cleanPan.endsWith("0000") ->
-                ResultBucket.DIE to "$0.00 Auth [0/6] • 2000 Do Not Honor (All 6 Sandboxes Refused 0000 Suffix)"
+                ResultBucket.DIE to "$0.00 Auth [0/4] • 2000 Do Not Honor (All 4 Sandboxes Refused 0000 Suffix)"
             else -> {
                 val tokSlug = scheme.name.lowercase()
-                ResultBucket.LIVE to "$0.00 Auth [6/6 OK] • tok_$tokSlug • 200 OK (Stripe+Braintree+Adyen+Square+Auth.Net+Checkout $mm/${yyyy.takeLast(2)})"
+                ResultBucket.LIVE to "$0.00 Auth [4/4 OK] • tok_$tokSlug • 200 OK (Stripe+Braintree+Auth.Net+Checkout $mm/${yyyy.takeLast(2)})"
             }
         }
     }

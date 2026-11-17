@@ -157,9 +157,8 @@ class BatchValidationWorker(
         val endpointLabel = when (mode) {
             ValidationMode.LOCAL_DETERMINISTIC -> "Local Luhn Mod-10 Engine"
             ValidationMode.SANDBOX_SUITE -> "Multi-Gateway Sandbox Suite ($0.00 Auth)"
-            ValidationMode.CHKR_CC -> "Stripe Tokens API (api.stripe.com)"
             ValidationMode.PAYATE_MOCK -> "Payate API (mock.payate.com)"
-            ValidationMode.MULTI_API_AUTO -> "Multi-API Failover (Stripe + Payate)"
+            ValidationMode.MULTI_API_AUTO -> "Multi-API Failover (Payate + Sandbox)"
             ValidationMode.REMOTE_WEBHOOK -> if (webhookUrl.isNotBlank()) webhookUrl else "Custom HTTP"
         }
 

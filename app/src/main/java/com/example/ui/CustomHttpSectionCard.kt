@@ -154,8 +154,9 @@ fun CustomHttpSectionCard(
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onSurface
                         )
+                        val stepPrefix = if (config.preRequestEnabled) "2-Step • " else ""
                         Text(
-                            text = "$parseRuleCount Parse • $checkpointRuleCount Checkpoints • ${if (config.proxyEnabled) "$proxyCount Proxies" else "Direct Net"}",
+                            text = "$stepPrefix$parseRuleCount Parse • $checkpointRuleCount Checkpoints • ${if (config.proxyEnabled) "$proxyCount Proxies" else "Direct Net"}",
                             style = MaterialTheme.typography.labelSmall,
                             color = colorScheme.onSurfaceVariant
                         )
@@ -418,7 +419,7 @@ fun CustomHttpSectionCard(
                     Spacer(modifier = Modifier.height(6.dp))
 
                     val payloadTokens = listOf(
-                        "{lista}", "{card}", "{mm}", "{yy}", "{yyyy}", "{cvv}", "{scheme}", "{bin}"
+                        "{lista}", "{card}", "{card_spaced}", "{mm}", "{yy}", "{yyyy}", "{cvv}", "{scheme}", "{scheme_lower}", "{bin}", "{uuid}"
                     )
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),

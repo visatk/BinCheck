@@ -742,7 +742,6 @@ fun ConsoleInputCard(
                                 ValidationMode.LOCAL_DETERMINISTIC -> AppIcons.Memory
                                 ValidationMode.SANDBOX_SUITE -> AppIcons.CheckCircle
                                 ValidationMode.MULTI_API_AUTO -> AppIcons.SyncAlt
-                                ValidationMode.CHKR_CC -> AppIcons.Public
                                 ValidationMode.PAYATE_MOCK -> AppIcons.Api
                                 ValidationMode.REMOTE_WEBHOOK -> AppIcons.CloudSync
                             }

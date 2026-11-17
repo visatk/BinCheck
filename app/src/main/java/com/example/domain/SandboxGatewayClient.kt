@@ -26,7 +26,7 @@ data class SandboxProviderKeyStatus(
 data class SandboxEnvConfigSnapshot(
     val providerStatuses: List<SandboxProviderKeyStatus> = emptyList(),
     val configuredCount: Int = 0,
-    val totalProviders: Int = 6
+    val totalProviders: Int = 4
 ) {
     val hasAnyConfiguredLiveSandbox: Boolean
         get() = configuredCount > 0
@@ -35,7 +35,7 @@ data class SandboxEnvConfigSnapshot(
         get() = if (configuredCount > 0) {
             "$configuredCount/$totalProviders .env Sandbox Keys Active (Live $0.00 Auth Failover)"
         } else {
-            "0/$totalProviders .env Keys Set • Using Instant 6-Gateway $0.00 Auth Simulation"
+            "0/$totalProviders .env Keys Set • Using Instant 4-Gateway $0.00 Auth Simulation"
         }
 }
 
@@ -44,7 +44,7 @@ data class SandboxEnvConfigSnapshot(
  *
  * Reads sandbox credentials from `BuildConfig` (injected via `.env` / `.env.example` from AI Studio Secrets),
  * enforces strict Sandbox-Only Key Guards (rejecting any `sk_live_`, `pk_live_`, `sk_prd_`, or production tokens),
- * and executes high-throughput $0.00 Auth verification with:
+ * and executes high-throughput $0.00 Auth verification across Stripe, Braintree, Authorize.Net, and Checkout.com with:
  * - Single-flight request coalescing (`RequestDeduplicator`)
  * - Bounded TTL LRU response caching (`TtlLruCache`)
  * - Per-host circuit breakers (`HostCircuitBreaker`)
@@ -113,18 +113,6 @@ object SandboxGatewayClient {
         return !isPlaceholder(clean) && !isForbiddenLiveKey(clean) && clean.length >= 16
     }
 
-    fun isAdyenConfigured(
-        apiKey: String = BuildConfig.ADYEN_SANDBOX_API_KEY,
-        merchant: String = BuildConfig.ADYEN_SANDBOX_MERCHANT_ACCOUNT
-    ): Boolean {
-        return !isPlaceholder(apiKey) && !isForbiddenLiveKey(apiKey) && !isPlaceholder(merchant)
-    }
-
-    fun isSquareConfigured(raw: String = BuildConfig.SQUARE_SANDBOX_ACCESS_TOKEN): Boolean {
-        val clean = raw.trim()
-        return !isPlaceholder(clean) && !isForbiddenLiveKey(clean) && clean.length >= 16
-    }
-
     fun isAuthNetConfigured(
         loginId: String = BuildConfig.AUTHNET_SANDBOX_API_LOGIN_ID,
         txnKey: String = BuildConfig.AUTHNET_SANDBOX_TRANSACTION_KEY
@@ -147,15 +135,6 @@ object SandboxGatewayClient {
         val btToken = BuildConfig.BRAINTREE_SANDBOX_ACCESS_TOKEN
         val btRejected = isForbiddenLiveKey(btToken)
         val btReady = isBraintreeConfigured(btToken)
-
-        val adyenKey = BuildConfig.ADYEN_SANDBOX_API_KEY
-        val adyenMerchant = BuildConfig.ADYEN_SANDBOX_MERCHANT_ACCOUNT
-        val adyenRejected = isForbiddenLiveKey(adyenKey)
-        val adyenReady = isAdyenConfigured(adyenKey, adyenMerchant)
-
-        val squareToken = BuildConfig.SQUARE_SANDBOX_ACCESS_TOKEN
-        val squareRejected = isForbiddenLiveKey(squareToken)
-        val squareReady = isSquareConfigured(squareToken)
 
         val authLogin = BuildConfig.AUTHNET_SANDBOX_API_LOGIN_ID
         val authKey = BuildConfig.AUTHNET_SANDBOX_TRANSACTION_KEY
@@ -187,30 +166,6 @@ object SandboxGatewayClient {
                 statusBadge = when {
                     btRejected -> "LIVE KEY BLOCKED"
                     btReady -> "ENV ACTIVE"
-                    else -> "SIMULATED $0"
-                }
-            ),
-            SandboxProviderKeyStatus(
-                provider = SandboxProvider.ADYEN,
-                envKeyNames = "ADYEN_SANDBOX_API_KEY + MERCHANT",
-                endpointHost = "checkout-test.adyen.com",
-                isConfigured = adyenReady,
-                isRejectedLiveKey = adyenRejected,
-                statusBadge = when {
-                    adyenRejected -> "LIVE KEY BLOCKED"
-                    adyenReady -> "ENV ACTIVE"
-                    else -> "SIMULATED $0"
-                }
-            ),
-            SandboxProviderKeyStatus(
-                provider = SandboxProvider.SQUARE,
-                envKeyNames = "SQUARE_SANDBOX_ACCESS_TOKEN",
-                endpointHost = "connect.squareupsandbox.com",
-                isConfigured = squareReady,
-                isRejectedLiveKey = squareRejected,
-                statusBadge = when {
-                    squareRejected -> "LIVE KEY BLOCKED"
-                    squareReady -> "ENV ACTIVE"
                     else -> "SIMULATED $0"
                 }
             ),
@@ -278,10 +233,8 @@ object SandboxGatewayClient {
                 val provider = activeProviders[(startIndex + offset) % activeProviders.size]
                 val attempt = when (provider) {
                     SandboxProvider.STRIPE -> executeStripeZeroAuth(pan, mm, yyyy, cvv, timeoutSeconds)
-                    SandboxProvider.ADYEN -> executeAdyenZeroAuth(pan, mm, yyyy, cvv, timeoutSeconds)
                     SandboxProvider.CHECKOUT_WORLDPAY -> executeCheckoutZeroAuth(pan, mm, yyyy, cvv, timeoutSeconds)
                     SandboxProvider.AUTHNET_CYBERSOURCE -> executeAuthNetZeroAuth(pan, mm, yyyy, cvv, timeoutSeconds)
-                    SandboxProvider.SQUARE -> executeSquareZeroAuth(pan, mm, yyyy, cvv, scheme, timeoutSeconds)
                     SandboxProvider.BRAINTREE -> executeBraintreeZeroAuth(pan, mm, yyyy, cvv, timeoutSeconds)
                     SandboxProvider.ALL_SANDBOXES -> null
                 }
@@ -401,59 +354,6 @@ object SandboxGatewayClient {
         }
     }
 
-    private suspend fun executeAdyenZeroAuth(
-        pan: String,
-        mm: String,
-        yyyy: String,
-        cvv: String,
-        timeoutSeconds: Int
-    ): Pair<ResultBucket, String>? {
-        val apiKey = BuildConfig.ADYEN_SANDBOX_API_KEY.trim()
-        val merchant = BuildConfig.ADYEN_SANDBOX_MERCHANT_ACCOUNT.trim()
-        if (!isAdyenConfigured(apiKey, merchant)) return null
-
-        val client = NetworkClientProvider.clientWithTimeout(timeoutSeconds)
-        val ref = "bincheck_zero_auth_${UUID.randomUUID().toString().take(8)}"
-        val payload = """{"merchantAccount":"${escapeJson(merchant)}","reference":"$ref","amount":{"currency":"USD","value":0},"paymentMethod":{"type":"scheme","number":"${escapeJson(pan)}","expiryMonth":"${escapeJson(mm)}","expiryYear":"${escapeJson(yyyy)}","cvc":"${escapeJson(cvv)}"}}"""
-
-        return RetryAndBackoffPolicy.executeWithExponentialBackoff(
-            host = "checkout-test.adyen.com",
-            maxRetries = 1,
-            circuitBreaker = NetworkClientProvider.circuitBreaker,
-            telemetry = NetworkClientProvider.telemetry,
-            callBlock = {
-                val request = Request.Builder()
-                    .url("https://checkout-test.adyen.com/v71/payments")
-                    .header("X-API-Key", apiKey)
-                    .header("Content-Type", "application/json")
-                    .post(payload.toRequestBody(JSON_MEDIA_TYPE))
-                    .build()
-                client.newCall(request).execute().use { resp ->
-                    val bodyStr = resp.body?.string().orEmpty()
-                    HttpCallRawResponse(
-                        code = resp.code,
-                        body = bodyStr,
-                        retryAfterMs = RetryAndBackoffPolicy.parseRetryAfterMs(resp.header("Retry-After"), bodyStr)
-                    )
-                }
-            },
-            onResult = { code, body, _ ->
-                val resultCode = extractJsonString(body, "resultCode")
-                val refusal = extractJsonString(body, "refusalReason")
-                when {
-                    resultCode.equals("Authorised", ignoreCase = true) ->
-                        ResultBucket.LIVE to "$0.00 Auth • Adyen Sandbox • Authorised (00)"
-                    resultCode.equals("Refused", ignoreCase = true) || resultCode.equals("Error", ignoreCase = true) ->
-                        ResultBucket.DIE to "$0.00 Auth • Adyen Sandbox • Refused ${refusal.take(40)}".trim()
-                    else ->
-                        ResultBucket.UNKNOWN to "$0.00 Auth • Adyen HTTP $code"
-                }
-            },
-            onCircuitOpen = { null },
-            onFailure = { _, _ -> null }
-        )
-    }
-
     private suspend fun executeCheckoutZeroAuth(
         pan: String,
         mm: String,
@@ -550,63 +450,6 @@ object SandboxGatewayClient {
                     "1" -> ResultBucket.LIVE to "$0.00 Auth • Authorize.Net Sandbox • 1-1 Approved"
                     "2", "3" -> ResultBucket.DIE to "$0.00 Auth • Authorize.Net Sandbox • $respCode Declined"
                     else -> ResultBucket.UNKNOWN to "$0.00 Auth • Authorize.Net HTTP $code"
-                }
-            },
-            onCircuitOpen = { null },
-            onFailure = { _, _ -> null }
-        )
-    }
-
-    private suspend fun executeSquareZeroAuth(
-        pan: String,
-        mm: String,
-        yyyy: String,
-        cvv: String,
-        scheme: CardScheme,
-        timeoutSeconds: Int
-    ): Pair<ResultBucket, String>? {
-        val token = BuildConfig.SQUARE_SANDBOX_ACCESS_TOKEN.trim()
-        if (!isSquareConfigured(token)) return null
-
-        val client = NetworkClientProvider.clientWithTimeout(timeoutSeconds)
-        val sourceNonce = when {
-            cvv == "000" || cvv == "0000" -> "cnon:card-nonce-rejected-cvv"
-            pan.endsWith("0000") -> "cnon:card-nonce-declined"
-            else -> "cnon:card-nonce-ok"
-        }
-        val idem = UUID.randomUUID().toString()
-        val note = escapeJson("BinCheck $0 Auth ${scheme.displayName} $mm/$yyyy")
-        val payload = """{"idempotency_key":"$idem","source_id":"$sourceNonce","autocomplete":false,"amount_money":{"amount":0,"currency":"USD"},"note":"$note"}"""
-
-        return RetryAndBackoffPolicy.executeWithExponentialBackoff(
-            host = "connect.squareupsandbox.com",
-            maxRetries = 1,
-            circuitBreaker = NetworkClientProvider.circuitBreaker,
-            telemetry = NetworkClientProvider.telemetry,
-            callBlock = {
-                val request = Request.Builder()
-                    .url("https://connect.squareupsandbox.com/v2/payments")
-                    .header("Authorization", "Bearer $token")
-                    .header("Content-Type", "application/json")
-                    .post(payload.toRequestBody(JSON_MEDIA_TYPE))
-                    .build()
-                client.newCall(request).execute().use { resp ->
-                    val bodyStr = resp.body?.string().orEmpty()
-                    HttpCallRawResponse(
-                        code = resp.code,
-                        body = bodyStr,
-                        retryAfterMs = RetryAndBackoffPolicy.parseRetryAfterMs(resp.header("Retry-After"), bodyStr)
-                    )
-                }
-            },
-            onResult = { code, body, _ ->
-                when {
-                    code in 200..299 ->
-                        ResultBucket.LIVE to "$0.00 Auth • Square Sandbox • VERIFIED (200 OK)"
-                    code in 400..499 && body.contains("DECLINED", ignoreCase = true) ->
-                        ResultBucket.DIE to "$0.00 Auth • Square Sandbox • DECLINED"
-                    else ->
-                        ResultBucket.UNKNOWN to "$0.00 Auth • Square HTTP $code"
                 }
             },
             onCircuitOpen = { null },

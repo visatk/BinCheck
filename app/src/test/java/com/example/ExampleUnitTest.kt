@@ -231,14 +231,12 @@ class ExampleUnitTest {
 
     @Test
     fun validationMode_enforcesFixedDelaysAndAllowsCustomDelaysForOthers() {
-        assertTrue(ValidationMode.CHKR_CC.hasFixedDelay)
         assertTrue(ValidationMode.PAYATE_MOCK.hasFixedDelay)
         assertTrue(ValidationMode.MULTI_API_AUTO.hasFixedDelay)
         assertFalse(ValidationMode.LOCAL_DETERMINISTIC.hasFixedDelay)
+        assertFalse(ValidationMode.SANDBOX_SUITE.hasFixedDelay)
         assertFalse(ValidationMode.REMOTE_WEBHOOK.hasFixedDelay)
 
-        assertEquals(10_000L, ValidationMode.CHKR_CC.resolveDelayMs(0L))
-        assertEquals(10_000L, ValidationMode.CHKR_CC.resolveDelayMs(250L))
         assertEquals(3_000L, ValidationMode.PAYATE_MOCK.resolveDelayMs(55L))
         assertEquals(5_000L, ValidationMode.MULTI_API_AUTO.resolveDelayMs(1_500L))
 
@@ -463,7 +461,7 @@ class ExampleUnitTest {
 
     @Test
     fun sandboxTestRegistry_allOfficialVectorsAreLuhnValidAndEvaluateExpectedBuckets() = runTest {
-        assertTrue(com.example.domain.SandboxTestRegistry.allVectors.size >= 30)
+        assertTrue(com.example.domain.SandboxTestRegistry.allVectors.size >= 26)
         for (vector in com.example.domain.SandboxTestRegistry.allVectors) {
             assertTrue(
                 "Vector ${vector.pan} (${vector.description}) must satisfy Luhn Mod-10",
@@ -508,8 +506,8 @@ class ExampleUnitTest {
     @Test
     fun sandboxGatewayClient_enforcesSandboxOnlyKeyGuardsAndParsesZeroAuthResponses() {
         val snapshot = com.example.domain.SandboxGatewayClient.inspectEnvKeys()
-        assertEquals(6, snapshot.totalProviders)
-        assertEquals(6, snapshot.providerStatuses.size)
+        assertEquals(4, snapshot.totalProviders)
+        assertEquals(4, snapshot.providerStatuses.size)
 
         // Verify live keys are strictly rejected while sandbox test keys are accepted
         assertFalse(com.example.domain.SandboxGatewayClient.isStripeSecretConfigured("sk_live_1234567890abcdef"))
@@ -789,6 +787,216 @@ class ExampleUnitTest {
         assertEquals(original.proxyListText, restored.proxyListText)
         assertEquals(2, restored.parsedParseRules().size)
         assertEquals(1, restored.parsedCheckpointRules().size)
+    }
+
+    @Test
+    fun customConfigStudio_supportsArrayJsonPathsCookieCssRecursiveAndSmartDiscovery() {
+        val complexJson = """
+            {
+              "status": "failed",
+              "errors": [
+                {"code": "CVV_MISMATCH", "field": "cvv"},
+                {"code": "AVS_WARN", "field": "zip"}
+              ],
+              "meta": {"trace": "tr_001"}
+            }
+        """.trimIndent()
+
+        // Non-object intermediate segment must return null, never flat string
+        assertNull(
+            com.example.domain.CustomConfigStudioEngine.extractJsonPathValue(
+                """{"error":"flat_string"}""",
+                "error.code"
+            )
+        )
+
+        // Array indexing via errors[0].code and errors.1.code
+        assertEquals(
+            "CVV_MISMATCH",
+            com.example.domain.CustomConfigStudioEngine.extractJsonPathValue(complexJson, "errors[0].code")
+        )
+        assertEquals(
+            "AVS_WARN",
+            com.example.domain.CustomConfigStudioEngine.extractJsonPathValue(complexJson, "errors.1.code")
+        )
+
+        // Recursive JSON array extraction
+        assertEquals(
+            "CVV_MISMATCH, AVS_WARN",
+            com.example.domain.CustomConfigStudioEngine.extractJsonPathValue(
+                complexJson,
+                "errors.code",
+                recursive = true
+            )
+        )
+
+        // Smart JSON key auto-discovery
+        val suggestions = com.example.domain.CustomConfigStudioEngine.discoverJsonKeySuggestions(complexJson)
+        assertTrue(suggestions.any { it.first == "status" && it.second == "failed" })
+        assertTrue(suggestions.any { it.first == "errors[0].code" && it.second == "CVV_MISMATCH" })
+        assertTrue(suggestions.any { it.first == "meta.trace" && it.second == "tr_001" })
+
+        // Cookie & HTML/CSS extraction + fallback defaultValue
+        val htmlBody = """<html><head><title>3DS Challenge</title></head><body><input type="hidden" name="csrf_token" value="csrf_987654" /></body></html>"""
+        val headers = mapOf("set-cookie" to "session_id=sess_abc123; Path=/; HttpOnly; csrf_cookie=ck_555")
+        val captures = com.example.domain.CustomConfigStudioEngine.extractCaptures(
+            bodyStr = htmlBody,
+            responseHeaders = headers,
+            rules = listOf(
+                com.example.domain.CustomParseRule(
+                    name = "sid",
+                    mode = com.example.domain.ParseRuleMode.COOKIE,
+                    expression = "session_id"
+                ),
+                com.example.domain.CustomParseRule(
+                    name = "csrf",
+                    mode = com.example.domain.ParseRuleMode.CSS,
+                    expression = "input[name=csrf_token]@value"
+                ),
+                com.example.domain.CustomParseRule(
+                    name = "page_title",
+                    mode = com.example.domain.ParseRuleMode.CSS,
+                    expression = "title"
+                ),
+                com.example.domain.CustomParseRule(
+                    name = "missing_with_default",
+                    mode = com.example.domain.ParseRuleMode.JSON,
+                    expression = "nonexistent.path",
+                    defaultValue = "fallback_ok"
+                )
+            )
+        )
+        assertEquals("sess_abc123", captures["sid"])
+        assertEquals("csrf_987654", captures["csrf"])
+        assertEquals("3DS Challenge", captures["page_title"])
+        assertEquals("fallback_ok", captures["missing_with_default"])
+    }
+
+    @Test
+    fun customConfigStudio_importsRawHttpAndLoliScriptAndExportsCurlAndLoli() {
+        val rawHttp = """
+            POST /v1/payment_methods HTTP/1.1
+            Host: api.stripe.com
+            Authorization: Bearer pk_test_123
+            Content-Type: application/x-www-form-urlencoded
+
+            type=card&card[number]=4532250055360003&card[exp_month]=08&card[exp_year]=2028&card[cvc]=113
+        """.trimIndent()
+
+        val importedRaw = com.example.domain.CustomConfigStudioEngine
+            .importFromCurlOrFetch(rawHttp, autoTokenizeFields = true)
+            .getOrThrow()
+        assertEquals("https://api.stripe.com/v1/payment_methods", importedRaw.url)
+        assertEquals(HttpRequestMethod.POST_FORM, importedRaw.method)
+        assertTrue(importedRaw.headersText.contains("Authorization: Bearer pk_test_123"))
+        assertTrue(importedRaw.bodyTemplate.contains("card[number]={card}"))
+        assertTrue(importedRaw.bodyTemplate.contains("card[cvc]={cvv}"))
+
+        val loliSnippet = """
+            REQUEST POST "https://auth.example.org/api/login"
+              CONTENT "{\"email\":\"<EMAIL>\",\"password\":\"<PASS>\"}"
+              CONTENTTYPE "application/json"
+              HEADER "X-Client: OpenBullet"
+            PARSE "<SOURCE>" JSON "data.token" -> CAP "auth_tok"
+            KEYCHECK
+              KEYCHAIN Success AND
+                KEY "authenticated"
+                KEY "token"
+              KEYCHAIN Failure OR
+                KEY "invalid_credentials"
+        """.trimIndent()
+
+        val importedLoli = com.example.domain.CustomConfigStudioEngine
+            .importFromCurlOrFetch(loliSnippet, autoTokenizeFields = true)
+            .getOrThrow()
+        assertEquals("https://auth.example.org/api/login", importedLoli.url)
+        assertEquals(HttpRequestMethod.POST_JSON, importedLoli.method)
+        assertTrue(importedLoli.skipLocalLuhnPrecheck)
+        assertTrue(importedLoli.bodyTemplate.contains("{email}"))
+        assertTrue(importedLoli.bodyTemplate.contains("{pass}"))
+        assertEquals(1, importedLoli.parsedParseRules().size)
+        assertEquals("auth_tok", importedLoli.parsedParseRules()[0].name)
+        assertEquals(2, importedLoli.parsedCheckpointRules().size)
+        assertEquals(
+            com.example.domain.CheckpointCondition.BODY_CONTAINS_ALL,
+            importedLoli.parsedCheckpointRules()[0].condition
+        )
+
+        val exportedCurl = com.example.domain.CustomConfigStudioEngine.exportToCurlCommand(
+            importedRaw,
+            "4532250055360003|08|2028|113"
+        )
+        assertTrue(exportedCurl.startsWith("curl -X POST 'https://api.stripe.com/v1/payment_methods'"))
+        assertTrue(exportedCurl.contains("--data-raw"))
+
+        val exportedLoli = com.example.domain.CustomConfigStudioEngine.exportToLoliScript(importedLoli)
+        assertTrue(exportedLoli.contains("REQUEST POST \"https://auth.example.org/api/login\""))
+        assertTrue(exportedLoli.contains("PARSE \"<SOURCE>\" JSON \"data.token\" -> CAP \"auth_tok\""))
+        assertTrue(exportedLoli.contains("KEYCHAIN Success AND"))
+    }
+
+    @Test
+    fun customConfigStudio_evaluatesNewCheckpointsStep1VariablesAndRequestPreview() {
+        val cfg = CustomHttpConfig(
+            profileName = "2-Step Preview Config",
+            url = "https://api.example.com/charge?token={cap:payment_token}&scheme={scheme_lower}",
+            method = HttpRequestMethod.POST_JSON,
+            headersText = "Authorization: Basic {base64_combo}\nX-Card-Hash: {sha256_card}",
+            bodyTemplate = """{"token":"{cap:payment_token}","dashed":"{card_dashed}","bin8":"{bin8}"}""",
+            preRequestEnabled = true,
+            preRequestUrl = "https://api.example.com/tokenize",
+            preRequestParseRulesSpec = com.example.domain.CustomConfigStudioEngine.serializeParseRules(
+                listOf(
+                    com.example.domain.CustomParseRule(
+                        name = "payment_token",
+                        mode = com.example.domain.ParseRuleMode.JSON,
+                        expression = "id",
+                        defaultValue = "pm_step1_999"
+                    )
+                )
+            ),
+            checkpointRulesSpec = com.example.domain.CustomConfigStudioEngine.serializeCheckpointRules(
+                listOf(
+                    com.example.domain.CustomCheckpointRule(
+                        verdict = ResultBucket.LIVE,
+                        condition = com.example.domain.CheckpointCondition.BODY_CONTAINS_ALL,
+                        expectedValue = "succeeded,paid",
+                        label = "All Matched"
+                    ),
+                    com.example.domain.CustomCheckpointRule(
+                        verdict = ResultBucket.DIE,
+                        condition = com.example.domain.CheckpointCondition.HEADER_CONTAINS,
+                        targetKey = "x-decline-reason",
+                        expectedValue = "do_not_honor",
+                        label = "Header Decline"
+                    )
+                )
+            )
+        )
+
+        val preview = com.example.domain.CustomConfigStudioEngine.renderRequestPreview(
+            cfg,
+            "4532250055360003|08|2028|113"
+        )
+        assertEquals("POST", preview.resolvedMethod)
+        assertEquals(true, preview.isJsonValid)
+        assertTrue(preview.resolvedUrl.contains("token=pm_step1_999"))
+        assertTrue(preview.resolvedUrl.contains("scheme=visa"))
+        assertTrue(preview.resolvedBody.contains("\"dashed\":\"4532-2500-5536-0003\""))
+        assertTrue(preview.resolvedBody.contains("\"bin8\":\"45322500\""))
+
+        val evalResult = com.example.domain.CustomConfigStudioEngine.evaluateCheckpointsDetailed(
+            statusCode = 402,
+            bodyStr = """{"status":"failed"}""",
+            captures = emptyMap(),
+            rules = cfg.parsedCheckpointRules(),
+            responseHeaders = mapOf("x-decline-reason" to "do_not_honor")
+        )
+        assertEquals(ResultBucket.DIE, evalResult.winner?.first)
+        assertEquals(2, evalResult.steps.size)
+        assertFalse(evalResult.steps[0].matched)
+        assertTrue(evalResult.steps[1].matched)
+        assertTrue(evalResult.steps[1].isWinner)
     }
 }
 

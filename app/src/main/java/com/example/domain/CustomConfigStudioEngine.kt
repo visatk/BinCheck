@@ -2,8 +2,12 @@ package com.example.domain
 
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.security.MessageDigest
+import java.text.SimpleDateFormat
 import java.util.Base64
+import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.random.Random
@@ -12,10 +16,12 @@ import kotlin.random.Random
  * Extraction mode for Custom Config Studio response parsing (Capture Rules).
  */
 enum class ParseRuleMode(val label: String, val hint: String) {
-    JSON("JSON Key", "e.g. error.code or data.status"),
+    JSON("JSON Key", "e.g. error.code or errors[0].code"),
     LR("Left / Right", "Extract text between Left & Right delimiters"),
     REGEX("Regex Group", "e.g. \"code\":\"([^\"]+)\""),
-    HEADER("HTTP Header", "e.g. x-request-id or cf-ray")
+    HEADER("HTTP Header", "e.g. x-request-id or cf-ray"),
+    COOKIE("Set-Cookie", "e.g. session_id, csrf_token, or *"),
+    CSS("HTML / Attr", "e.g. input[name=csrf]@value or title")
 }
 
 /**
@@ -27,7 +33,9 @@ data class CustomParseRule(
     val expression: String = "",
     val leftDelimiter: String = "",
     val rightDelimiter: String = "",
-    val showInOutput: Boolean = true
+    val showInOutput: Boolean = true,
+    val recursive: Boolean = false,
+    val defaultValue: String = ""
 )
 
 /**
@@ -36,13 +44,18 @@ data class CustomParseRule(
 enum class CheckpointCondition(val label: String, val requiresKey: Boolean) {
     BODY_CONTAINS("Body Contains", false),
     BODY_CONTAINS_ANY("Body Contains Any (,)", false),
+    BODY_CONTAINS_ALL("Body Contains All (&)", false),
     BODY_NOT_CONTAINS("Body Not Contains", false),
     STATUS_CODE_EQUALS("HTTP Status ==", false),
     STATUS_CODE_IN("HTTP Status In (,)", false),
     JSON_KEY_EQUALS("JSON Key ==", true),
+    JSON_KEY_CONTAINS("JSON Key Contains", true),
     CAPTURED_VAR_CONTAINS("Var Contains", true),
     CAPTURED_VAR_EQUALS("Var Equals", true),
-    REGEX_MATCH("Regex Matches Body", false)
+    CAPTURED_VAR_NOT_CONTAINS("Var Not Contains", true),
+    HEADER_CONTAINS("Header Contains", true),
+    REGEX_MATCH("Regex Matches Body", false),
+    LATENCY_GT_MS("Latency > (ms)", false)
 }
 
 /**
@@ -54,6 +67,39 @@ data class CustomCheckpointRule(
     val targetKey: String = "",
     val expectedValue: String = "",
     val label: String = ""
+)
+
+/**
+ * Step-by-step evaluation trace for a single [CustomCheckpointRule] in the Keycheck debugger.
+ */
+data class CheckpointEvalStep(
+    val index: Int,
+    val rule: CustomCheckpointRule,
+    val matched: Boolean,
+    val isWinner: Boolean,
+    val detail: String
+)
+
+/**
+ * Complete evaluation result for ordered checkpoints, including the winning verdict and full trace.
+ */
+data class CheckpointEvaluationResult(
+    val winner: Pair<ResultBucket, String>?,
+    val steps: List<CheckpointEvalStep>
+)
+
+/**
+ * Live rendered preview of an HTTP request before network dispatch.
+ */
+data class RenderedRequestPreview(
+    val resolvedMethod: String,
+    val resolvedUrl: String,
+    val resolvedHeaders: List<Pair<String, String>>,
+    val resolvedBody: String,
+    val isJsonValid: Boolean?,
+    val jsonDiagnostic: String = "",
+    val detectedInputType: String = "CARD",
+    val unresolvedTokens: List<String> = emptyList()
 )
 
 /**
@@ -129,12 +175,13 @@ data class CustomConfigProfile(
 
 /**
  * Core engine for Custom Config Studio:
- * - Parse Rule serialization & extraction (JSON dot-path, Left/Right delimiter, Regex, Header)
- * - Checkpoint / Keycheck ordered evaluation (9 condition modes + priority ordering)
- * - Proxy list parsing & rotation (Round-Robin, Random, Sticky)
- * - cURL & JS fetch() DevTools importer with optional card/combo auto-tokenization
- * - Pure-Kotlin JSON Config Import / Export (zero external serialization dependency, JVM-test safe)
- * - Built-in safe Sandbox / Echo config templates
+ * - Parse Rule serialization & extraction (JSON dot-path + array indexing, Left/Right, Regex, Header, Set-Cookie, HTML/CSS)
+ * - Smart JSON Key Discovery from live/sample responses for 1-tap rule generation
+ * - Checkpoint / Keycheck ordered evaluation (14 condition modes + step-by-step debugger trace)
+ * - 2-Step Pre-Request (Token / Session / CSRF Handshake -> Main Request) variable & cookie chaining
+ * - Proxy list parsing, validation diagnostics & rotation (Round-Robin, Random, Sticky)
+ * - Universal Importer: cURL (bash/cmd), JS fetch(), Raw HTTP (Burp/HTTP Toolkit), and LoliScript (.loli/.anom)
+ * - Code Exporters: Export to JSON, Export to cURL command, and Export to OpenBullet LoliScript
  */
 object CustomConfigStudioEngine {
 
@@ -143,6 +190,13 @@ object CustomConfigStudioEngine {
     private const val LEGACY_PIPE_SEP = "::"
 
     private val roundRobinCounter = AtomicInteger(0)
+
+    private val ROTATING_USER_AGENTS = listOf(
+        "Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+    )
 
     val BUILT_IN_PROFILES: List<CustomConfigProfile> by lazy {
         listOf(
@@ -193,6 +247,62 @@ object CustomConfigStudioEngine {
                                 condition = CheckpointCondition.BODY_CONTAINS_ANY,
                                 expectedValue = "card_declined,incorrect_cvc,expired_card",
                                 label = "Gateway Decline"
+                            )
+                        )
+                    )
+                )
+            ),
+            CustomConfigProfile(
+                id = "builtin_two_step_token_pipeline",
+                name = "2-Step Token -> Charge Pipeline",
+                description = "Step 1 tokenizes card & captures payment_token -> Step 2 verifies {cap:payment_token}",
+                isBuiltIn = true,
+                config = CustomHttpConfig(
+                    profileName = "2-Step Token -> Charge Pipeline",
+                    url = "https://postman-echo.com/post",
+                    method = HttpRequestMethod.POST_JSON,
+                    headersText = "Accept: application/json\nX-Correlation-ID: {uuid}",
+                    bodyTemplate = """{"payment_token":"{cap:payment_token}","amount":0,"currency":"USD","bin":"{bin}","scheme":"{scheme_lower}"}""",
+                    timeoutSeconds = 15,
+                    maxRetries = 1,
+                    liveKeywords = "succeeded,approved,zero_dollar,payment_token",
+                    dieKeywords = "declined,invalid,expired",
+                    userAgent = "BinCheck-ConfigStudio/2.5",
+                    followRedirects = true,
+                    preRequestEnabled = true,
+                    preRequestUrl = "https://postman-echo.com/post",
+                    preRequestMethod = HttpRequestMethod.POST_FORM,
+                    preRequestHeaders = "Accept: application/json",
+                    preRequestBody = "type=card&card[number]={card}&card[exp_month]={mm}&card[exp_year]={yyyy}&card[cvc]={cvv}&token_id=tok_{random_hex16}",
+                    preRequestParseRulesSpec = serializeParseRules(
+                        listOf(
+                            CustomParseRule(
+                                name = "payment_token",
+                                mode = ParseRuleMode.JSON,
+                                expression = "form.token_id",
+                                showInOutput = true,
+                                defaultValue = "tok_fallback"
+                            )
+                        )
+                    ),
+                    parseRulesSpec = serializeParseRules(
+                        listOf(
+                            CustomParseRule(
+                                name = "verified_tok",
+                                mode = ParseRuleMode.JSON,
+                                expression = "json.payment_token",
+                                showInOutput = true
+                            )
+                        )
+                    ),
+                    checkpointRulesSpec = serializeCheckpointRules(
+                        listOf(
+                            CustomCheckpointRule(
+                                verdict = ResultBucket.LIVE,
+                                condition = CheckpointCondition.CAPTURED_VAR_CONTAINS,
+                                targetKey = "verified_tok",
+                                expectedValue = "tok_",
+                                label = "2-Step Token Verified"
                             )
                         )
                     )
@@ -313,6 +423,7 @@ object CustomConfigStudioEngine {
                     dieKeywords = "invalid_credentials,unauthorized,locked,banned",
                     userAgent = "BinCheck-ConfigStudio/2.5",
                     followRedirects = true,
+                    skipLocalLuhnPrecheck = true,
                     parseRulesSpec = serializeParseRules(
                         listOf(
                             CustomParseRule(
@@ -360,7 +471,9 @@ object CustomConfigStudioEngine {
                 rule.expression.replace(FIELD_SEP, " ").replace("\n", " "),
                 rule.leftDelimiter.replace(FIELD_SEP, " ").replace("\n", " "),
                 rule.rightDelimiter.replace(FIELD_SEP, " ").replace("\n", " "),
-                if (rule.showInOutput) "1" else "0"
+                if (rule.showInOutput) "1" else "0",
+                if (rule.recursive) "1" else "0",
+                rule.defaultValue.replace(FIELD_SEP, " ").replace("\n", " ")
             ).joinToString(FIELD_SEP)
         }.joinToString(RULE_LINE_SEP)
     }
@@ -384,13 +497,17 @@ object CustomConfigStudioEngine {
             val left = parts.getOrElse(3) { "" }
             val right = parts.getOrElse(4) { "" }
             val show = parts.getOrElse(5) { "1" } != "0"
+            val recursive = parts.getOrElse(6) { "0" } == "1"
+            val defaultVal = parts.getOrElse(7) { "" }
             CustomParseRule(
                 name = name,
                 mode = mode,
                 expression = expr,
                 leftDelimiter = left,
                 rightDelimiter = right,
-                showInOutput = show
+                showInOutput = show,
+                recursive = recursive,
+                defaultValue = defaultVal
             )
         }
     }
@@ -409,10 +526,23 @@ object CustomConfigStudioEngine {
         for (rule in rules) {
             val varName = rule.name.trim()
             if (varName.isEmpty()) continue
-            val extracted: String? = when (rule.mode) {
-                ParseRuleMode.JSON -> extractJsonPathValue(bodyStr, rule.expression.trim())
-                ParseRuleMode.LR -> extractLeftRightValue(bodyStr, rule.leftDelimiter, rule.rightDelimiter)
-                ParseRuleMode.REGEX -> extractRegexGroupValue(bodyStr, rule.expression)
+            val rawExtracted: String? = when (rule.mode) {
+                ParseRuleMode.JSON -> extractJsonPathValue(
+                    jsonText = bodyStr,
+                    path = rule.expression.trim(),
+                    recursive = rule.recursive
+                )
+                ParseRuleMode.LR -> extractLeftRightValue(
+                    text = bodyStr,
+                    left = rule.leftDelimiter,
+                    right = rule.rightDelimiter,
+                    recursive = rule.recursive
+                )
+                ParseRuleMode.REGEX -> extractRegexGroupValue(
+                    text = bodyStr,
+                    patternStr = rule.expression,
+                    recursive = rule.recursive
+                )
                 ParseRuleMode.HEADER -> {
                     val key = rule.expression.trim().lowercase(Locale.ROOT)
                     if (key.isEmpty()) null else {
@@ -421,9 +551,19 @@ object CustomConfigStudioEngine {
                         }?.value
                     }
                 }
+                ParseRuleMode.COOKIE -> extractCookieValue(
+                    responseHeaders = responseHeaders,
+                    cookieName = rule.expression.trim()
+                )
+                ParseRuleMode.CSS -> extractHtmlCssValue(
+                    htmlText = bodyStr,
+                    selector = rule.expression.trim()
+                )
             }
-            if (!extracted.isNullOrBlank()) {
-                captured[varName] = extracted.trim().take(90)
+            val resolved = rawExtracted?.takeIf { it.isNotBlank() }
+                ?: rule.defaultValue.trim().takeIf { it.isNotEmpty() }
+            if (!resolved.isNullOrBlank()) {
+                captured[varName] = resolved.trim().take(120)
             }
         }
         return captured
@@ -435,57 +575,149 @@ object CustomConfigStudioEngine {
     ): String {
         if (captures.isEmpty()) return ""
         val visibleNames = rules.filter { it.showInOutput }.map { it.name.trim() }.toSet()
-        val entries = captures.entries.filter { visibleNames.isEmpty() || it.key in visibleNames }
+        val entries = if (rules.isEmpty()) {
+            captures.entries.toList()
+        } else {
+            captures.entries.filter { it.key in visibleNames }
+        }
         if (entries.isEmpty()) return ""
         return entries.take(4).joinToString(" ") { (k, v) -> "[$k=${v.take(28)}]" }
     }
 
     /**
-     * Pure-Kotlin JSON field/dot-path extractor (supports top-level `code` and nested `error.code` or `json.card.scheme`).
+     * Pure-Kotlin JSON field/dot-path & array-index extractor:
+     * Supports top-level `code`, nested `error.code`, `json.card.scheme`, array indexing `errors[0].code` or `errors.0.code`,
+     * and recursive array extraction (`errors.code` across array items when `recursive = true`).
      * Works identically on Android runtime and pure JVM unit tests without `org.json.JSONObject` Stub! exceptions.
      */
-    internal fun extractJsonPathValue(jsonText: String, path: String): String? {
+    internal fun extractJsonPathValue(
+        jsonText: String,
+        path: String,
+        recursive: Boolean = false
+    ): String? {
         if (jsonText.isBlank() || path.isBlank()) return null
-        val segments = path.split('.').map { it.trim() }.filter { it.isNotEmpty() }
+        val normalizedPath = path.trim()
+            .replace(Regex("""\[(\d+)\]"""), ".$1")
+            .trimStart('.')
+        val segments = normalizedPath.split('.').map { it.trim() }.filter { it.isNotEmpty() }
         if (segments.isEmpty()) return null
 
-        var currentSlice = jsonText.trim()
-        for ((index, key) in segments.withIndex()) {
-            val isLast = index == segments.lastIndex
-            val escapedKey = Regex.escape(key)
-            if (!isLast) {
-                val objStartMatch = Regex(""""$escapedKey"\s*:\s*\{""").find(currentSlice)
-                if (objStartMatch != null) {
-                    val braceStart = objStartMatch.range.last
-                    val subSlice = extractBalancedBraces(currentSlice, braceStart)
-                    if (subSlice != null) {
-                        currentSlice = subSlice
-                        continue
-                    }
+        return extractJsonSegments(jsonText.trim(), segments, 0, recursive)
+    }
+
+    private fun extractJsonSegments(
+        slice: String,
+        segments: List<String>,
+        segIndex: Int,
+        recursive: Boolean
+    ): String? {
+        if (segIndex >= segments.size || slice.isEmpty()) return null
+        val key = segments[segIndex]
+        val isLast = segIndex == segments.lastIndex
+        val trimmedSlice = slice.trim()
+
+        // Handle array index segment if current slice is a JSON array `[...]`
+        val arrayIdx = key.toIntOrNull()
+        if (arrayIdx != null && trimmedSlice.startsWith("[")) {
+            val elements = splitTopLevelJsonArray(trimmedSlice)
+            val elem = elements.getOrNull(arrayIdx)?.trim() ?: return null
+            if (isLast) {
+                return cleanJsonScalarOrObject(elem)
+            }
+            return extractJsonSegments(elem, segments, segIndex + 1, recursive)
+        }
+
+        // If current slice is a JSON array and recursive is requested (or non-numeric key on array), map across items
+        if (trimmedSlice.startsWith("[")) {
+            val elements = splitTopLevelJsonArray(trimmedSlice)
+            if (recursive) {
+                val collected = elements.mapNotNull { el ->
+                    extractJsonSegments(el, segments, segIndex, false)
+                }.filter { it.isNotBlank() }
+                return if (collected.isEmpty()) null else collected.joinToString(", ")
+            } else {
+                val firstElem = elements.firstOrNull() ?: return null
+                return extractJsonSegments(firstElem, segments, segIndex, false)
+            }
+        }
+
+        val escapedKey = Regex.escape(key)
+
+        // Check if key points to a nested JSON object `{...}`
+        val objStartMatch = Regex(""""$escapedKey"\s*:\s*\{""").find(trimmedSlice)
+        if (objStartMatch != null) {
+            val braceStart = objStartMatch.range.last
+            val subSlice = extractBalancedGroup(trimmedSlice, braceStart, '{', '}')
+            if (subSlice != null) {
+                return if (isLast) {
+                    subSlice
+                } else {
+                    extractJsonSegments(subSlice, segments, segIndex + 1, recursive)
                 }
             }
-            val strRegex = Regex(""""$escapedKey"\s*:\s*"((?:\\.|[^"\\])*)"""")
-            val strMatch = strRegex.find(currentSlice)
-            if (strMatch != null) {
-                return unescapeJsonString(strMatch.groupValues[1])
+        }
+
+        // Check if key points to a nested JSON array `[...]`
+        val arrStartMatch = Regex(""""$escapedKey"\s*:\s*\[""").find(trimmedSlice)
+        if (arrStartMatch != null) {
+            val bracketStart = arrStartMatch.range.last
+            val subArray = extractBalancedGroup(trimmedSlice, bracketStart, '[', ']')
+            if (subArray != null) {
+                return if (isLast) {
+                    val items = splitTopLevelJsonArray(subArray).mapNotNull { cleanJsonScalarOrObject(it) }
+                    if (recursive) items.joinToString(", ") else items.firstOrNull() ?: subArray
+                } else {
+                    extractJsonSegments(subArray, segments, segIndex + 1, recursive)
+                }
             }
-            val primRegex = Regex(""""$escapedKey"\s*:\s*(-?\d+(?:\.\d+)?|true|false|null)\b""", RegexOption.IGNORE_CASE)
-            val primMatch = primRegex.find(currentSlice)
-            if (primMatch != null) {
-                val rawPrim = primMatch.groupValues[1]
-                return if (rawPrim.equals("null", ignoreCase = true)) null else rawPrim
-            }
-            return null
+        }
+
+        // If not the last segment and neither object nor array matched, do not falsely match a flat primitive!
+        if (!isLast) return null
+
+        if (recursive) {
+            val allStr = Regex(""""$escapedKey"\s*:\s*"((?:\\.|[^"\\])*)"""")
+                .findAll(trimmedSlice)
+                .map { unescapeJsonString(it.groupValues[1]) }
+                .filter { it.isNotBlank() }
+                .toList()
+            if (allStr.isNotEmpty()) return allStr.joinToString(", ")
+        }
+
+        val strRegex = Regex(""""$escapedKey"\s*:\s*"((?:\\.|[^"\\])*)"""")
+        val strMatch = strRegex.find(trimmedSlice)
+        if (strMatch != null) {
+            return unescapeJsonString(strMatch.groupValues[1])
+        }
+        val primRegex = Regex(""""$escapedKey"\s*:\s*(-?\d+(?:\.\d+)?|true|false|null)\b""", RegexOption.IGNORE_CASE)
+        val primMatch = primRegex.find(trimmedSlice)
+        if (primMatch != null) {
+            val rawPrim = primMatch.groupValues[1]
+            return if (rawPrim.equals("null", ignoreCase = true)) null else rawPrim
         }
         return null
     }
 
-    private fun extractBalancedBraces(text: String, openBraceIndex: Int): String? {
-        if (openBraceIndex < 0 || openBraceIndex >= text.length || text[openBraceIndex] != '{') return null
+    private fun cleanJsonScalarOrObject(raw: String): String? {
+        val t = raw.trim()
+        if (t.isEmpty() || t.equals("null", ignoreCase = true)) return null
+        if (t.startsWith("\"") && t.endsWith("\"") && t.length >= 2) {
+            return unescapeJsonString(t.substring(1, t.length - 1))
+        }
+        return t
+    }
+
+    private fun extractBalancedGroup(
+        text: String,
+        openIndex: Int,
+        openChar: Char,
+        closeChar: Char
+    ): String? {
+        if (openIndex < 0 || openIndex >= text.length || text[openIndex] != openChar) return null
         var depth = 0
         var inQuotes = false
         var escaped = false
-        for (i in openBraceIndex until text.length) {
+        for (i in openIndex until text.length) {
             val ch = text[i]
             if (escaped) {
                 escaped = false
@@ -500,11 +732,11 @@ object CustomConfigStudioEngine {
                 continue
             }
             if (!inQuotes) {
-                if (ch == '{') depth++
-                else if (ch == '}') {
+                if (ch == openChar) depth++
+                else if (ch == closeChar) {
                     depth--
                     if (depth == 0) {
-                        return text.substring(openBraceIndex, i + 1)
+                        return text.substring(openIndex, i + 1)
                     }
                 }
             }
@@ -512,30 +744,266 @@ object CustomConfigStudioEngine {
         return null
     }
 
-    internal fun extractLeftRightValue(text: String, left: String, right: String): String? {
-        if (text.isEmpty() || left.isEmpty()) return null
-        val startIdx = text.indexOf(left)
-        if (startIdx < 0) return null
-        val contentStart = startIdx + left.length
-        if (right.isEmpty()) {
-            return text.substring(contentStart).lineSequence().firstOrNull()?.trim()
+    private fun splitTopLevelJsonArray(arrayText: String): List<String> {
+        val trimmed = arrayText.trim()
+        if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return emptyList()
+        val inner = trimmed.substring(1, trimmed.length - 1).trim()
+        if (inner.isEmpty()) return emptyList()
+
+        val items = mutableListOf<String>()
+        var braceDepth = 0
+        var bracketDepth = 0
+        var inQuotes = false
+        var escaped = false
+        var tokenStart = 0
+
+        for (i in inner.indices) {
+            val ch = inner[i]
+            if (escaped) {
+                escaped = false
+                continue
+            }
+            if (ch == '\\') {
+                escaped = true
+                continue
+            }
+            if (ch == '"') {
+                inQuotes = !inQuotes
+                continue
+            }
+            if (!inQuotes) {
+                when (ch) {
+                    '{' -> braceDepth++
+                    '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+                    '[' -> bracketDepth++
+                    ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+                    ',' -> if (braceDepth == 0 && bracketDepth == 0) {
+                        val segment = inner.substring(tokenStart, i).trim()
+                        if (segment.isNotEmpty()) items.add(segment)
+                        tokenStart = i + 1
+                    }
+                }
+            }
         }
-        val endIdx = text.indexOf(right, startIndex = contentStart)
-        if (endIdx < 0) return null
-        return text.substring(contentStart, endIdx)
+        val tail = inner.substring(tokenStart).trim()
+        if (tail.isNotEmpty()) items.add(tail)
+        return items
     }
 
-    internal fun extractRegexGroupValue(text: String, patternStr: String): String? {
+    /**
+     * Scans a sample JSON body and discovers up to 12 useful `dotPath -> sampleValue` pairs
+     * so users can generate Parse Rules and Checkpoints with 1 tap.
+     */
+    fun discoverJsonKeySuggestions(jsonText: String): List<Pair<String, String>> {
+        val trimmed = jsonText.trim()
+        if (!trimmed.startsWith("{")) return emptyList()
+        val results = LinkedHashMap<String, String>()
+
+        fun scanObject(slice: String, prefix: String, depth: Int) {
+            if (depth > 3 || results.size >= 14) return
+            val keyRegex = Regex(""""([A-Za-z0-9_.-]+)"\s*:\s*""")
+            var searchIndex = 1
+            while (searchIndex < slice.length && results.size < 14) {
+                val match = keyRegex.find(slice, searchIndex) ?: break
+                val key = match.groupValues[1]
+                val valStart = match.range.last + 1
+                if (valStart >= slice.length) break
+                val fullPath = if (prefix.isEmpty()) key else "$prefix.$key"
+
+                val nextChar = slice[valStart]
+                when (nextChar) {
+                    '{' -> {
+                        val subObj = extractBalancedGroup(slice, valStart, '{', '}')
+                        if (subObj != null) {
+                            scanObject(subObj, fullPath, depth + 1)
+                            searchIndex = valStart + subObj.length
+                            continue
+                        }
+                    }
+                    '[' -> {
+                        val subArr = extractBalancedGroup(slice, valStart, '[', ']')
+                        if (subArr != null) {
+                            val firstEl = splitTopLevelJsonArray(subArr).firstOrNull()?.trim()
+                            if (firstEl != null && firstEl.startsWith("{")) {
+                                scanObject(firstEl, "$fullPath[0]", depth + 1)
+                            } else if (firstEl != null) {
+                                cleanJsonScalarOrObject(firstEl)?.let { scalar ->
+                                    results.putIfAbsent("$fullPath[0]", scalar.take(36))
+                                }
+                            }
+                            searchIndex = valStart + subArr.length
+                            continue
+                        }
+                    }
+                    '"' -> {
+                        val strMatch = Regex("""^"((?:\\.|[^"\\])*)"""").find(slice.substring(valStart))
+                        if (strMatch != null) {
+                            val v = unescapeJsonString(strMatch.groupValues[1]).trim()
+                            if (v.isNotEmpty() && !key.equals("headers", ignoreCase = true)) {
+                                results.putIfAbsent(fullPath, v.take(36))
+                            }
+                            searchIndex = valStart + strMatch.value.length
+                            continue
+                        }
+                    }
+                    else -> {
+                        val primMatch = Regex("""^(-?\d+(?:\.\d+)?|true|false)\b""", RegexOption.IGNORE_CASE)
+                            .find(slice.substring(valStart))
+                        if (primMatch != null) {
+                            results.putIfAbsent(fullPath, primMatch.groupValues[1])
+                            searchIndex = valStart + primMatch.value.length
+                            continue
+                        }
+                    }
+                }
+                searchIndex = valStart + 1
+            }
+        }
+
+        scanObject(trimmed, "", 0)
+        return results.entries.map { it.key to it.value }
+    }
+
+    internal fun extractLeftRightValue(
+        text: String,
+        left: String,
+        right: String,
+        recursive: Boolean = false
+    ): String? {
+        if (text.isEmpty() || left.isEmpty()) return null
+        if (!recursive) {
+            val startIdx = text.indexOf(left)
+            if (startIdx < 0) return null
+            val contentStart = startIdx + left.length
+            if (right.isEmpty()) {
+                return text.substring(contentStart).lineSequence().firstOrNull()?.trim()
+            }
+            val endIdx = text.indexOf(right, startIndex = contentStart)
+            if (endIdx < 0) return null
+            return text.substring(contentStart, endIdx)
+        }
+
+        val matches = mutableListOf<String>()
+        var cursor = 0
+        while (cursor < text.length && matches.size < 20) {
+            val startIdx = text.indexOf(left, startIndex = cursor)
+            if (startIdx < 0) break
+            val contentStart = startIdx + left.length
+            if (right.isEmpty()) {
+                val line = text.substring(contentStart).lineSequence().firstOrNull()?.trim().orEmpty()
+                if (line.isNotEmpty()) matches.add(line)
+                break
+            }
+            val endIdx = text.indexOf(right, startIndex = contentStart)
+            if (endIdx < 0) break
+            val piece = text.substring(contentStart, endIdx).trim()
+            if (piece.isNotEmpty()) matches.add(piece)
+            cursor = endIdx + right.length.coerceAtLeast(1)
+        }
+        return if (matches.isEmpty()) null else matches.joinToString(", ")
+    }
+
+    internal fun extractRegexGroupValue(
+        text: String,
+        patternStr: String,
+        recursive: Boolean = false
+    ): String? {
         if (text.isEmpty() || patternStr.isBlank()) return null
         return runCatching {
             val regex = Regex(patternStr, setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
-            val match = regex.find(text) ?: return@runCatching null
-            if (match.groupValues.size > 1) {
-                match.groupValues[1]
+            if (!recursive) {
+                val match = regex.find(text) ?: return@runCatching null
+                if (match.groupValues.size > 1) match.groupValues[1] else match.value
             } else {
-                match.value
+                val all = regex.findAll(text).take(20).map { m ->
+                    if (m.groupValues.size > 1) m.groupValues[1] else m.value
+                }.filter { it.isNotBlank() }.toList()
+                if (all.isEmpty()) null else all.joinToString(", ")
             }
         }.getOrNull()
+    }
+
+    internal fun extractCookieValue(
+        responseHeaders: Map<String, String>,
+        cookieName: String
+    ): String? {
+        if (responseHeaders.isEmpty() || cookieName.isBlank()) return null
+        val cookieHeaders = responseHeaders.entries
+            .filter {
+                it.key.equals("set-cookie", ignoreCase = true) ||
+                    it.key.equals("cookie", ignoreCase = true) ||
+                    it.key.startsWith("set-cookie", ignoreCase = true)
+            }
+            .map { it.value }
+        if (cookieHeaders.isEmpty()) return null
+
+        val parsedPairs = LinkedHashMap<String, String>()
+        for (rawHeader in cookieHeaders) {
+            rawHeader.split('\n', ';').forEach { segment ->
+                val trimmed = segment.trim()
+                val eq = trimmed.indexOf('=')
+                if (eq > 0) {
+                    val k = trimmed.substring(0, eq).trim()
+                    val v = trimmed.substring(eq + 1).trim()
+                    val lowerK = k.lowercase(Locale.ROOT)
+                    if (lowerK !in setOf("path", "domain", "expires", "max-age", "samesite", "secure", "httponly")) {
+                        parsedPairs[k] = v
+                    }
+                }
+            }
+        }
+        if (parsedPairs.isEmpty()) return null
+        if (cookieName == "*") {
+            return parsedPairs.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        }
+        return parsedPairs[cookieName]
+            ?: parsedPairs.entries.firstOrNull { it.key.equals(cookieName, ignoreCase = true) }?.value
+    }
+
+    /**
+     * Lightweight HTML / CSS attribute & inner-text extractor.
+     * Examples:
+     * - `input[name=csrf_token]@value`
+     * - `meta[name=csrf-token]@content`
+     * - `title` (extracts `<title>...</title>`)
+     */
+    internal fun extractHtmlCssValue(htmlText: String, selector: String): String? {
+        if (htmlText.isBlank() || selector.isBlank()) return null
+        val cleanSel = selector.trim()
+        val targetAttr = cleanSel.substringAfter('@', "").trim()
+        val elementPart = cleanSel.substringBefore('@').trim()
+
+        val attrFilterMatch = Regex("""^([A-Za-z0-9_-]+)?\[([A-Za-z0-9_:-]+)\s*=\s*['"]?([^'"\]]+)['"]?\]$""")
+            .find(elementPart)
+
+        if (attrFilterMatch != null) {
+            val tag = attrFilterMatch.groupValues[1].ifBlank { "[A-Za-z0-9_-]+" }
+            val filterAttr = Regex.escape(attrFilterMatch.groupValues[2])
+            val filterVal = Regex.escape(attrFilterMatch.groupValues[3])
+            val tagRegex = Regex(
+                """<$tag\b[^>]*\b$filterAttr\s*=\s*['"]?$filterVal['"]?[^>]*>""",
+                RegexOption.IGNORE_CASE
+            )
+            val tagMatch = tagRegex.find(htmlText) ?: return null
+            val tagHtml = tagMatch.value
+            val attrToRead = targetAttr.ifEmpty { "value" }
+            val valRegex = Regex("""\b${Regex.escape(attrToRead)}\s*=\s*(['"])(.*?)\1""", RegexOption.IGNORE_CASE)
+            return valRegex.find(tagHtml)?.groupValues?.getOrNull(2)
+        }
+
+        val simpleTag = Regex.escape(elementPart.removePrefix("#").removePrefix("."))
+        if (targetAttr.isNotEmpty()) {
+            val tagRegex = Regex("""<$simpleTag\b[^>]*>""", RegexOption.IGNORE_CASE)
+            val tagHtml = tagRegex.find(htmlText)?.value ?: return null
+            val valRegex = Regex("""\b${Regex.escape(targetAttr)}\s*=\s*(['"])(.*?)\1""", RegexOption.IGNORE_CASE)
+            return valRegex.find(tagHtml)?.groupValues?.getOrNull(2)
+        }
+
+        val innerRegex = Regex(
+            """<$simpleTag\b[^>]*>(.*?)</$simpleTag>""",
+            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
+        )
+        return innerRegex.find(htmlText)?.groupValues?.getOrNull(1)?.trim()
     }
 
     // =========================================================================
@@ -545,7 +1013,10 @@ object CustomConfigStudioEngine {
     fun serializeCheckpointRules(rules: List<CustomCheckpointRule>): String {
         if (rules.isEmpty()) return ""
         return rules.mapNotNull { rule ->
-            if (rule.expectedValue.isBlank() && rule.condition != CheckpointCondition.CAPTURED_VAR_CONTAINS) {
+            if (rule.expectedValue.isBlank() &&
+                rule.condition != CheckpointCondition.CAPTURED_VAR_CONTAINS &&
+                rule.condition != CheckpointCondition.CAPTURED_VAR_NOT_CONTAINS
+            ) {
                 return@mapNotNull null
             }
             listOf(
@@ -587,69 +1058,163 @@ object CustomConfigStudioEngine {
     }
 
     /**
-     * Evaluates ordered [CustomCheckpointRule] items. Returns the first matching `(ResultBucket, reasonLabel)`
+     * Evaluates ordered [CustomCheckpointRule] items and returns the first matching `(ResultBucket, reasonLabel)`
      * or `null` if no checkpoint matched (allowing fallback to keyword/status classification).
      */
     fun evaluateCheckpoints(
         statusCode: Int,
         bodyStr: String,
         captures: Map<String, String>,
-        rules: List<CustomCheckpointRule>
+        rules: List<CustomCheckpointRule>,
+        responseHeaders: Map<String, String> = emptyMap(),
+        latencyMs: Long = 0L
     ): Pair<ResultBucket, String>? {
-        if (rules.isEmpty()) return null
-        for (rule in rules) {
+        return evaluateCheckpointsDetailed(
+            statusCode = statusCode,
+            bodyStr = bodyStr,
+            captures = captures,
+            rules = rules,
+            responseHeaders = responseHeaders,
+            latencyMs = latencyMs
+        ).winner
+    }
+
+    /**
+     * Evaluates all [CustomCheckpointRule] items in priority order (#1 -> #N), returning both the
+     * winning verdict and a step-by-step trace for the Keycheck Debugger UI.
+     */
+    fun evaluateCheckpointsDetailed(
+        statusCode: Int,
+        bodyStr: String,
+        captures: Map<String, String>,
+        rules: List<CustomCheckpointRule>,
+        responseHeaders: Map<String, String> = emptyMap(),
+        latencyMs: Long = 0L
+    ): CheckpointEvaluationResult {
+        if (rules.isEmpty()) return CheckpointEvaluationResult(null, emptyList())
+        var winner: Pair<ResultBucket, String>? = null
+        val steps = ArrayList<CheckpointEvalStep>(rules.size)
+
+        for ((idx, rule) in rules.withIndex()) {
             val expected = rule.expectedValue.trim()
+            var detail: String
             val matched = when (rule.condition) {
                 CheckpointCondition.BODY_CONTAINS -> {
-                    expected.isNotEmpty() && bodyStr.contains(expected, ignoreCase = true)
+                    val ok = expected.isNotEmpty() && bodyStr.contains(expected, ignoreCase = true)
+                    detail = if (ok) "Body contains \"$expected\"" else "Not found in body"
+                    ok
                 }
                 CheckpointCondition.BODY_CONTAINS_ANY -> {
                     val terms = expected.split(',', '|', ';').map { it.trim() }.filter { it.isNotEmpty() }
-                    terms.any { term -> bodyStr.contains(term, ignoreCase = true) }
+                    val hit = terms.firstOrNull { term -> bodyStr.contains(term, ignoreCase = true) }
+                    detail = if (hit != null) "Matched term \"$hit\"" else "None of ${terms.size} terms matched"
+                    hit != null
+                }
+                CheckpointCondition.BODY_CONTAINS_ALL -> {
+                    val terms = expected.split(',', '|', ';').map { it.trim() }.filter { it.isNotEmpty() }
+                    val ok = terms.isNotEmpty() && terms.all { term -> bodyStr.contains(term, ignoreCase = true) }
+                    detail = if (ok) "All ${terms.size} terms matched" else "Missing required term(s)"
+                    ok
                 }
                 CheckpointCondition.BODY_NOT_CONTAINS -> {
-                    expected.isNotEmpty() && !bodyStr.contains(expected, ignoreCase = true)
+                    val ok = expected.isNotEmpty() && !bodyStr.contains(expected, ignoreCase = true)
+                    detail = if (ok) "Body excludes \"$expected\"" else "Forbidden text found"
+                    ok
                 }
                 CheckpointCondition.STATUS_CODE_EQUALS -> {
-                    expected.toIntOrNull() == statusCode
+                    val ok = expected.toIntOrNull() == statusCode
+                    detail = "HTTP $statusCode ${if (ok) "==" else "!="} $expected"
+                    ok
                 }
                 CheckpointCondition.STATUS_CODE_IN -> {
                     val codes = expected.split(',', '|', ';', ' ').mapNotNull { it.trim().toIntOrNull() }
-                    statusCode in codes
+                    val ok = statusCode in codes
+                    detail = "HTTP $statusCode ${if (ok) "in" else "not in"} [$expected]"
+                    ok
                 }
                 CheckpointCondition.JSON_KEY_EQUALS -> {
                     val actual = extractJsonPathValue(bodyStr, rule.targetKey.trim())
-                    actual != null && (expected.isEmpty() || actual.equals(expected, ignoreCase = true))
+                    val ok = actual != null && (expected.isEmpty() || actual.equals(expected, ignoreCase = true))
+                    detail = "${rule.targetKey} = ${actual ?: "null"}"
+                    ok
+                }
+                CheckpointCondition.JSON_KEY_CONTAINS -> {
+                    val actual = extractJsonPathValue(bodyStr, rule.targetKey.trim())
+                    val ok = actual != null && (expected.isEmpty() || actual.contains(expected, ignoreCase = true))
+                    detail = "${rule.targetKey} = ${actual ?: "null"}"
+                    ok
                 }
                 CheckpointCondition.CAPTURED_VAR_CONTAINS -> {
                     val actual = lookupCapturedVar(captures, rule.targetKey)
-                    actual != null && (expected.isEmpty() || actual.contains(expected, ignoreCase = true))
+                    val ok = actual != null && (expected.isEmpty() || actual.contains(expected, ignoreCase = true))
+                    detail = "var[${rule.targetKey}] = ${actual ?: "null"}"
+                    ok
                 }
                 CheckpointCondition.CAPTURED_VAR_EQUALS -> {
                     val actual = lookupCapturedVar(captures, rule.targetKey)
-                    actual != null && actual.equals(expected, ignoreCase = true)
+                    val ok = actual != null && actual.equals(expected, ignoreCase = true)
+                    detail = "var[${rule.targetKey}] = ${actual ?: "null"}"
+                    ok
+                }
+                CheckpointCondition.CAPTURED_VAR_NOT_CONTAINS -> {
+                    val actual = lookupCapturedVar(captures, rule.targetKey)
+                    val ok = actual != null && (expected.isEmpty() || !actual.contains(expected, ignoreCase = true))
+                    detail = "var[${rule.targetKey}] = ${actual ?: "null"}"
+                    ok
+                }
+                CheckpointCondition.HEADER_CONTAINS -> {
+                    val hdrKey = rule.targetKey.trim().lowercase(Locale.ROOT)
+                    val actual = responseHeaders[hdrKey]
+                        ?: responseHeaders.entries.firstOrNull { it.key.equals(hdrKey, ignoreCase = true) }?.value
+                    val ok = actual != null && (expected.isEmpty() || actual.contains(expected, ignoreCase = true))
+                    detail = "hdr[${rule.targetKey}] = ${actual ?: "null"}"
+                    ok
                 }
                 CheckpointCondition.REGEX_MATCH -> {
-                    expected.isNotEmpty() && runCatching {
+                    val ok = expected.isNotEmpty() && runCatching {
                         Regex(expected, RegexOption.IGNORE_CASE).containsMatchIn(bodyStr)
                     }.getOrDefault(false)
+                    detail = if (ok) "Regex matched body" else "Regex did not match"
+                    ok
+                }
+                CheckpointCondition.LATENCY_GT_MS -> {
+                    val threshold = expected.toLongOrNull() ?: Long.MAX_VALUE
+                    val ok = latencyMs > threshold
+                    detail = "${latencyMs}ms ${if (ok) ">" else "<="} ${threshold}ms"
+                    ok
                 }
             }
-            if (matched) {
+
+            val isFirstWinner = matched && winner == null
+            if (isFirstWinner) {
                 val tag = rule.label.ifBlank {
                     when (rule.condition) {
                         CheckpointCondition.STATUS_CODE_EQUALS,
                         CheckpointCondition.STATUS_CODE_IN -> "HTTP $statusCode"
-                        CheckpointCondition.JSON_KEY_EQUALS -> "${rule.targetKey}=${expected.take(18)}"
+                        CheckpointCondition.JSON_KEY_EQUALS,
+                        CheckpointCondition.JSON_KEY_CONTAINS -> "${rule.targetKey}=${expected.take(18)}"
                         CheckpointCondition.CAPTURED_VAR_CONTAINS,
-                        CheckpointCondition.CAPTURED_VAR_EQUALS -> "${rule.targetKey}${if (expected.isNotEmpty()) "=$expected" else ""}"
+                        CheckpointCondition.CAPTURED_VAR_EQUALS,
+                        CheckpointCondition.CAPTURED_VAR_NOT_CONTAINS -> "${rule.targetKey}${if (expected.isNotEmpty()) "=$expected" else ""}"
+                        CheckpointCondition.HEADER_CONTAINS -> "Header ${rule.targetKey}"
+                        CheckpointCondition.LATENCY_GT_MS -> ">${expected}ms"
                         else -> expected.take(24)
                     }
                 }
-                return rule.verdict to "Checkpoint: $tag"
+                winner = rule.verdict to "Checkpoint: $tag"
             }
+
+            steps.add(
+                CheckpointEvalStep(
+                    index = idx + 1,
+                    rule = rule,
+                    matched = matched,
+                    isWinner = isFirstWinner,
+                    detail = detail
+                )
+            )
         }
-        return null
+        return CheckpointEvaluationResult(winner, steps)
     }
 
     private fun lookupCapturedVar(captures: Map<String, String>, key: String): String? {
@@ -659,7 +1224,7 @@ object CustomConfigStudioEngine {
     }
 
     // =========================================================================
-    // 3. Proxy List Parsing & Rotation
+    // 3. Proxy List Parsing, Diagnostics & Rotation
     // =========================================================================
 
     fun parseProxyPool(
@@ -670,6 +1235,27 @@ object CustomConfigStudioEngine {
         return proxyListText.lines().mapNotNull { rawLine ->
             parseSingleProxyLine(rawLine, defaultProtocol)
         }
+    }
+
+    /**
+     * Returns 1-based line numbers and snippets for any non-empty, non-comment lines in `proxyListText`
+     * that fail proxy syntax validation.
+     */
+    fun findInvalidProxyLines(
+        proxyListText: String,
+        defaultProtocol: ProxyProtocol = ProxyProtocol.HTTP
+    ): List<Pair<Int, String>> {
+        if (proxyListText.isBlank()) return emptyList()
+        val invalid = mutableListOf<Pair<Int, String>>()
+        proxyListText.lines().forEachIndexed { idx, raw ->
+            val trimmed = raw.trim()
+            if (trimmed.isNotEmpty() && !trimmed.startsWith("#") && !trimmed.startsWith("//")) {
+                if (parseSingleProxyLine(trimmed, defaultProtocol) == null) {
+                    invalid.add((idx + 1) to trimmed.take(36))
+                }
+            }
+        }
+        return invalid
     }
 
     fun parseSingleProxyLine(
@@ -749,27 +1335,33 @@ object CustomConfigStudioEngine {
     }
 
     // =========================================================================
-    // 4. DevTools Importer: cURL (bash) & JS fetch(...)
+    // 4. Universal Request Importer: cURL, JS fetch(), Raw HTTP & LoliScript
     // =========================================================================
 
     /**
-     * Imports a Chrome/DevTools `curl ...` or `fetch("...", { ... })` snippet into a [CustomHttpConfig],
-     * extracting URL, HTTP method, headers, User-Agent, and request body, with optional auto-tokenization
-     * of concrete card/expiry/cvv/email fields into `{card}`, `{mm}`, `{yyyy}`, `{cvv}`, `{email}`, `{pass}`.
+     * Imports a Chrome/DevTools `curl ...`, `fetch("...", { ... })`, Burp/HTTP Toolkit Raw HTTP request,
+     * or OpenBullet/SilverBullet LoliScript snippet into a [CustomHttpConfig], extracting URL, HTTP method,
+     * headers, User-Agent, request body, and (for LoliScript) Parse & Keycheck rules!
      */
     fun importFromCurlOrFetch(
         rawSnippet: String,
         autoTokenizeFields: Boolean = true
     ): Result<CustomHttpConfig> = runCatching {
         val snippet = rawSnippet.trim()
-        require(snippet.isNotEmpty()) { "Paste a curl command or JS fetch(...) snippet first." }
+        require(snippet.isNotEmpty()) {
+            "Paste a cURL command, JS fetch(...), Raw HTTP request, or LoliScript block first."
+        }
 
-        val parsed = if (snippet.contains("fetch(", ignoreCase = true) &&
-            !snippet.trimStart().startsWith("curl", ignoreCase = true)
-        ) {
-            parseFetchSnippet(snippet)
-        } else {
-            parseCurlSnippet(snippet)
+        // Check if LoliScript / OpenBullet / SilverBullet block
+        if (isLoliScriptSnippet(snippet)) {
+            return@runCatching parseLoliScriptSnippet(snippet, autoTokenizeFields)
+        }
+
+        val parsed = when {
+            isRawHttpSnippet(snippet) -> parseRawHttpSnippet(snippet)
+            snippet.contains("fetch(", ignoreCase = true) &&
+                !snippet.trimStart().startsWith("curl", ignoreCase = true) -> parseFetchSnippet(snippet)
+            else -> parseCurlSnippet(snippet)
         }
 
         require(parsed.url.startsWith("http://", ignoreCase = true) || parsed.url.startsWith("https://", ignoreCase = true)) {
@@ -798,6 +1390,11 @@ object CustomConfigStudioEngine {
         } else {
             rawBody
         }
+        val tokenizedUrl = if (autoTokenizeFields) {
+            autoTokenizePayload(parsed.url)
+        } else {
+            parsed.url
+        }
 
         val resolvedMethod = when {
             parsed.explicitMethod.equals("GET", ignoreCase = true) && tokenizedBody.isBlank() -> HttpRequestMethod.GET
@@ -813,10 +1410,11 @@ object CustomConfigStudioEngine {
 
         CustomHttpConfig(
             profileName = "$hostLabel Config",
-            url = parsed.url,
+            url = tokenizedUrl,
             method = resolvedMethod,
             headersText = filteredHeaders.joinToString("\n"),
             bodyTemplate = tokenizedBody,
+            compressBodyGzip = parsed.compressGzip,
             userAgent = userAgent,
             followRedirects = true
         )
@@ -826,8 +1424,253 @@ object CustomConfigStudioEngine {
         val url: String,
         val explicitMethod: String,
         val headers: List<Pair<String, String>>,
-        val body: String
+        val body: String,
+        val compressGzip: Boolean = false
     )
+
+    private fun isRawHttpSnippet(snippet: String): Boolean {
+        val firstLine = snippet.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+        return Regex("""^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+(\S+)\s+HTTP/\d(?:\.\d)?$""", RegexOption.IGNORE_CASE)
+            .matches(firstLine)
+    }
+
+    private fun parseRawHttpSnippet(snippet: String): RawParsedSnippet {
+        val normalized = snippet.replace("\r\n", "\n")
+        val lines = normalized.lines()
+        val firstIdx = lines.indexOfFirst { it.isNotBlank() }
+        val requestLine = lines[firstIdx].trim()
+        val reqMatch = Regex("""^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+(\S+)\s+HTTP/\d(?:\.\d)?$""", RegexOption.IGNORE_CASE)
+            .find(requestLine)
+            ?: throw IllegalArgumentException("Invalid Raw HTTP request line.")
+
+        val method = reqMatch.groupValues[1].uppercase(Locale.ROOT)
+        val pathOrUrl = reqMatch.groupValues[2].trim()
+
+        val headers = mutableListOf<Pair<String, String>>()
+        var hostHeader = ""
+        var i = firstIdx + 1
+        while (i < lines.size) {
+            val line = lines[i]
+            if (line.isBlank()) {
+                i++
+                break
+            }
+            val colon = line.indexOf(':')
+            if (colon > 0) {
+                val k = line.substring(0, colon).trim()
+                val v = line.substring(colon + 1).trim()
+                if (k.equals("host", ignoreCase = true)) {
+                    hostHeader = v
+                } else {
+                    headers.add(k to v)
+                }
+            }
+            i++
+        }
+
+        val body = if (i < lines.size) {
+            lines.subList(i, lines.size).joinToString("\n").trim()
+        } else ""
+
+        val fullUrl = when {
+            pathOrUrl.startsWith("http://", ignoreCase = true) || pathOrUrl.startsWith("https://", ignoreCase = true) -> pathOrUrl
+            hostHeader.isNotBlank() -> {
+                val scheme = if (hostHeader.endsWith(":80")) "http" else "https"
+                val slashPath = if (pathOrUrl.startsWith("/")) pathOrUrl else "/$pathOrUrl"
+                "$scheme://$hostHeader$slashPath"
+            }
+            else -> throw IllegalArgumentException("Raw HTTP request is missing a Host: header.")
+        }
+
+        return RawParsedSnippet(
+            url = fullUrl,
+            explicitMethod = method,
+            headers = headers,
+            body = body
+        )
+    }
+
+    private fun isLoliScriptSnippet(snippet: String): Boolean {
+        val upper = snippet.uppercase(Locale.ROOT)
+        return upper.contains("REQUEST ") && (
+            upper.contains("HEADER ") ||
+                upper.contains("CONTENT ") ||
+                upper.contains("KEYCHECK") ||
+                upper.contains("PARSE ")
+            )
+    }
+
+    private fun parseLoliScriptSnippet(snippet: String, autoTokenize: Boolean): CustomHttpConfig {
+        fun convertLoliTokens(input: String): String {
+            var s = input
+                .replace("<USER>", "{user}", ignoreCase = true)
+                .replace("<USERNAME>", "{user}", ignoreCase = true)
+                .replace("<EMAIL>", "{email}", ignoreCase = true)
+                .replace("<PASS>", "{pass}", ignoreCase = true)
+                .replace("<PASSWORD>", "{pass}", ignoreCase = true)
+                .replace("<CC>", "{card}", ignoreCase = true)
+                .replace("<CARD>", "{card}", ignoreCase = true)
+                .replace("<PAN>", "{card}", ignoreCase = true)
+                .replace("<MM>", "{mm}", ignoreCase = true)
+                .replace("<MONTH>", "{mm}", ignoreCase = true)
+                .replace("<YY>", "{yy}", ignoreCase = true)
+                .replace("<YYYY>", "{yyyy}", ignoreCase = true)
+                .replace("<YEAR>", "{yyyy}", ignoreCase = true)
+                .replace("<CVV>", "{cvv}", ignoreCase = true)
+                .replace("<CVC>", "{cvv}", ignoreCase = true)
+                .replace("<BIN>", "{bin}", ignoreCase = true)
+                .replace("<LISTA>", "{lista}", ignoreCase = true)
+            // Convert remaining <VAR> references to {cap:VAR}
+            s = Regex("""<([A-Za-z0-9_]{2,32})>""").replace(s) { m ->
+                "{cap:${m.groupValues[1]}}"
+            }
+            return if (autoTokenize) autoTokenizePayload(s) else s
+        }
+
+        val reqMatch = Regex("""REQUEST\s+(GET|POST|PUT|DELETE|PATCH)\s+"([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(snippet)
+            ?: throw IllegalArgumentException("Could not find REQUEST <METHOD> \"<URL>\" in LoliScript.")
+        val rawMethod = reqMatch.groupValues[1].uppercase(Locale.ROOT)
+        val url = convertLoliTokens(reqMatch.groupValues[2].trim())
+
+        var userAgent = CustomHttpConfig.DEFAULT_USER_AGENT
+        val headers = mutableListOf<String>()
+        Regex("""HEADER\s+"((?:\\.|[^"\\])*)"""", RegexOption.IGNORE_CASE).findAll(snippet).forEach { m ->
+            val hdr = unescapeJsonString(m.groupValues[1]).trim()
+            val colon = hdr.indexOf(':')
+            if (colon > 0) {
+                val k = hdr.substring(0, colon).trim()
+                val v = convertLoliTokens(hdr.substring(colon + 1).trim())
+                if (k.equals("user-agent", ignoreCase = true)) {
+                    userAgent = v
+                } else if (!k.equals("host", ignoreCase = true) && !k.equals("content-length", ignoreCase = true)) {
+                    headers.add("$k: $v")
+                }
+            }
+        }
+
+        Regex("""COOKIE\s+"((?:\\.|[^"\\])*)"""", RegexOption.IGNORE_CASE).findAll(snippet).forEach { m ->
+            val ck = convertLoliTokens(unescapeJsonString(m.groupValues[1]).trim())
+            if (ck.isNotBlank()) headers.add("Cookie: $ck")
+        }
+
+        val contentMatch = Regex("""CONTENT\s+"((?:\\.|[^"\\])*)"""", RegexOption.IGNORE_CASE).find(snippet)
+        val body = contentMatch?.groupValues?.getOrNull(1)?.let { convertLoliTokens(unescapeJsonString(it)) }.orEmpty()
+
+        val ctypeMatch = Regex("""CONTENTTYPE\s+"([^"]*)"""", RegexOption.IGNORE_CASE).find(snippet)
+        val ctype = ctypeMatch?.groupValues?.getOrNull(1)?.lowercase(Locale.ROOT).orEmpty()
+
+        val method = when {
+            rawMethod == "GET" && body.isBlank() -> HttpRequestMethod.GET
+            ctype.contains("json") || body.trimStart().startsWith("{") -> HttpRequestMethod.POST_JSON
+            ctype.contains("form") || (body.isNotBlank() && body.contains('=')) -> HttpRequestMethod.POST_FORM
+            body.isNotBlank() -> HttpRequestMethod.POST_JSON
+            else -> HttpRequestMethod.GET
+        }
+
+        val parseRules = mutableListOf<CustomParseRule>()
+        // PARSE "<SOURCE>" LR "left" "right" -> VAR/CAP "name"
+        Regex(
+            """PARSE\s+"[^"]*"\s+LR\s+"((?:\\.|[^"\\])*)"\s+"((?:\\.|[^"\\])*)"[^-\n]*->\s*(?:VAR|CAP)\s+"([^"]+)"""",
+            RegexOption.IGNORE_CASE
+        ).findAll(snippet).forEach { m ->
+            val isCap = m.value.uppercase(Locale.ROOT).contains("-> CAP")
+            parseRules.add(
+                CustomParseRule(
+                    name = m.groupValues[3].trim(),
+                    mode = ParseRuleMode.LR,
+                    leftDelimiter = unescapeJsonString(m.groupValues[1]),
+                    rightDelimiter = unescapeJsonString(m.groupValues[2]),
+                    showInOutput = isCap
+                )
+            )
+        }
+        // PARSE "<SOURCE>" JSON "field" -> VAR/CAP "name"
+        Regex(
+            """PARSE\s+"[^"]*"\s+JSON\s+"([^"]+)"[^-\n]*->\s*(?:VAR|CAP)\s+"([^"]+)"""",
+            RegexOption.IGNORE_CASE
+        ).findAll(snippet).forEach { m ->
+            val isCap = m.value.uppercase(Locale.ROOT).contains("-> CAP")
+            parseRules.add(
+                CustomParseRule(
+                    name = m.groupValues[2].trim(),
+                    mode = ParseRuleMode.JSON,
+                    expression = m.groupValues[1].trim(),
+                    showInOutput = isCap
+                )
+            )
+        }
+        // PARSE "<SOURCE>" REGEX "pattern" ... -> VAR/CAP "name"
+        Regex(
+            """PARSE\s+"[^"]*"\s+REGEX\s+"((?:\\.|[^"\\])*)"[^-\n]*->\s*(?:VAR|CAP)\s+"([^"]+)"""",
+            RegexOption.IGNORE_CASE
+        ).findAll(snippet).forEach { m ->
+            val isCap = m.value.uppercase(Locale.ROOT).contains("-> CAP")
+            parseRules.add(
+                CustomParseRule(
+                    name = m.groupValues[2].trim(),
+                    mode = ParseRuleMode.REGEX,
+                    expression = unescapeJsonString(m.groupValues[1]),
+                    showInOutput = isCap
+                )
+            )
+        }
+
+        val checkpoints = mutableListOf<CustomCheckpointRule>()
+        val keychainBlocks = Regex(
+            """KEYCHAIN\s+(Success|Failure|Ban|Retry|Custom)\s+(OR|AND)(.*?)(?=KEYCHAIN|\z)""",
+            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
+        ).findAll(snippet)
+        for (kc in keychainBlocks) {
+            val kind = kc.groupValues[1].lowercase(Locale.ROOT)
+            val logic = kc.groupValues[2].uppercase(Locale.ROOT)
+            val blockBody = kc.groupValues[3]
+            val bucket = when (kind) {
+                "success" -> ResultBucket.LIVE
+                "failure" -> ResultBucket.DIE
+                else -> ResultBucket.UNKNOWN
+            }
+            val keys = Regex("""KEY\s+"((?:\\.|[^"\\])*)"""", RegexOption.IGNORE_CASE)
+                .findAll(blockBody)
+                .map { unescapeJsonString(it.groupValues[1]).trim() }
+                .filter { it.isNotEmpty() }
+                .toList()
+            if (keys.isNotEmpty()) {
+                val cond = when {
+                    logic == "AND" && keys.size > 1 -> CheckpointCondition.BODY_CONTAINS_ALL
+                    keys.size > 1 -> CheckpointCondition.BODY_CONTAINS_ANY
+                    else -> CheckpointCondition.BODY_CONTAINS
+                }
+                checkpoints.add(
+                    CustomCheckpointRule(
+                        verdict = bucket,
+                        condition = cond,
+                        expectedValue = keys.joinToString(","),
+                        label = "Loli ${kind.replaceFirstChar { it.uppercase() }}"
+                    )
+                )
+            }
+        }
+
+        val hostLabel = Regex("""https?://([^/:?#]+)""", RegexOption.IGNORE_CASE)
+            .find(url)?.groupValues?.getOrNull(1).orEmpty().ifEmpty { "LoliScript" }
+
+        val usesCombo = url.contains("{user}") || url.contains("{email}") || url.contains("{pass}") ||
+            body.contains("{user}") || body.contains("{email}") || body.contains("{pass}")
+
+        return CustomHttpConfig(
+            profileName = "$hostLabel Loli Config",
+            url = url,
+            method = method,
+            headersText = headers.joinToString("\n"),
+            bodyTemplate = body,
+            userAgent = userAgent,
+            followRedirects = true,
+            parseRulesSpec = serializeParseRules(parseRules),
+            checkpointRulesSpec = serializeCheckpointRules(checkpoints),
+            skipLocalLuhnPrecheck = usesCombo
+        )
+    }
 
     private fun parseFetchSnippet(snippet: String): RawParsedSnippet {
         val urlMatch = Regex("""fetch\s*\(\s*["'`](https?://[^"'`\s]+)["'`]""", RegexOption.IGNORE_CASE)
@@ -840,21 +1683,30 @@ object CustomConfigStudioEngine {
         val method = methodMatch?.groupValues?.getOrNull(1)?.uppercase(Locale.ROOT) ?: ""
 
         val headers = mutableListOf<Pair<String, String>>()
-        val headersBlockMatch = Regex(""""?headers"?\s*:\s*\{([^}]*)\}""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
-            .find(snippet)
-        if (headersBlockMatch != null) {
-            val block = headersBlockMatch.groupValues[1]
-            val kvRegex = Regex("""["'`]([^"'`]+)["'`]\s*:\s*["'`]([^"'`]*)["'`]""")
-            kvRegex.findAll(block).forEach { m ->
-                headers.add(m.groupValues[1].trim() to m.groupValues[2].trim())
+        val headersKeyMatch = Regex(""""?headers"?\s*:\s*\{""", RegexOption.IGNORE_CASE).find(snippet)
+        if (headersKeyMatch != null) {
+            val block = extractBalancedGroup(snippet, headersKeyMatch.range.last, '{', '}')
+            if (block != null) {
+                val kvRegex = Regex("""["'`]([^"'`]+)["'`]\s*:\s*["'`]([^"'`]*)["'`]""")
+                kvRegex.findAll(block).forEach { m ->
+                    headers.add(m.groupValues[1].trim() to m.groupValues[2].trim())
+                }
             }
         }
 
-        val bodyMatch = Regex(""""?body"?\s*:\s*"((?:\\.|[^"\\])*)"""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
-            .find(snippet)
-            ?: Regex(""""?body"?\s*:\s*'((?:\\.|[^'\\])*)'""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        var rawBody = ""
+        val stringifyMatch = Regex(""""?body"?\s*:\s*JSON\.stringify\s*\(\s*\{""", RegexOption.IGNORE_CASE).find(snippet)
+        if (stringifyMatch != null) {
+            rawBody = extractBalancedGroup(snippet, stringifyMatch.range.last, '{', '}').orEmpty()
+        } else {
+            val bodyMatch = Regex(""""?body"?\s*:\s*"((?:\\.|[^"\\])*)"""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
                 .find(snippet)
-        val rawBody = bodyMatch?.groupValues?.getOrNull(1)?.let { unescapeJsonString(it) }.orEmpty()
+                ?: Regex(""""?body"?\s*:\s*'((?:\\.|[^'\\])*)'""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+                    .find(snippet)
+                ?: Regex(""""?body"?\s*:\s*`((?:\\.|[^`\\])*)`""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+                    .find(snippet)
+            rawBody = bodyMatch?.groupValues?.getOrNull(1)?.let { unescapeJsonString(it) }.orEmpty()
+        }
 
         return RawParsedSnippet(
             url = url,
@@ -865,12 +1717,17 @@ object CustomConfigStudioEngine {
     }
 
     private fun parseCurlSnippet(snippet: String): RawParsedSnippet {
-        // Normalize bash backslash-newline line continuations
-        val cleaned = snippet.replace(Regex("""\\\r?\n"""), " ")
+        // Normalize bash backslash-newline, Windows cmd ^-newline, and PowerShell `-newline continuations
+        val cleaned = snippet
+            .replace(Regex("""\\\r?\n"""), " ")
+            .replace(Regex("""\^\r?\n"""), " ")
+            .replace(Regex("""`\r?\n"""), " ")
+            .replace("$'", "'")
         val tokens = tokenizeShellArgs(cleaned)
 
         var url = ""
         var explicitMethod = ""
+        var compressGzip = false
         val headers = mutableListOf<Pair<String, String>>()
         val bodyParts = mutableListOf<String>()
 
@@ -878,7 +1735,7 @@ object CustomConfigStudioEngine {
         while (i < tokens.size) {
             val tok = tokens[i]
             when {
-                tok.equals("curl", ignoreCase = true) && i == 0 -> Unit
+                (tok.equals("curl", ignoreCase = true) || tok.equals("curl.exe", ignoreCase = true)) && i == 0 -> Unit
                 (tok == "-X" || tok == "--request") && i + 1 < tokens.size -> {
                     explicitMethod = tokens[++i].uppercase(Locale.ROOT)
                 }
@@ -892,11 +1749,25 @@ object CustomConfigStudioEngine {
                 (tok == "-A" || tok == "--user-agent") && i + 1 < tokens.size -> {
                     headers.add("User-Agent" to tokens[++i])
                 }
+                (tok == "-b" || tok == "--cookie") && i + 1 < tokens.size -> {
+                    headers.add("Cookie" to tokens[++i])
+                }
+                (tok == "-e" || tok == "--referer") && i + 1 < tokens.size -> {
+                    headers.add("Referer" to tokens[++i])
+                }
+                (tok == "-u" || tok == "--user") && i + 1 < tokens.size -> {
+                    val creds = tokens[++i]
+                    headers.add("Authorization" to "Basic ${encodeBase64(creds)}")
+                }
                 (tok == "-d" || tok == "--data" || tok == "--data-raw" || tok == "--data-binary" || tok == "--data-urlencode") && i + 1 < tokens.size -> {
                     bodyParts.add(tokens[++i])
                 }
                 tok.startsWith("--data-raw=") -> bodyParts.add(tok.substringAfter('='))
                 tok.startsWith("--data=") -> bodyParts.add(tok.substringAfter('='))
+                tok.startsWith("--data-binary=") -> bodyParts.add(tok.substringAfter('='))
+                tok == "--compressed" -> {
+                    compressGzip = false // --compressed in curl requests Accept-Encoding, handled natively by OkHttp
+                }
                 (tok.startsWith("http://", ignoreCase = true) || tok.startsWith("https://", ignoreCase = true)) && url.isEmpty() -> {
                     url = tok
                 }
@@ -911,7 +1782,8 @@ object CustomConfigStudioEngine {
             url = url,
             explicitMethod = explicitMethod,
             headers = headers,
-            body = bodyParts.joinToString("&")
+            body = bodyParts.joinToString("&"),
+            compressGzip = compressGzip
         )
     }
 
@@ -969,33 +1841,49 @@ object CustomConfigStudioEngine {
             "$1{card}"
         )
         out = out.replace(
-            Regex("""((?:card\[cvc\]|card\[cvv\]|cvc|cvv)\s*=\s*)(\d{3,4})""", RegexOption.IGNORE_CASE),
+            Regex("""((?:card\[cvc\]|card\[cvv\]|security_code|cvc|cvv)\s*=\s*)(\d{3,4})""", RegexOption.IGNORE_CASE),
             "$1{cvv}"
         )
         out = out.replace(
-            Regex("""((?:card\[exp_month\]|exp_month|month)\s*=\s*)(\d{1,2})""", RegexOption.IGNORE_CASE),
+            Regex("""((?:card\[exp_month\]|exp_month|expiry_month|month)\s*=\s*)(\d{1,2})""", RegexOption.IGNORE_CASE),
             "$1{mm}"
         )
         out = out.replace(
-            Regex("""((?:card\[exp_year\]|exp_year|year)\s*=\s*)(\d{2,4})""", RegexOption.IGNORE_CASE),
+            Regex("""((?:card\[exp_year\]|exp_year|expiry_year|year)\s*=\s*)(\d{2,4})""", RegexOption.IGNORE_CASE),
             "$1{yyyy}"
         )
-        // Replace JSON "number":"...", "cvv":"...", "exp_month":..., "exp_year":...
+        out = out.replace(
+            Regex("""((?:email|user_email|login_email)\s*=\s*)([A-Za-z0-9._%+-]+(?:%40|@)[A-Za-z0-9.-]+\.[A-Za-z]{2,})""", RegexOption.IGNORE_CASE),
+            "$1{email}"
+        )
+        out = out.replace(
+            Regex("""((?:password|passwd|pass|pwd)\s*=\s*)([^&\s]{3,48})""", RegexOption.IGNORE_CASE),
+            "$1{pass}"
+        )
+        // Replace JSON "number":"...", "cvv":"...", "exp_month":..., "exp_year":..., "email":"...", "password":"..."
         out = out.replace(
             Regex("""("(?:number|card_number|cardNumber|pan)"\s*:\s*")([0-9\s-]{13,24})(")""", RegexOption.IGNORE_CASE),
             "$1{card}$3"
         )
         out = out.replace(
-            Regex("""("(?:cvc|cvv)"\s*:\s*")(\d{3,4})(")""", RegexOption.IGNORE_CASE),
+            Regex("""("(?:cvc|cvv|security_code|securityCode)"\s*:\s*")(\d{3,4})(")""", RegexOption.IGNORE_CASE),
             "$1{cvv}$3"
         )
         out = out.replace(
-            Regex("""("(?:exp_month|month)"\s*:\s*")(\d{1,2})(")""", RegexOption.IGNORE_CASE),
+            Regex("""("(?:exp_month|expiry_month|expirationMonth|month)"\s*:\s*")(\d{1,2})(")""", RegexOption.IGNORE_CASE),
             "$1{mm}$3"
         )
         out = out.replace(
-            Regex("""("(?:exp_year|year)"\s*:\s*")(\d{2,4})(")""", RegexOption.IGNORE_CASE),
+            Regex("""("(?:exp_year|expiry_year|expirationYear|year)"\s*:\s*")(\d{2,4})(")""", RegexOption.IGNORE_CASE),
             "$1{yyyy}$3"
+        )
+        out = out.replace(
+            Regex("""("(?:email|emailAddress|user_email)"\s*:\s*")([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})(")""", RegexOption.IGNORE_CASE),
+            "$1{email}$3"
+        )
+        out = out.replace(
+            Regex("""("(?:password|pass|passwd)"\s*:\s*")([^"]{3,48})(")""", RegexOption.IGNORE_CASE),
+            "$1{pass}$3"
         )
         // Standalone raw 15-16 digit card pattern fallback
         out = out.replace(Regex("""\b(?:4|5|3[47]|6(?:011|5))\d{11,15}\b"""), "{card}")
@@ -1003,7 +1891,7 @@ object CustomConfigStudioEngine {
     }
 
     // =========================================================================
-    // 5. Dynamic Request Tokens
+    // 5. Dynamic Request Tokens, Hash/Base64 Utilities & Live Request Preview
     // =========================================================================
 
     fun generateUuidToken(): String = UUID.randomUUID().toString()
@@ -1012,10 +1900,26 @@ object CustomConfigStudioEngine {
 
     fun generateTimestampMillis(): String = System.currentTimeMillis().toString()
 
+    fun generateIsoTimestamp(): String {
+        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+        sdf.timeZone = TimeZone.getTimeZone("UTC")
+        return sdf.format(Date())
+    }
+
     fun generateRandomDigits(count: Int = 6): String =
         buildString(count) {
             repeat(count.coerceIn(1, 16)) { append(Random.nextInt(0, 10)) }
         }
+
+    fun generateRandomHex(length: Int = 16): String {
+        val hex = "0123456789abcdef"
+        return buildString(length) {
+            repeat(length.coerceIn(1, 64)) { append(hex[Random.nextInt(16)]) }
+        }
+    }
+
+    fun generateRandomUserAgent(): String =
+        ROTATING_USER_AGENTS[Random.nextInt(ROTATING_USER_AGENTS.size)]
 
     fun formatSpacedPan(pan: String): String {
         val digits = pan.filter { it.isDigit() }
@@ -1023,17 +1927,306 @@ object CustomConfigStudioEngine {
         return digits.chunked(4).joinToString(" ")
     }
 
+    fun formatDashedPan(pan: String): String {
+        val digits = pan.filter { it.isDigit() }
+        if (digits.length <= 4) return digits
+        return digits.chunked(4).joinToString("-")
+    }
+
+    fun encodeBase64(text: String): String {
+        val raw = text.toByteArray(Charsets.UTF_8)
+        return runCatching { Base64.getEncoder().encodeToString(raw) }
+            .getOrElse { encodeBase64Fallback(raw) }
+    }
+
+    fun sha256Hex(text: String): String = digestHex("SHA-256", text)
+
+    fun md5Hex(text: String): String = digestHex("MD5", text)
+
+    private fun digestHex(algorithm: String, text: String): String = runCatching {
+        val bytes = MessageDigest.getInstance(algorithm).digest(text.toByteArray(Charsets.UTF_8))
+        buildString(bytes.size * 2) {
+            for (b in bytes) {
+                append(String.format(Locale.US, "%02x", b.toInt() and 0xFF))
+            }
+        }
+    }.getOrDefault("")
+
+    /**
+     * Detects whether a sample input line is a Credential Combo (`email:pass` / `user:pass`)
+     * vs a standard 4-field Card record (`PAN|MM|YYYY|CVV`).
+     */
+    fun isComboInputLine(rawLine: String, config: CustomHttpConfig? = null): Boolean {
+        val trimmed = rawLine.trim()
+        if (trimmed.isEmpty()) return false
+        val parts = trimmed.split('|', '/', ':', ';').map { it.trim() }.filter { it.isNotEmpty() }
+        if (parts.size in 2..3 && (parts[0].contains('@') || parts[0].any { it.isLetter() })) {
+            return true
+        }
+        if (config != null && parts.size in 2..3) {
+            val combinedTemplates = "${config.url} ${config.headersText} ${config.bodyTemplate}"
+            if (combinedTemplates.contains("{email}", ignoreCase = true) ||
+                combinedTemplates.contains("{user}", ignoreCase = true) ||
+                combinedTemplates.contains("{pass}", ignoreCase = true) ||
+                combinedTemplates.contains("{base64_combo}", ignoreCase = true)
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Renders a live, deterministic preview of the HTTP request for the given [config] and [sampleLine]
+     * so users can verify token substitution and JSON syntax before running a batch.
+     */
+    fun renderRequestPreview(
+        config: CustomHttpConfig,
+        sampleLine: String
+    ): RenderedRequestPreview {
+        val cleanLine = sampleLine.trim().ifEmpty { "4532250055360003|08|2028|113" }
+        val isCombo = isComboInputLine(cleanLine, config)
+        val parts = cleanLine.split('|', ':', '/')
+        val rawPan = parts.getOrElse(0) { "4532250055360003" }.trim()
+        val pan = if (!isCombo && rawPan.any { it.equals('x', ignoreCase = true) }) {
+            CardValidatorEngine.resolveWildcardPan(rawPan)
+        } else {
+            rawPan
+        }
+        val mm = parts.getOrElse(1) { "08" }.trim().let { if (!isCombo) it.padStart(2, '0') else it }
+        val yyyy = parts.getOrElse(2) { "2028" }.trim().let { if (!isCombo) CardValidatorEngine.normalizeYear(it) else it }
+        val cvv = parts.getOrElse(3) { "113" }.trim()
+        val scheme = CardValidatorEngine.detectScheme(pan)
+
+        val step1DummyCaptures = config.parsedPreRequestParseRules().associate { rule ->
+            rule.name to (rule.defaultValue.ifBlank { "step1_${rule.name}_val" })
+        }
+
+        val built = CustomHttpClient.buildRequest(
+            normalizedLine = if (isCombo) cleanLine else "$pan|$mm|$yyyy|$cvv",
+            pan = pan,
+            mm = mm,
+            yyyy = yyyy,
+            cvv = cvv,
+            scheme = scheme,
+            config = config,
+            step1Captures = step1DummyCaptures
+        )
+
+        val resolvedMethod = built?.method ?: when (config.method) {
+            HttpRequestMethod.GET -> "GET"
+            else -> "POST"
+        }
+        val resolvedUrl = built?.url?.toString() ?: config.url.trim()
+        val resolvedHeaders = built?.headers?.let { hdrs ->
+            (0 until hdrs.size).map { idx -> hdrs.name(idx) to hdrs.value(idx) }
+        } ?: emptyList()
+
+        val resolvedBody = if (resolvedMethod == "GET") {
+            ""
+        } else {
+            CustomHttpClient.renderPreviewBody(
+                normalizedLine = if (isCombo) cleanLine else "$pan|$mm|$yyyy|$cvv",
+                pan = pan,
+                mm = mm,
+                yyyy = yyyy,
+                cvv = cvv,
+                scheme = scheme,
+                config = config,
+                step1Captures = step1DummyCaptures
+            )
+        }
+
+        val isJsonMode = config.method == HttpRequestMethod.POST_JSON ||
+            (config.method == HttpRequestMethod.AUTO && resolvedMethod == "POST")
+        val (jsonOk, jsonDiag) = if (isJsonMode && resolvedBody.isNotBlank()) {
+            validateJsonSyntaxQuick(resolvedBody)
+        } else {
+            null to ""
+        }
+
+        val combinedOut = "$resolvedUrl\n$resolvedBody"
+        val unresolved = Regex("""\{[A-Za-z0-9_:]+\}""")
+            .findAll(combinedOut)
+            .map { it.value }
+            .distinct()
+            .toList()
+
+        return RenderedRequestPreview(
+            resolvedMethod = resolvedMethod,
+            resolvedUrl = resolvedUrl,
+            resolvedHeaders = resolvedHeaders,
+            resolvedBody = resolvedBody,
+            isJsonValid = jsonOk,
+            jsonDiagnostic = jsonDiag,
+            detectedInputType = if (isCombo) "COMBO (email:pass)" else "CARD (${scheme.displayName})",
+            unresolvedTokens = unresolved
+        )
+    }
+
+    internal fun validateJsonSyntaxQuick(jsonText: String): Pair<Boolean, String> {
+        val t = jsonText.trim()
+        if (t.isEmpty()) return false to "Empty JSON body"
+        if (!(t.startsWith("{") && t.endsWith("}")) && !(t.startsWith("[") && t.endsWith("]"))) {
+            return false to "Must start/end with { } or [ ]"
+        }
+        var braceDepth = 0
+        var bracketDepth = 0
+        var inQuotes = false
+        var escaped = false
+        for (ch in t) {
+            if (escaped) {
+                escaped = false
+                continue
+            }
+            if (ch == '\\') {
+                escaped = true
+                continue
+            }
+            if (ch == '"') {
+                inQuotes = !inQuotes
+                continue
+            }
+            if (!inQuotes) {
+                when (ch) {
+                    '{' -> braceDepth++
+                    '}' -> {
+                        braceDepth--
+                        if (braceDepth < 0) return false to "Unexpected closing '}'"
+                    }
+                    '[' -> bracketDepth++
+                    ']' -> {
+                        bracketDepth--
+                        if (bracketDepth < 0) return false to "Unexpected closing ']'"
+                    }
+                }
+            }
+        }
+        if (inQuotes) return false to "Unclosed string quote (\")"
+        if (braceDepth != 0) return false to "Unbalanced braces ({ })"
+        if (bracketDepth != 0) return false to "Unbalanced brackets ([ ])"
+        return true to "Valid JSON"
+    }
+
     // =========================================================================
-    // 6. Pure-Kotlin JSON Config Export / Import & Saved Profiles Serialization
+    // 6. Export to cURL, Export to LoliScript & JSON Config Import / Export
     // =========================================================================
+
+    fun exportToCurlCommand(
+        config: CustomHttpConfig,
+        sampleLine: String = "4532250055360003|08|2028|113"
+    ): String {
+        val preview = renderRequestPreview(config, sampleLine)
+        return buildString(256) {
+            append("curl -X ").append(preview.resolvedMethod)
+            append(" '").append(preview.resolvedUrl.replace("'", "'\\''")).append("'")
+            for ((k, v) in preview.resolvedHeaders) {
+                append(" \\\n  -H '").append(k).append(": ").append(v.replace("'", "'\\''")).append("'")
+            }
+            if (preview.resolvedBody.isNotBlank()) {
+                append(" \\\n  --data-raw '").append(preview.resolvedBody.replace("'", "'\\''")).append("'")
+            }
+        }
+    }
+
+    fun exportToLoliScript(config: CustomHttpConfig): String {
+        fun toLoliTokens(text: String): String = text
+            .replace("{card}", "<CC>", ignoreCase = true)
+            .replace("{pan}", "<CC>", ignoreCase = true)
+            .replace("{mm}", "<MM>", ignoreCase = true)
+            .replace("{yy}", "<YY>", ignoreCase = true)
+            .replace("{yyyy}", "<YYYY>", ignoreCase = true)
+            .replace("{cvv}", "<CVV>", ignoreCase = true)
+            .replace("{email}", "<EMAIL>", ignoreCase = true)
+            .replace("{user}", "<USER>", ignoreCase = true)
+            .replace("{pass}", "<PASS>", ignoreCase = true)
+            .replace("{bin}", "<BIN>", ignoreCase = true)
+            .replace("{lista}", "<LISTA>", ignoreCase = true)
+            .replace(Regex("""\{cap:([A-Za-z0-9_]+)\}""", RegexOption.IGNORE_CASE), "<$1>")
+
+        val methodStr = if (config.method == HttpRequestMethod.GET) "GET" else "POST"
+        val ctype = when (config.method) {
+            HttpRequestMethod.POST_FORM -> "application/x-www-form-urlencoded"
+            else -> "application/json"
+        }
+
+        return buildString(512) {
+            append("# Profile: ").append(config.profileName).append('\n')
+            if (config.preRequestEnabled && config.preRequestUrl.isNotBlank()) {
+                val preMethod = if (config.preRequestMethod == HttpRequestMethod.GET) "GET" else "POST"
+                append("REQUEST ").append(preMethod).append(" \"").append(toLoliTokens(config.preRequestUrl)).append("\"\n")
+                if (config.preRequestBody.isNotBlank()) {
+                    append("  CONTENT \"").append(escapeJson(toLoliTokens(config.preRequestBody))).append("\"\n")
+                    append("  CONTENTTYPE \"application/x-www-form-urlencoded\"\n")
+                }
+                for (rule in config.parsedPreRequestParseRules()) {
+                    when (rule.mode) {
+                        ParseRuleMode.LR -> append("PARSE \"<SOURCE>\" LR \"${escapeJson(rule.leftDelimiter)}\" \"${escapeJson(rule.rightDelimiter)}\" -> VAR \"${rule.name}\"\n")
+                        ParseRuleMode.JSON -> append("PARSE \"<SOURCE>\" JSON \"${escapeJson(rule.expression)}\" -> VAR \"${rule.name}\"\n")
+                        ParseRuleMode.REGEX -> append("PARSE \"<SOURCE>\" REGEX \"${escapeJson(rule.expression)}\" -> VAR \"${rule.name}\"\n")
+                        else -> Unit
+                    }
+                }
+                append('\n')
+            }
+
+            append("REQUEST ").append(methodStr).append(" \"").append(toLoliTokens(config.url)).append("\"\n")
+            if (config.bodyTemplate.isNotBlank() && methodStr != "GET") {
+                append("  CONTENT \"").append(escapeJson(toLoliTokens(config.bodyTemplate))).append("\"\n")
+                append("  CONTENTTYPE \"").append(ctype).append("\"\n")
+            }
+            if (config.userAgent.isNotBlank()) {
+                append("  HEADER \"User-Agent: ").append(escapeJson(config.userAgent)).append("\"\n")
+            }
+            config.headersText.lines().map { it.trim() }.filter { it.contains(':') && !it.startsWith("#") }.forEach { hdr ->
+                append("  HEADER \"").append(escapeJson(toLoliTokens(hdr))).append("\"\n")
+            }
+
+            val parseRules = config.parsedParseRules()
+            if (parseRules.isNotEmpty()) {
+                append('\n')
+                for (rule in parseRules) {
+                    val outKind = if (rule.showInOutput) "CAP" else "VAR"
+                    when (rule.mode) {
+                        ParseRuleMode.LR -> append("PARSE \"<SOURCE>\" LR \"${escapeJson(rule.leftDelimiter)}\" \"${escapeJson(rule.rightDelimiter)}\" -> $outKind \"${rule.name}\"\n")
+                        ParseRuleMode.JSON -> append("PARSE \"<SOURCE>\" JSON \"${escapeJson(rule.expression)}\" -> $outKind \"${rule.name}\"\n")
+                        ParseRuleMode.REGEX -> append("PARSE \"<SOURCE>\" REGEX \"${escapeJson(rule.expression)}\" -> $outKind \"${rule.name}\"\n")
+                        else -> append("PARSE \"<HEADERS>\" JSON \"${escapeJson(rule.expression)}\" -> $outKind \"${rule.name}\"\n")
+                    }
+                }
+            }
+
+            val checkpoints = config.parsedCheckpointRules()
+            if (checkpoints.isNotEmpty()) {
+                append("\nKEYCHECK\n")
+                for (cp in checkpoints) {
+                    val chainType = when (cp.verdict) {
+                        ResultBucket.LIVE -> "Success"
+                        ResultBucket.DIE -> "Failure"
+                        ResultBucket.UNKNOWN -> "Retry"
+                    }
+                    val op = if (cp.condition == CheckpointCondition.BODY_CONTAINS_ALL) "AND" else "OR"
+                    append("  KEYCHAIN ").append(chainType).append(' ').append(op).append('\n')
+                    val terms = if (cp.condition == CheckpointCondition.BODY_CONTAINS_ANY || cp.condition == CheckpointCondition.BODY_CONTAINS_ALL) {
+                        cp.expectedValue.split(',', '|', ';').map { it.trim() }.filter { it.isNotEmpty() }
+                    } else {
+                        listOf(cp.expectedValue)
+                    }
+                    for (t in terms) {
+                        append("    KEY \"").append(escapeJson(t)).append("\"\n")
+                    }
+                }
+            }
+        }
+    }
 
     fun exportConfigToJson(config: CustomHttpConfig): String {
         val parseRules = parseParseRules(config.parseRulesSpec)
         val checkpoints = parseCheckpointRules(config.checkpointRulesSpec)
 
-        return buildString(512) {
+        return buildString(640) {
             append("{\n")
-            append("  \"format\": \"bincheck_custom_config_v1\",\n")
+            append("  \"format\": \"bincheck_custom_config_v2\",\n")
             append("  \"profileName\": \"${escapeJson(config.profileName)}\",\n")
             append("  \"url\": \"${escapeJson(config.url)}\",\n")
             append("  \"method\": \"${escapeJson(config.method.name)}\",\n")
@@ -1052,6 +2245,13 @@ object CustomConfigStudioEngine {
             append("  \"proxyListText\": \"${escapeJson(config.proxyListText)}\",\n")
             append("  \"parseRulesSpec\": \"${escapeJson(config.parseRulesSpec)}\",\n")
             append("  \"checkpointRulesSpec\": \"${escapeJson(config.checkpointRulesSpec)}\",\n")
+            append("  \"preRequestEnabled\": ${config.preRequestEnabled},\n")
+            append("  \"preRequestUrl\": \"${escapeJson(config.preRequestUrl)}\",\n")
+            append("  \"preRequestMethod\": \"${escapeJson(config.preRequestMethod.name)}\",\n")
+            append("  \"preRequestHeaders\": \"${escapeJson(config.preRequestHeaders)}\",\n")
+            append("  \"preRequestBody\": \"${escapeJson(config.preRequestBody)}\",\n")
+            append("  \"preRequestParseRulesSpec\": \"${escapeJson(config.preRequestParseRulesSpec)}\",\n")
+            append("  \"skipLocalLuhnPrecheck\": ${config.skipLocalLuhnPrecheck},\n")
             append("  \"parseRulesCount\": ${parseRules.size},\n")
             append("  \"checkpointsCount\": ${checkpoints.size}\n")
             append("}")
@@ -1097,6 +2297,17 @@ object CustomConfigStudioEngine {
         val proxyListText = extractJsonPathValue(trimmed, "proxyListText").orEmpty()
         val parseRulesSpec = extractJsonPathValue(trimmed, "parseRulesSpec").orEmpty()
         val checkpointRulesSpec = extractJsonPathValue(trimmed, "checkpointRulesSpec").orEmpty()
+        val preRequestEnabled = extractJsonPathValue(trimmed, "preRequestEnabled")
+            ?.toBooleanStrictOrNull() ?: false
+        val preRequestUrl = extractJsonPathValue(trimmed, "preRequestUrl").orEmpty().trim()
+        val preRequestMethodStr = extractJsonPathValue(trimmed, "preRequestMethod").orEmpty().uppercase(Locale.ROOT)
+        val preRequestMethod = runCatching { HttpRequestMethod.valueOf(preRequestMethodStr) }
+            .getOrDefault(HttpRequestMethod.POST_FORM)
+        val preRequestHeaders = extractJsonPathValue(trimmed, "preRequestHeaders").orEmpty()
+        val preRequestBody = extractJsonPathValue(trimmed, "preRequestBody").orEmpty()
+        val preRequestParseRulesSpec = extractJsonPathValue(trimmed, "preRequestParseRulesSpec").orEmpty()
+        val skipLocalLuhnPrecheck = extractJsonPathValue(trimmed, "skipLocalLuhnPrecheck")
+            ?.toBooleanStrictOrNull() ?: false
 
         CustomHttpConfig(
             profileName = profileName,
@@ -1116,7 +2327,14 @@ object CustomConfigStudioEngine {
             proxyEnabled = proxyEnabled,
             proxyProtocol = proxyProtocol,
             proxyRotation = proxyRotation,
-            proxyListText = proxyListText
+            proxyListText = proxyListText,
+            preRequestEnabled = preRequestEnabled,
+            preRequestUrl = preRequestUrl,
+            preRequestMethod = preRequestMethod,
+            preRequestHeaders = preRequestHeaders,
+            preRequestBody = preRequestBody,
+            preRequestParseRulesSpec = preRequestParseRulesSpec,
+            skipLocalLuhnPrecheck = skipLocalLuhnPrecheck
         )
     }
 

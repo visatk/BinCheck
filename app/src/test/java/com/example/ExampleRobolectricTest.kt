@@ -361,7 +361,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `validationApiProviders builds and parses Payate and Chkr responses`() {
+    fun `validationApiProviders builds and parses Payate responses`() {
         val payateReq = ValidationApiProviders.buildPayateRequest("5154620021111602|10|2031|564")
         assertEquals("POST", payateReq.method)
         assertEquals(ValidationApiProviders.PAYATE_URL, payateReq.url.toString())
@@ -387,32 +387,6 @@ class ExampleRobolectricTest {
             """{"error":3,"msg":"<div><b style='color:#FF8C00'>Unknown<\/b> | 5154620021142854 | 11\/2029 | [BIN: 515462] $2.07 Checked - Shinji<\/div>"}"""
         )
         assertEquals(ResultBucket.UNKNOWN, payateUnknown.bucket)
-
-        val chkrReq = ValidationApiProviders.buildChkrRequest("379363037471377|07|2034|3204")
-        assertEquals("POST", chkrReq.method)
-        assertEquals(ValidationApiProviders.CHKR_URL, chkrReq.url.toString())
-        val chkrBuf = Buffer()
-        chkrReq.body!!.writeTo(chkrBuf)
-        assertEquals("""{"data":"379363037471377|07|2034|3204","charge":false}""", chkrBuf.readUtf8())
-
-        val chkrLive = ValidationApiProviders.parseChkrResponse(
-            pan = "379363037471377",
-            statusCode = 200,
-            bodyStr = """{"code":1,"status":"Live","message":"Charge OK. [GATE_01@chkr.cc]","card":{"card":"379363037471377|07|2034|3204","bank":"AMERICAN EXPRESS US","type":"american express","category":"credit","brand":"AMERICAN EXPRESS","country":{"name":"US","code":"XX","emoji":"🇺🇸","currency":"USD"}}}"""
-        )
-        assertEquals(ResultBucket.LIVE, chkrLive.bucket)
-        assertEquals("Charge OK. [GATE_01@chkr.cc]", chkrLive.detailMessage)
-        assertEquals("AMERICAN EXPRESS US", chkrLive.embeddedBinInfo?.bankName)
-        assertEquals("US", chkrLive.embeddedBinInfo?.countryCode)
-        assertEquals("🇺🇸", chkrLive.embeddedBinInfo?.countryEmoji)
-
-        val chkrDie = ValidationApiProviders.parseChkrResponse(
-            pan = "379363037459380",
-            statusCode = 200,
-            bodyStr = """{"code":0,"status":"Die","message":"Unable to authenticate"}"""
-        )
-        assertEquals(ResultBucket.DIE, chkrDie.bucket)
-        assertEquals("Unable to authenticate", chkrDie.detailMessage)
     }
 
     @Test
@@ -545,7 +519,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `topBar displays fixed 10s delay summary when idle in Chkr mode`() {
+    fun `topBar displays fixed 3s delay summary when idle in Payate mode`() {
         composeTestRule.setContent {
             MyApplicationTheme(darkTheme = true, dynamicColor = false) {
                 BinCheckTopBar(
@@ -554,7 +528,7 @@ class ExampleRobolectricTest {
                     isLookingUpBin = false,
                     processedCount = 0,
                     totalBatchCount = 0,
-                    validationMode = ValidationMode.CHKR_CC,
+                    validationMode = ValidationMode.PAYATE_MOCK,
                     httpMethod = HttpRequestMethod.AUTO,
                     concurrency = 4,
                     historyCount = 0,
@@ -566,7 +540,7 @@ class ExampleRobolectricTest {
             }
         }
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("CHKR.CC • 10s delay").assertIsDisplayed()
+        composeTestRule.onNodeWithText("PAYATE • 3s delay").assertIsDisplayed()
     }
 
     @Test
@@ -1179,6 +1153,63 @@ class ExampleRobolectricTest {
         assertEquals(ValidationMode.SANDBOX_SUITE, savedMode)
         assertEquals("https://httpbin.org/post", savedHttpConfig?.url)
         assertEquals(CustomHttpConfig.ZERO_DOLLAR_AUTH_JSON_PAYLOAD, savedHttpConfig?.bodyTemplate)
+    }
+
+    @Test
+    fun `customConfigStudioBottomSheet switches across all 5 tabs and applies config`() {
+        var appliedConfig: CustomHttpConfig? = null
+
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                com.example.ui.CustomConfigStudioBottomSheet(
+                    initialConfig = CustomHttpConfig(
+                        profileName = "Test Studio Profile",
+                        url = "https://postman-echo.com/post",
+                        method = HttpRequestMethod.POST_JSON,
+                        bodyTemplate = CustomHttpConfig.ZERO_DOLLAR_AUTH_JSON_PAYLOAD,
+                        preRequestEnabled = true,
+                        preRequestUrl = "https://postman-echo.com/get"
+                    ),
+                    savedProfiles = emptyList(),
+                    isTestingEndpoint = false,
+                    probeResult = null,
+                    onTestConfig = { _, _ -> },
+                    onClearProbeResult = {},
+                    onSaveAndUseConfig = { cfg -> appliedConfig = cfg },
+                    onSaveProfile = {},
+                    onDeleteProfile = {},
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("config_studio_sheet").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("config_studio_open_curl_import_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("config_studio_prerequest_switch").performScrollTo().assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("config_studio_tab_parse").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("config_studio_parse_name_input").performScrollTo().assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("config_studio_tab_checkpoints").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("config_studio_checkpoint_value_input").performScrollTo().assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("config_studio_tab_proxy").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("config_studio_proxy_switch").performScrollTo().assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("config_studio_tab_profiles").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("config_studio_save_profile_button").performScrollTo().assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("config_studio_apply_button").performClick()
+        composeTestRule.waitForIdle()
+
+        assertEquals("Test Studio Profile", appliedConfig?.profileName)
+        assertEquals(true, appliedConfig?.preRequestEnabled)
+        assertEquals("https://postman-echo.com/get", appliedConfig?.preRequestUrl)
     }
 }
 

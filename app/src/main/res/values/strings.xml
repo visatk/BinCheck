@@ -56,12 +56,11 @@
     <string name="bin_lookup_copy">Copy Details</string>
     <string name="auto_bin_lookup_title">Auto-Check BINs on Live Cards</string>
     <string name="auto_bin_lookup_subtitle">Fetch issuer bank, card tier, and country as Live cards come in</string>
-    <string name="mode_chkr_cc">Chkr.cc Gateway</string>
     <string name="mode_payate_mock">Payate Gateway</string>
-    <string name="mode_multi_api">Smart Failover (Chkr.cc → Payate)</string>
+    <string name="mode_multi_api">Smart Failover (Payate → Sandbox)</string>
     <string name="mode_sandbox_suite">All-Sandbox $0.00 Auth Suite</string>
     <string name="sandbox_suite_title">$0.00 Zero-Dollar Auth Sandboxes</string>
-    <string name="sandbox_suite_subtitle">Run $0.00 Auth across Stripe, Braintree, Adyen, Square, Authorize.Net &amp; Checkout.com</string>
+    <string name="sandbox_suite_subtitle">Run $0.00 Auth across Stripe, Braintree, Authorize.Net &amp; Checkout.com</string>
     <string name="http_sandbox_presets_label">$0.00 Auth Sandbox &amp; Echo Endpoints</string>
     <string name="nav_open_drawer">Open menu</string>
     <string name="nav_workspace">Workspace</string>

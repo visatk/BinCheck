@@ -47,6 +47,13 @@ data class ValidatorSettings(
     val httpProxyProtocol: ProxyProtocol = ProxyProtocol.HTTP,
     val httpProxyRotation: ProxyRotationMode = ProxyRotationMode.ROUND_ROBIN,
     val httpProxyListText: String = "",
+    val httpPreRequestEnabled: Boolean = false,
+    val httpPreRequestUrl: String = "",
+    val httpPreRequestMethod: HttpRequestMethod = HttpRequestMethod.POST_FORM,
+    val httpPreRequestHeaders: String = "",
+    val httpPreRequestBody: String = "",
+    val httpPreRequestParseRulesSpec: String = "",
+    val httpSkipLocalLuhnPrecheck: Boolean = false,
     val savedConfigProfilesRaw: String = "",
     val autoResolveWildcards: Boolean = true,
     val autoBinLookupForLive: Boolean = true,
@@ -86,7 +93,14 @@ data class ValidatorSettings(
         proxyEnabled = httpProxyEnabled,
         proxyProtocol = httpProxyProtocol,
         proxyRotation = httpProxyRotation,
-        proxyListText = httpProxyListText
+        proxyListText = httpProxyListText,
+        preRequestEnabled = httpPreRequestEnabled,
+        preRequestUrl = httpPreRequestUrl,
+        preRequestMethod = httpPreRequestMethod,
+        preRequestHeaders = httpPreRequestHeaders,
+        preRequestBody = httpPreRequestBody,
+        preRequestParseRulesSpec = httpPreRequestParseRulesSpec,
+        skipLocalLuhnPrecheck = httpSkipLocalLuhnPrecheck
     )
 
     fun savedCustomProfiles(): List<CustomConfigProfile> =
@@ -120,6 +134,13 @@ class ValidatorPreferencesRepository(private val context: Context) {
         val HTTP_PROXY_PROTOCOL = stringPreferencesKey("http_proxy_protocol")
         val HTTP_PROXY_ROTATION = stringPreferencesKey("http_proxy_rotation")
         val HTTP_PROXY_LIST_TEXT = stringPreferencesKey("http_proxy_list_text")
+        val HTTP_PRE_REQUEST_ENABLED = booleanPreferencesKey("http_pre_request_enabled")
+        val HTTP_PRE_REQUEST_URL = stringPreferencesKey("http_pre_request_url")
+        val HTTP_PRE_REQUEST_METHOD = stringPreferencesKey("http_pre_request_method")
+        val HTTP_PRE_REQUEST_HEADERS = stringPreferencesKey("http_pre_request_headers")
+        val HTTP_PRE_REQUEST_BODY = stringPreferencesKey("http_pre_request_body")
+        val HTTP_PRE_REQUEST_PARSE_RULES_SPEC = stringPreferencesKey("http_pre_request_parse_rules_spec")
+        val HTTP_SKIP_LOCAL_LUHN_PRECHECK = booleanPreferencesKey("http_skip_local_luhn_precheck")
         val SAVED_CONFIG_PROFILES_RAW = stringPreferencesKey("saved_config_profiles_raw")
         val AUTO_RESOLVE_WILDCARDS = booleanPreferencesKey("auto_resolve_wildcards")
         val AUTO_BIN_LOOKUP_FOR_LIVE = booleanPreferencesKey("auto_bin_lookup_for_live")
@@ -160,6 +181,10 @@ class ValidatorPreferencesRepository(private val context: Context) {
         val proxyRotation = runCatching { ProxyRotationMode.valueOf(proxyRotStr) }
             .getOrDefault(ProxyRotationMode.ROUND_ROBIN)
 
+        val preMethodStr = prefs[Keys.HTTP_PRE_REQUEST_METHOD] ?: HttpRequestMethod.POST_FORM.name
+        val preRequestMethod = runCatching { HttpRequestMethod.valueOf(preMethodStr) }
+            .getOrDefault(HttpRequestMethod.POST_FORM)
+
         ValidatorSettings(
             validationMode = mode,
             webhookUrl = prefs[Keys.WEBHOOK_URL] ?: "",
@@ -179,6 +204,13 @@ class ValidatorPreferencesRepository(private val context: Context) {
             httpProxyProtocol = proxyProtocol,
             httpProxyRotation = proxyRotation,
             httpProxyListText = prefs[Keys.HTTP_PROXY_LIST_TEXT] ?: "",
+            httpPreRequestEnabled = prefs[Keys.HTTP_PRE_REQUEST_ENABLED] ?: false,
+            httpPreRequestUrl = prefs[Keys.HTTP_PRE_REQUEST_URL] ?: "",
+            httpPreRequestMethod = preRequestMethod,
+            httpPreRequestHeaders = prefs[Keys.HTTP_PRE_REQUEST_HEADERS] ?: "",
+            httpPreRequestBody = prefs[Keys.HTTP_PRE_REQUEST_BODY] ?: "",
+            httpPreRequestParseRulesSpec = prefs[Keys.HTTP_PRE_REQUEST_PARSE_RULES_SPEC] ?: "",
+            httpSkipLocalLuhnPrecheck = prefs[Keys.HTTP_SKIP_LOCAL_LUHN_PRECHECK] ?: false,
             savedConfigProfilesRaw = prefs[Keys.SAVED_CONFIG_PROFILES_RAW] ?: "",
             autoResolveWildcards = prefs[Keys.AUTO_RESOLVE_WILDCARDS] ?: true,
             autoBinLookupForLive = prefs[Keys.AUTO_BIN_LOOKUP_FOR_LIVE] ?: true,
@@ -241,6 +273,13 @@ class ValidatorPreferencesRepository(private val context: Context) {
             prefs[Keys.HTTP_PROXY_PROTOCOL] = config.proxyProtocol.name
             prefs[Keys.HTTP_PROXY_ROTATION] = config.proxyRotation.name
             prefs[Keys.HTTP_PROXY_LIST_TEXT] = config.proxyListText.trim()
+            prefs[Keys.HTTP_PRE_REQUEST_ENABLED] = config.preRequestEnabled
+            prefs[Keys.HTTP_PRE_REQUEST_URL] = config.preRequestUrl.trim()
+            prefs[Keys.HTTP_PRE_REQUEST_METHOD] = config.preRequestMethod.name
+            prefs[Keys.HTTP_PRE_REQUEST_HEADERS] = config.preRequestHeaders.trim()
+            prefs[Keys.HTTP_PRE_REQUEST_BODY] = config.preRequestBody.trim()
+            prefs[Keys.HTTP_PRE_REQUEST_PARSE_RULES_SPEC] = config.preRequestParseRulesSpec
+            prefs[Keys.HTTP_SKIP_LOCAL_LUHN_PRECHECK] = config.skipLocalLuhnPrecheck
         }
     }
 
@@ -285,6 +324,13 @@ class ValidatorPreferencesRepository(private val context: Context) {
         httpProxyProtocol: ProxyProtocol? = null,
         httpProxyRotation: ProxyRotationMode? = null,
         httpProxyListText: String? = null,
+        httpPreRequestEnabled: Boolean? = null,
+        httpPreRequestUrl: String? = null,
+        httpPreRequestMethod: HttpRequestMethod? = null,
+        httpPreRequestHeaders: String? = null,
+        httpPreRequestBody: String? = null,
+        httpPreRequestParseRulesSpec: String? = null,
+        httpSkipLocalLuhnPrecheck: Boolean? = null,
         autoResolveWildcards: Boolean,
         autoBinLookupForLive: Boolean = true,
         batchDelayMs: Long,
@@ -320,6 +366,13 @@ class ValidatorPreferencesRepository(private val context: Context) {
             httpProxyProtocol?.let { prefs[Keys.HTTP_PROXY_PROTOCOL] = it.name }
             httpProxyRotation?.let { prefs[Keys.HTTP_PROXY_ROTATION] = it.name }
             httpProxyListText?.let { prefs[Keys.HTTP_PROXY_LIST_TEXT] = it.trim() }
+            httpPreRequestEnabled?.let { prefs[Keys.HTTP_PRE_REQUEST_ENABLED] = it }
+            httpPreRequestUrl?.let { prefs[Keys.HTTP_PRE_REQUEST_URL] = it.trim() }
+            httpPreRequestMethod?.let { prefs[Keys.HTTP_PRE_REQUEST_METHOD] = it.name }
+            httpPreRequestHeaders?.let { prefs[Keys.HTTP_PRE_REQUEST_HEADERS] = it.trim() }
+            httpPreRequestBody?.let { prefs[Keys.HTTP_PRE_REQUEST_BODY] = it.trim() }
+            httpPreRequestParseRulesSpec?.let { prefs[Keys.HTTP_PRE_REQUEST_PARSE_RULES_SPEC] = it }
+            httpSkipLocalLuhnPrecheck?.let { prefs[Keys.HTTP_SKIP_LOCAL_LUHN_PRECHECK] = it }
             prefs[Keys.AUTO_RESOLVE_WILDCARDS] = autoResolveWildcards
             prefs[Keys.AUTO_BIN_LOOKUP_FOR_LIVE] = autoBinLookupForLive
             prefs[Keys.BATCH_DELAY_MS] = batchDelayMs.coerceIn(0L, ValidationMode.MAX_CUSTOM_DELAY_MS)

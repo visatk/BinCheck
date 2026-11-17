@@ -15,6 +15,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material3.AlertDialog
@@ -47,6 +49,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -90,6 +93,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.domain.CheckpointCondition
+import com.example.domain.CheckpointEvaluationResult
 import com.example.domain.CustomCheckpointRule
 import com.example.domain.CustomConfigProfile
 import com.example.domain.CustomConfigStudioEngine
@@ -100,6 +104,7 @@ import com.example.domain.HttpRequestMethod
 import com.example.domain.ParseRuleMode
 import com.example.domain.ProxyProtocol
 import com.example.domain.ProxyRotationMode
+import com.example.domain.RenderedRequestPreview
 import com.example.domain.ResultBucket
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalConsoleColors
@@ -115,6 +120,14 @@ private enum class ConfigStudioTab(val title: String) {
     CHECKPOINTS("Checkpoints"),
     PROXY("Proxy"),
     PROFILES("Profiles")
+}
+
+private enum class TokenCategory(val label: String) {
+    ALL("All"),
+    CARD("Card & BIN"),
+    COMBO("Combo"),
+    DYNAMIC("Dynamic & Hash"),
+    STEP1("Step 1 Captures")
 }
 
 @OptIn(
@@ -158,6 +171,7 @@ fun CustomConfigStudioBottomSheet(
     var userAgent by rememberSaveable { mutableStateOf(initialConfig.userAgent) }
     var followRedirects by rememberSaveable { mutableStateOf(initialConfig.followRedirects) }
     var compressBodyGzip by rememberSaveable { mutableStateOf(initialConfig.compressBodyGzip) }
+    var skipLocalLuhnPrecheck by rememberSaveable { mutableStateOf(initialConfig.skipLocalLuhnPrecheck) }
     var timeoutSeconds by rememberSaveable { mutableIntStateOf(initialConfig.timeoutSeconds) }
     var maxRetries by rememberSaveable { mutableIntStateOf(initialConfig.maxRetries) }
     var liveKeywords by rememberSaveable { mutableStateOf(initialConfig.liveKeywords) }
@@ -166,6 +180,14 @@ fun CustomConfigStudioBottomSheet(
     var proxyProtocol by rememberSaveable { mutableStateOf(initialConfig.proxyProtocol) }
     var proxyRotation by rememberSaveable { mutableStateOf(initialConfig.proxyRotation) }
     var proxyListText by rememberSaveable { mutableStateOf(initialConfig.proxyListText) }
+
+    // Step 1 Pre-Request (Handshake) state
+    var preRequestEnabled by rememberSaveable { mutableStateOf(initialConfig.preRequestEnabled) }
+    var preRequestUrl by rememberSaveable { mutableStateOf(initialConfig.preRequestUrl) }
+    var preRequestMethod by rememberSaveable { mutableStateOf(initialConfig.preRequestMethod) }
+    var preRequestHeaders by rememberSaveable { mutableStateOf(initialConfig.preRequestHeaders) }
+    var preRequestBody by rememberSaveable { mutableStateOf(initialConfig.preRequestBody) }
+
     var sampleTestLine by rememberSaveable { mutableStateOf("453225005536xxx3|08|2028|113") }
     var dryRunStatusCode by rememberSaveable { mutableIntStateOf(200) }
     var dryRunBodyText by rememberSaveable {
@@ -179,6 +201,11 @@ fun CustomConfigStudioBottomSheet(
         }
     }
 
+    val preRequestParseRules = remember {
+        mutableStateListOf<CustomParseRule>().apply {
+            addAll(initialConfig.parsedPreRequestParseRules())
+        }
+    }
     val parseRules = remember {
         mutableStateListOf<CustomParseRule>().apply {
             addAll(initialConfig.parsedParseRules())
@@ -208,7 +235,14 @@ fun CustomConfigStudioBottomSheet(
         proxyEnabled = proxyEnabled,
         proxyProtocol = proxyProtocol,
         proxyRotation = proxyRotation,
-        proxyListText = proxyListText.trim()
+        proxyListText = proxyListText.trim(),
+        preRequestEnabled = preRequestEnabled,
+        preRequestUrl = preRequestUrl.trim(),
+        preRequestMethod = preRequestMethod,
+        preRequestHeaders = preRequestHeaders.trim(),
+        preRequestBody = preRequestBody.trim(),
+        preRequestParseRulesSpec = CustomConfigStudioEngine.serializeParseRules(preRequestParseRules.toList()),
+        skipLocalLuhnPrecheck = skipLocalLuhnPrecheck
     )
 
     fun loadConfigIntoEditor(cfg: CustomHttpConfig, message: String, preserveRulesIfEmpty: Boolean = false) {
@@ -220,6 +254,7 @@ fun CustomConfigStudioBottomSheet(
         userAgent = cfg.userAgent
         followRedirects = cfg.followRedirects
         compressBodyGzip = cfg.compressBodyGzip
+        skipLocalLuhnPrecheck = cfg.skipLocalLuhnPrecheck
         timeoutSeconds = cfg.timeoutSeconds
         maxRetries = cfg.maxRetries
         if (!preserveRulesIfEmpty || cfg.liveKeywords != CustomHttpConfig.DEFAULT_LIVE_KEYWORDS) {
@@ -228,15 +263,26 @@ fun CustomConfigStudioBottomSheet(
         if (!preserveRulesIfEmpty || cfg.dieKeywords != CustomHttpConfig.DEFAULT_DIE_KEYWORDS) {
             dieKeywords = cfg.dieKeywords
         }
+        val importedParse = cfg.parsedParseRules()
+        val importedCheckpoints = cfg.parsedCheckpointRules()
+        if (!preserveRulesIfEmpty || importedParse.isNotEmpty() || importedCheckpoints.isNotEmpty()) {
+            parseRules.clear()
+            parseRules.addAll(importedParse)
+            checkpointRules.clear()
+            checkpointRules.addAll(importedCheckpoints)
+        }
         if (!preserveRulesIfEmpty) {
             proxyEnabled = cfg.proxyEnabled
             proxyProtocol = cfg.proxyProtocol
             proxyRotation = cfg.proxyRotation
             proxyListText = cfg.proxyListText
-            parseRules.clear()
-            parseRules.addAll(cfg.parsedParseRules())
-            checkpointRules.clear()
-            checkpointRules.addAll(cfg.parsedCheckpointRules())
+            preRequestEnabled = cfg.preRequestEnabled
+            preRequestUrl = cfg.preRequestUrl
+            preRequestMethod = cfg.preRequestMethod
+            preRequestHeaders = cfg.preRequestHeaders
+            preRequestBody = cfg.preRequestBody
+            preRequestParseRules.clear()
+            preRequestParseRules.addAll(cfg.parsedPreRequestParseRules())
         }
         onClearProbeResult()
         statusBanner = message
@@ -331,7 +377,7 @@ fun CustomConfigStudioBottomSheet(
                 showCurlImportDialog = false
                 loadConfigIntoEditor(
                     cfg = importedConfig,
-                    message = "Imported DevTools request into '${importedConfig.profileName}'.",
+                    message = "Imported request into '${importedConfig.profileName}'.",
                     preserveRulesIfEmpty = true
                 )
                 selectedTab = ConfigStudioTab.REQUEST.ordinal
@@ -351,12 +397,38 @@ fun CustomConfigStudioBottomSheet(
         )
     }
 
-    val dryRunCheckpointMatch = remember(dryRunStatusCode, dryRunBodyText, dryRunCaptures, checkpointRules.toList()) {
-        CustomConfigStudioEngine.evaluateCheckpoints(
+    val dryRunEvaluation = remember(
+        dryRunStatusCode,
+        dryRunBodyText,
+        dryRunCaptures,
+        checkpointRules.toList(),
+        probeResult?.responseHeaders,
+        probeResult?.latencyMs
+    ) {
+        CustomConfigStudioEngine.evaluateCheckpointsDetailed(
             statusCode = dryRunStatusCode,
             bodyStr = dryRunBodyText,
             captures = dryRunCaptures,
-            rules = checkpointRules.toList()
+            rules = checkpointRules.toList(),
+            responseHeaders = probeResult?.responseHeaders ?: emptyMap(),
+            latencyMs = probeResult?.latencyMs ?: 0L
+        )
+    }
+
+    val liveRequestPreview = remember(
+        url,
+        method,
+        headersText,
+        bodyTemplate,
+        userAgent,
+        compressBodyGzip,
+        preRequestEnabled,
+        preRequestParseRules.toList(),
+        sampleTestLine
+    ) {
+        CustomConfigStudioEngine.renderRequestPreview(
+            config = buildCurrentConfig(),
+            sampleLine = sampleTestLine
         )
     }
 
@@ -405,7 +477,7 @@ fun CustomConfigStudioBottomSheet(
                             color = colorScheme.onSurface
                         )
                         Text(
-                            text = "HTTP Builder • Parse Captures • Checkpoints • Proxy Pool",
+                            text = "2-Step HTTP • 6-Mode Parser • Keycheck Debugger • Proxy Pool",
                             style = MaterialTheme.typography.labelSmall,
                             color = colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -429,7 +501,7 @@ fun CustomConfigStudioBottomSheet(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Quick Actions & File I/O Bar (cURL/fetch + Import/Export JSON)
+            // Quick Actions & File I/O Bar (cURL/fetch/Raw HTTP/LoliScript + Import/Export JSON + Copy cURL/Loli)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -453,7 +525,7 @@ fun CustomConfigStudioBottomSheet(
                         modifier = Modifier.size(14.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Import cURL / fetch()", style = MaterialTheme.typography.labelSmall)
+                    Text("Import cURL / fetch / Loli", style = MaterialTheme.typography.labelSmall)
                 }
 
                 OutlinedButton(
@@ -493,11 +565,54 @@ fun CustomConfigStudioBottomSheet(
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Export .json", style = MaterialTheme.typography.labelSmall)
                 }
+
+                OutlinedButton(
+                    onClick = {
+                        val curlCmd = CustomConfigStudioEngine.exportToCurlCommand(
+                            config = buildCurrentConfig(),
+                            sampleLine = sampleTestLine
+                        )
+                        clipboard.setText(AnnotatedString(curlCmd))
+                        statusBanner = "Copied ready-to-run cURL command to clipboard."
+                    },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier
+                        .height(34.dp)
+                        .testTag("config_studio_copy_curl_button")
+                ) {
+                    Icon(
+                        imageVector = AppIcons.ContentCopy,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Copy cURL", style = MaterialTheme.typography.labelSmall)
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        val loli = CustomConfigStudioEngine.exportToLoliScript(buildCurrentConfig())
+                        clipboard.setText(AnnotatedString(loli))
+                        statusBanner = "Copied OpenBullet LoliScript block to clipboard."
+                    },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier
+                        .height(34.dp)
+                        .testTag("config_studio_copy_loli_button")
+                ) {
+                    Icon(
+                        imageVector = AppIcons.Terminal,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Copy LoliScript", style = MaterialTheme.typography.labelSmall)
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // 4-Stage Pipeline Indicator Strip
+            // Interactive Pipeline Indicator Strip
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -505,6 +620,19 @@ fun CustomConfigStudioBottomSheet(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                if (preRequestEnabled) {
+                    PipelineStagePill(
+                        step = "S1",
+                        label = "Handshake (${preRequestParseRules.size})",
+                        active = selectedTab == ConfigStudioTab.REQUEST.ordinal,
+                        accent = consoleColors.unknownAccent,
+                        onClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            selectedTab = ConfigStudioTab.REQUEST.ordinal
+                        }
+                    )
+                    Text("→", style = MaterialTheme.typography.labelSmall, color = colorScheme.outline)
+                }
                 PipelineStagePill(
                     step = "1",
                     label = method.label,
@@ -600,11 +728,11 @@ fun CustomConfigStudioBottomSheet(
             ) {
                 ConfigStudioTab.entries.forEachIndexed { idx, tab ->
                     val badgeCount = when (tab) {
+                        ConfigStudioTab.REQUEST -> if (preRequestEnabled) 2 else 0
                         ConfigStudioTab.PARSE -> parseRules.size
                         ConfigStudioTab.CHECKPOINTS -> checkpointRules.size
                         ConfigStudioTab.PROXY -> if (proxyEnabled) validProxyCount.coerceAtLeast(1) else 0
                         ConfigStudioTab.PROFILES -> savedProfiles.size + CustomConfigStudioEngine.BUILT_IN_PROFILES.size
-                        ConfigStudioTab.REQUEST -> 0
                     }
                     Tab(
                         selected = selectedTab == idx,
@@ -686,10 +814,28 @@ fun CustomConfigStudioBottomSheet(
                                 onFollowRedirectsChange = { followRedirects = it },
                                 compressBodyGzip = compressBodyGzip,
                                 onCompressBodyGzipChange = { compressBodyGzip = it },
+                                skipLocalLuhnPrecheck = skipLocalLuhnPrecheck,
+                                onSkipLocalLuhnPrecheckChange = { skipLocalLuhnPrecheck = it },
                                 timeoutSeconds = timeoutSeconds,
                                 onTimeoutChange = { timeoutSeconds = it },
                                 maxRetries = maxRetries,
-                                onMaxRetriesChange = { maxRetries = it }
+                                onMaxRetriesChange = { maxRetries = it },
+                                preRequestEnabled = preRequestEnabled,
+                                onPreRequestEnabledChange = { preRequestEnabled = it },
+                                preRequestUrl = preRequestUrl,
+                                onPreRequestUrlChange = { preRequestUrl = it },
+                                preRequestMethod = preRequestMethod,
+                                onPreRequestMethodChange = { preRequestMethod = it },
+                                preRequestHeaders = preRequestHeaders,
+                                onPreRequestHeadersChange = { preRequestHeaders = it },
+                                preRequestBody = preRequestBody,
+                                onPreRequestBodyChange = { preRequestBody = it },
+                                preRequestParseRules = preRequestParseRules,
+                                onAddPreRule = { preRequestParseRules.add(it) },
+                                onRemovePreRule = { idx ->
+                                    if (idx in preRequestParseRules.indices) preRequestParseRules.removeAt(idx)
+                                },
+                                liveRequestPreview = liveRequestPreview
                             )
 
                             ConfigStudioTab.PARSE -> ParseStudioTabContent(
@@ -698,6 +844,9 @@ fun CustomConfigStudioBottomSheet(
                                 onDryRunBodyChange = { dryRunBodyText = it },
                                 dryRunCaptures = dryRunCaptures,
                                 onAddRule = { parseRules.add(it) },
+                                onUpdateRule = { idx, updated ->
+                                    if (idx in parseRules.indices) parseRules[idx] = updated
+                                },
                                 onMoveRule = { from, to ->
                                     if (from in parseRules.indices && to in parseRules.indices) {
                                         val item = parseRules.removeAt(from)
@@ -719,8 +868,12 @@ fun CustomConfigStudioBottomSheet(
                                 onDryRunStatusCodeChange = { dryRunStatusCode = it },
                                 dryRunBodyText = dryRunBodyText,
                                 onDryRunBodyChange = { dryRunBodyText = it },
-                                dryRunCheckpointMatch = dryRunCheckpointMatch,
+                                dryRunCaptures = dryRunCaptures,
+                                dryRunEvaluation = dryRunEvaluation,
                                 onAddCheckpoint = { checkpointRules.add(it) },
+                                onUpdateCheckpoint = { idx, updated ->
+                                    if (idx in checkpointRules.indices) checkpointRules[idx] = updated
+                                },
                                 onMoveCheckpoint = { from, to ->
                                     if (from in checkpointRules.indices && to in checkpointRules.indices) {
                                         val item = checkpointRules.removeAt(from)
@@ -758,13 +911,27 @@ fun CustomConfigStudioBottomSheet(
                                         id = "user_${cfg.profileName.lowercase().hashCode()}_${System.currentTimeMillis() % 10000}",
                                         name = cfg.profileName,
                                         description = desc.ifBlank {
-                                            "${cfg.method.label} • ${parseRules.size} captures • ${checkpointRules.size} checkpoints"
+                                            val stepTag = if (cfg.preRequestEnabled) "2-Step ${cfg.method.label}" else cfg.method.label
+                                            "$stepTag • ${parseRules.size} captures • ${checkpointRules.size} checkpoints"
                                         },
                                         config = cfg,
                                         isBuiltIn = false
                                     )
                                     onSaveProfile(profile)
                                     statusBanner = "Saved '${cfg.profileName}' to your library."
+                                },
+                                onDuplicateProfile = { profile ->
+                                    val copyName = "${profile.name} (Copy)"
+                                    val dupCfg = profile.config.copy(profileName = copyName)
+                                    val dupProfile = CustomConfigProfile(
+                                        id = "user_${copyName.lowercase().hashCode()}_${System.currentTimeMillis() % 10000}",
+                                        name = copyName,
+                                        description = profile.description,
+                                        config = dupCfg,
+                                        isBuiltIn = false
+                                    )
+                                    onSaveProfile(dupProfile)
+                                    loadConfigIntoEditor(dupCfg, "Duplicated and loaded '$copyName'.")
                                 },
                                 onLoadProfile = { profile ->
                                     loadConfigIntoEditor(profile.config, "Loaded profile '${profile.name}'.")
@@ -796,6 +963,19 @@ fun CustomConfigStudioBottomSheet(
                                             }
                                     }
                                 },
+                                onCopyCurl = {
+                                    val curlCmd = CustomConfigStudioEngine.exportToCurlCommand(
+                                        config = buildCurrentConfig(),
+                                        sampleLine = sampleTestLine
+                                    )
+                                    clipboard.setText(AnnotatedString(curlCmd))
+                                    statusBanner = "Copied cURL command to clipboard."
+                                },
+                                onCopyLoliScript = {
+                                    val loli = CustomConfigStudioEngine.exportToLoliScript(buildCurrentConfig())
+                                    clipboard.setText(AnnotatedString(loli))
+                                    statusBanner = "Copied LoliScript block to clipboard."
+                                },
                                 onOpenCurlImporter = { showCurlImportDialog = true }
                             )
                         }
@@ -805,17 +985,32 @@ fun CustomConfigStudioBottomSheet(
                 // Live Probe / Debug Trace Section
                 HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.35f))
 
-                OutlinedTextField(
-                    value = sampleTestLine,
-                    onValueChange = { sampleTestLine = it },
-                    label = { Text("Probe Sample Input Line (Card or email:pass)") },
-                    placeholder = { Text("453225005536xxx3|08|2028|113") },
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("config_studio_sample_line_input")
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = sampleTestLine,
+                        onValueChange = { sampleTestLine = it },
+                        label = { Text("Probe Sample Input Line (Card or email:pass)") },
+                        placeholder = { Text("453225005536xxx3|08|2028|113") },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("config_studio_sample_line_input")
+                    )
+                    PresetMiniPill(
+                        label = if (sampleTestLine.contains('@')) "Card Sample" else "Combo Sample"
+                    ) {
+                        sampleTestLine = if (sampleTestLine.contains('@')) {
+                            "453225005536xxx3|08|2028|113"
+                        } else {
+                            "alice@example.com:Secr3tPass99"
+                        }
+                    }
+                }
 
                 AnimatedVisibility(visible = probeResult != null) {
                     probeResult?.let { probe ->
@@ -977,7 +1172,7 @@ private fun CurlOrFetchImportDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "Import DevTools cURL / fetch()",
+                text = "Universal Request Importer",
                 style = MaterialTheme.typography.titleMedium,
                 fontFamily = SpaceGroteskFamily,
                 fontWeight = FontWeight.Bold
@@ -986,15 +1181,60 @@ private fun CurlOrFetchImportDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "Paste a Chrome DevTools 'Copy as cURL (bash)' or 'Copy as fetch' snippet. Headers, URL, method, and payload are auto-extracted.",
+                    text = "Paste Chrome DevTools cURL / fetch(), Burp / HTTP Toolkit Raw HTTP, or an OpenBullet LoliScript block. URL, headers, payload, and rules are auto-extracted.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+
+                // Quick format samples for 1-tap testing
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    PresetMiniPill(label = "Sample cURL") {
+                        snippet = """
+                            curl -X POST 'https://postman-echo.com/post' \
+                              -H 'Content-Type: application/json' \
+                              -H 'X-Idempotency: {uuid}' \
+                              --data-raw '{"number":"4532250055360003","exp_month":"08","exp_year":"2028","cvv":"113"}'
+                        """.trimIndent()
+                        errorMsg = null
+                    }
+                    PresetMiniPill(label = "Sample Raw HTTP") {
+                        snippet = """
+                            POST /post HTTP/1.1
+                            Host: httpbin.org
+                            Content-Type: application/x-www-form-urlencoded
+                            X-Custom-Trace: {uuid}
+
+                            card[number]=4532250055360003&card[exp_month]=08&card[exp_year]=2028&card[cvc]=113
+                        """.trimIndent()
+                        errorMsg = null
+                    }
+                    PresetMiniPill(label = "Sample LoliScript") {
+                        snippet = """
+                            REQUEST POST "https://postman-echo.com/post"
+                              CONTENT "{\"card\":\"<CC>\",\"mm\":\"<MM>\",\"yyyy\":\"<YYYY>\",\"cvv\":\"<CVV>\"}"
+                              CONTENTTYPE "application/json"
+                              HEADER "Accept: application/json"
+                            PARSE "<SOURCE>" JSON "json.card" -> CAP "card_echo"
+                            KEYCHECK
+                              KEYCHAIN Success OR
+                                KEY "card"
+                              KEYCHAIN Failure OR
+                                KEY "declined"
+                        """.trimIndent()
+                        errorMsg = null
+                    }
+                }
+
                 OutlinedTextField(
                     value = snippet,
                     onValueChange = { snippet = it; errorMsg = null },
-                    label = { Text("cURL or JS fetch() snippet") },
-                    placeholder = { Text("fetch(\"https://...\", { \"headers\": {...}, \"body\": \"...\", \"method\": \"POST\" })") },
+                    label = { Text("cURL / fetch() / Raw HTTP / LoliScript") },
+                    placeholder = { Text("curl ... OR fetch(\"https://...\", {...}) OR POST /v1/... HTTP/1.1") },
                     minLines = 4,
                     maxLines = 8,
                     textStyle = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFamily),
@@ -1008,7 +1248,7 @@ private fun CurlOrFetchImportDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Auto-tokenize card/CVV/exp",
+                        text = "Auto-tokenize card/CVV/exp/email",
                         style = MaterialTheme.typography.labelMedium,
                         modifier = Modifier.weight(1f)
                     )
@@ -1070,7 +1310,7 @@ private fun CurlOrFetchImportDialog(
 }
 
 // =============================================================================
-// TAB 1: HTTP REQUEST PIPELINE
+// TAB 1: HTTP REQUEST PIPELINE (+ 2-STEP HANDSHAKE & LIVE REQUEST PREVIEW)
 // =============================================================================
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -1092,11 +1332,34 @@ private fun RequestStudioTabContent(
     onFollowRedirectsChange: (Boolean) -> Unit,
     compressBodyGzip: Boolean,
     onCompressBodyGzipChange: (Boolean) -> Unit,
+    skipLocalLuhnPrecheck: Boolean,
+    onSkipLocalLuhnPrecheckChange: (Boolean) -> Unit,
     timeoutSeconds: Int,
     onTimeoutChange: (Int) -> Unit,
     maxRetries: Int,
-    onMaxRetriesChange: (Int) -> Unit
+    onMaxRetriesChange: (Int) -> Unit,
+    preRequestEnabled: Boolean,
+    onPreRequestEnabledChange: (Boolean) -> Unit,
+    preRequestUrl: String,
+    onPreRequestUrlChange: (String) -> Unit,
+    preRequestMethod: HttpRequestMethod,
+    onPreRequestMethodChange: (HttpRequestMethod) -> Unit,
+    preRequestHeaders: String,
+    onPreRequestHeadersChange: (String) -> Unit,
+    preRequestBody: String,
+    onPreRequestBodyChange: (String) -> Unit,
+    preRequestParseRules: List<CustomParseRule>,
+    onAddPreRule: (CustomParseRule) -> Unit,
+    onRemovePreRule: (Int) -> Unit,
+    liveRequestPreview: RenderedRequestPreview
 ) {
+    val consoleColors = LocalConsoleColors.current
+    var selectedTokenCategory by rememberSaveable { mutableStateOf(TokenCategory.ALL) }
+    var showLivePreview by rememberSaveable { mutableStateOf(false) }
+    var step1VarName by rememberSaveable { mutableStateOf("") }
+    var step1VarExpr by rememberSaveable { mutableStateOf("") }
+    var step1VarMode by rememberSaveable { mutableStateOf(ParseRuleMode.JSON) }
+
     OutlinedTextField(
         value = profileName,
         onValueChange = onProfileNameChange,
@@ -1108,10 +1371,237 @@ private fun RequestStudioTabContent(
             .testTag("config_studio_profile_name_input")
     )
 
+    // 2-Step Pre-Request (Token / Session Handshake) Builder Card
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(
+            width = if (preRequestEnabled) 1.dp else 0.75.dp,
+            color = if (preRequestEnabled) {
+                consoleColors.unknownAccent.copy(alpha = 0.55f)
+            } else {
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+            }
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Step 1: Token / Session Handshake (2-Step Pipeline)",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (preRequestEnabled) consoleColors.unknownAccent else MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Run a pre-request to capture payment tokens, nonces, or cookies -> inject as {cap:name} in Step 2",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = preRequestEnabled,
+                    onCheckedChange = onPreRequestEnabledChange,
+                    modifier = Modifier.testTag("config_studio_prerequest_switch")
+                )
+            }
+
+            AnimatedVisibility(
+                visible = preRequestEnabled,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        PresetMiniPill(label = "Preset: Tokenize Card Form") {
+                            onPreRequestUrlChange("https://postman-echo.com/post")
+                            onPreRequestMethodChange(HttpRequestMethod.POST_FORM)
+                            onPreRequestBodyChange("type=card&card[number]={card}&card[exp_month]={mm}&card[exp_year]={yyyy}&card[cvc]={cvv}&token_id=tok_{random_hex16}")
+                            if (preRequestParseRules.none { it.name == "payment_token" }) {
+                                onAddPreRule(
+                                    CustomParseRule(
+                                        name = "payment_token",
+                                        mode = ParseRuleMode.JSON,
+                                        expression = "form.token_id",
+                                        defaultValue = "tok_live"
+                                    )
+                                )
+                            }
+                        }
+                        PresetMiniPill(label = "Preset: Fetch CSRF / Cookie") {
+                            onPreRequestUrlChange("https://postman-echo.com/get?nonce={uuid}")
+                            onPreRequestMethodChange(HttpRequestMethod.GET)
+                            onPreRequestBodyChange("")
+                            if (preRequestParseRules.none { it.name == "csrf" }) {
+                                onAddPreRule(
+                                    CustomParseRule(
+                                        name = "csrf",
+                                        mode = ParseRuleMode.JSON,
+                                        expression = "args.nonce"
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = preRequestUrl,
+                        onValueChange = onPreRequestUrlChange,
+                        label = { Text("Step 1 Handshake URL") },
+                        placeholder = { Text("https://api.example.com/v1/tokens") },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("config_studio_prerequest_url_input")
+                    )
+
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        HttpRequestMethod.entries.forEachIndexed { idx, m ->
+                            SegmentedButton(
+                                selected = preRequestMethod == m,
+                                onClick = { onPreRequestMethodChange(m) },
+                                shape = SegmentedButtonDefaults.itemShape(idx, HttpRequestMethod.entries.size)
+                            ) {
+                                Text("S1 ${m.label}", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+
+                    if (preRequestMethod != HttpRequestMethod.GET) {
+                        OutlinedTextField(
+                            value = preRequestBody,
+                            onValueChange = onPreRequestBodyChange,
+                            label = { Text("Step 1 Body Template") },
+                            placeholder = { Text("card[number]={card}&card[cvc]={cvv}") },
+                            minLines = 2,
+                            maxLines = 4,
+                            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = preRequestHeaders,
+                        onValueChange = onPreRequestHeadersChange,
+                        label = { Text("Step 1 Custom Headers (Optional)") },
+                        placeholder = { Text("Authorization: Bearer pk_test_...") },
+                        minLines = 1,
+                        maxLines = 3,
+                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Text(
+                        text = "Step 1 Captures (Use as {cap:name} in Step 2)",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = step1VarName,
+                            onValueChange = { step1VarName = it },
+                            label = { Text("Var Name") },
+                            placeholder = { Text("token") },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
+                            modifier = Modifier.weight(0.8f)
+                        )
+                        OutlinedTextField(
+                            value = step1VarExpr,
+                            onValueChange = { step1VarExpr = it },
+                            label = { Text(if (step1VarMode == ParseRuleMode.COOKIE) "Cookie Name" else "JSON Path / Regex") },
+                            placeholder = { Text("id") },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
+                            modifier = Modifier.weight(1.2f)
+                        )
+                        FilledTonalButton(
+                            onClick = {
+                                if (step1VarName.isNotBlank() && step1VarExpr.isNotBlank()) {
+                                    onAddPreRule(
+                                        CustomParseRule(
+                                            name = step1VarName.trim(),
+                                            mode = step1VarMode,
+                                            expression = step1VarExpr.trim(),
+                                            showInOutput = true
+                                        )
+                                    )
+                                    step1VarName = ""
+                                    step1VarExpr = ""
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(42.dp)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        }
+                    }
+
+                    if (preRequestParseRules.isNotEmpty()) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            preRequestParseRules.forEachIndexed { idx, r ->
+                                Surface(
+                                    onClick = { onRemovePreRule(idx) },
+                                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    shape = MaterialTheme.shapes.small,
+                                    border = BorderStroke(1.dp, consoleColors.unknownAccent.copy(alpha = 0.4f))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = "{cap:${r.name}} ← ${r.expression}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontFamily = JetBrainsMonoFamily,
+                                            color = consoleColors.unknownAccent
+                                        )
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Remove Step 1 capture",
+                                            modifier = Modifier.size(12.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     OutlinedTextField(
         value = url,
         onValueChange = onUrlChange,
-        label = { Text("Endpoint URL (http:// or https://)") },
+        label = { Text(if (preRequestEnabled) "Step 2 Main Endpoint URL" else "Endpoint URL (http:// or https://)") },
         placeholder = { Text("https://postman-echo.com/post") },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
@@ -1141,26 +1631,68 @@ private fun RequestStudioTabContent(
         }
     }
 
-    // Dynamic Token Palette (18 tokens)
+    // Categorized Dynamic Token Palette (28+ tokens)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            text = "Dynamic Tokens (Tap to insert into Body or GET URL)",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        val tokens = listOf(
-            "{lista}", "{card}", "{card_spaced}", "{pan4}",
-            "{mm}", "{mm_no_pad}", "{yy}", "{yyyy}", "{cvv}",
-            "{bin}", "{scheme}", "{email}", "{user}", "{pass}",
-            "{uuid}", "{timestamp}", "{timestamp_ms}", "{random6}"
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Dynamic Tokens (Tap to insert into Body or GET URL)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            tokens.forEach { token ->
+            TokenCategory.entries.forEach { cat ->
+                FilterChip(
+                    selected = selectedTokenCategory == cat,
+                    onClick = { selectedTokenCategory = cat },
+                    label = { Text(cat.label, style = MaterialTheme.typography.labelSmall) }
+                )
+            }
+        }
+
+        val step1Tokens = preRequestParseRules.map { "{cap:${it.name}}" } + listOf("{cookie}", "{cap:payment_token}")
+        val displayedTokens = when (selectedTokenCategory) {
+            TokenCategory.ALL -> listOf(
+                "{lista}", "{card}", "{card_spaced}", "{card_dashed}", "{pan4}",
+                "{mm}", "{mm_no_pad}", "{yy}", "{yyyy}", "{cvv}",
+                "{bin}", "{bin8}", "{scheme}", "{scheme_lower}",
+                "{email}", "{user}", "{pass}",
+                "{uuid}", "{timestamp}", "{timestamp_ms}", "{iso_date}",
+                "{random6}", "{random_hex16}", "{random_ua}",
+                "{base64_lista}", "{base64_combo}", "{sha256_card}", "{md5_lista}"
+            ) + step1Tokens.distinct()
+            TokenCategory.CARD -> listOf(
+                "{lista}", "{card}", "{card_spaced}", "{card_dashed}", "{pan4}",
+                "{mm}", "{mm_no_pad}", "{yy}", "{yyyy}", "{cvv}",
+                "{bin}", "{bin8}", "{scheme}", "{scheme_lower}"
+            )
+            TokenCategory.COMBO -> listOf(
+                "{email}", "{user}", "{pass}", "{base64_combo}", "{base64_lista}"
+            )
+            TokenCategory.DYNAMIC -> listOf(
+                "{uuid}", "{guid}", "{timestamp}", "{timestamp_ms}", "{iso_date}",
+                "{random6}", "{random_hex16}", "{random_ua}",
+                "{sha256_card}", "{md5_lista}"
+            )
+            TokenCategory.STEP1 -> step1Tokens.distinct()
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            displayedTokens.forEach { token ->
                 Surface(
                     onClick = {
                         if (method == HttpRequestMethod.GET) {
@@ -1188,11 +1720,23 @@ private fun RequestStudioTabContent(
     // Body Template + Presets
     if (method != HttpRequestMethod.GET) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(
-                text = "Request Body Template & Presets",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Request Body Template & Presets",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                liveRequestPreview.isJsonValid?.let { isValid ->
+                    StudioSummaryPill(
+                        label = if (isValid) "Valid JSON" else liveRequestPreview.jsonDiagnostic,
+                        color = if (isValid) consoleColors.liveAccent else consoleColors.dieAccent
+                    )
+                }
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1214,6 +1758,13 @@ private fun RequestStudioTabContent(
                 PresetMiniPill(label = "Email:Pass JSON") {
                     onMethodChange(HttpRequestMethod.POST_JSON)
                     onBodyTemplateChange(CustomHttpConfig.EMAIL_PASS_JSON_PAYLOAD)
+                    onSkipLocalLuhnPrecheckChange(true)
+                }
+                PresetMiniPill(label = "GraphQL Card") {
+                    onMethodChange(HttpRequestMethod.POST_JSON)
+                    onBodyTemplateChange(
+                        """{"operationName":"VerifyCard","variables":{"input":{"number":"{card}","month":"{mm}","year":"{yyyy}","cvv":"{cvv}"}},"query":"mutation VerifyCard(${'$'}input: CardInput!) { verifyCard(input: ${'$'}input) { status code } }"}"""
+                    )
                 }
                 PresetMiniPill(label = "Clear") {
                     onBodyTemplateChange("")
@@ -1235,18 +1786,45 @@ private fun RequestStudioTabContent(
         }
     }
 
-    OutlinedTextField(
-        value = headersText,
-        onValueChange = onHeadersChange,
-        label = { Text("Custom HTTP Headers (Key: Value per line)") },
-        placeholder = { Text("Authorization: Bearer ...\nX-Idempotency-Key: {uuid}") },
-        minLines = 2,
-        maxLines = 5,
-        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("config_studio_headers_input")
-    )
+    // Custom Headers + 1-Tap Header Snippets
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            PresetMiniPill(label = "+ Bearer Auth") {
+                val line = "Authorization: Bearer {cap:token}"
+                onHeadersChange(if (headersText.isBlank()) line else "$headersText\n$line")
+            }
+            PresetMiniPill(label = "+ Basic Combo") {
+                val line = "Authorization: Basic {base64_combo}"
+                onHeadersChange(if (headersText.isBlank()) line else "$headersText\n$line")
+            }
+            PresetMiniPill(label = "+ Idempotency-Key") {
+                val line = "X-Idempotency-Key: {uuid}"
+                onHeadersChange(if (headersText.isBlank()) line else "$headersText\n$line")
+            }
+            PresetMiniPill(label = "+ X-Requested-With") {
+                val line = "X-Requested-With: XMLHttpRequest"
+                onHeadersChange(if (headersText.isBlank()) line else "$headersText\n$line")
+            }
+        }
+
+        OutlinedTextField(
+            value = headersText,
+            onValueChange = onHeadersChange,
+            label = { Text("Custom HTTP Headers (Key: Value per line)") },
+            placeholder = { Text("Authorization: Bearer ...\nX-Idempotency-Key: {uuid}") },
+            minLines = 2,
+            maxLines = 5,
+            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("config_studio_headers_input")
+        )
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
@@ -1264,11 +1842,14 @@ private fun RequestStudioTabContent(
             PresetMiniPill(label = "UA: Safari iOS") {
                 onUserAgentChange("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1")
             }
+            PresetMiniPill(label = "UA: Rotate Random") {
+                onUserAgentChange("{random_ua}")
+            }
         }
         OutlinedTextField(
             value = userAgent,
             onValueChange = onUserAgentChange,
-            label = { Text("User-Agent Header") },
+            label = { Text("User-Agent Header (supports {random_ua})") },
             singleLine = true,
             textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
             modifier = Modifier
@@ -1277,7 +1858,7 @@ private fun RequestStudioTabContent(
         )
     }
 
-    // Redirects & GZIP switches
+    // Redirects, GZIP & Bypass Luhn Pre-check switches
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1318,6 +1899,38 @@ private fun RequestStudioTabContent(
         }
     }
 
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.small,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Bypass Local Card Luhn Pre-Check",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "Send raw combos (email:pass) or negative test cards straight to the remote gateway",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = skipLocalLuhnPrecheck,
+                onCheckedChange = onSkipLocalLuhnPrecheckChange,
+                modifier = Modifier.testTag("config_studio_skip_luhn_switch")
+            )
+        }
+    }
+
     // Timeout & Retries
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1354,10 +1967,87 @@ private fun RequestStudioTabContent(
             }
         }
     }
+
+    // Live Request Preview Inspector Card
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showLivePreview = !showLivePreview },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "Live Resolved Request Preview",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    StudioSummaryPill(
+                        label = liveRequestPreview.detectedInputType,
+                        color = consoleColors.telegramAccent
+                    )
+                }
+                Text(
+                    text = if (showLivePreview) "Hide" else "Show",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            if (liveRequestPreview.unresolvedTokens.isNotEmpty()) {
+                Text(
+                    text = "Note: Unresolved custom token(s): ${liveRequestPreview.unresolvedTokens.joinToString(", ")}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = consoleColors.unknownAccent
+                )
+            }
+
+            AnimatedVisibility(visible = showLivePreview) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "${liveRequestPreview.resolvedMethod} ${liveRequestPreview.resolvedUrl}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = JetBrainsMonoFamily,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (liveRequestPreview.resolvedHeaders.isNotEmpty()) {
+                        Text(
+                            text = liveRequestPreview.resolvedHeaders.joinToString("\n") { "${it.first}: ${it.second}" },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = JetBrainsMonoFamily,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (liveRequestPreview.resolvedBody.isNotBlank()) {
+                        Text(
+                            text = "BODY: ${liveRequestPreview.resolvedBody}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = JetBrainsMonoFamily,
+                            color = consoleColors.liveAccent
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 // =============================================================================
-// TAB 2: RESPONSE PARSER & LIVE DRY-RUN CAPTURE TESTER
+// TAB 2: RESPONSE PARSER, SMART DISCOVERY & LIVE DRY-RUN CAPTURE TESTER
 // =============================================================================
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -1368,20 +2058,28 @@ private fun ParseStudioTabContent(
     onDryRunBodyChange: (String) -> Unit,
     dryRunCaptures: Map<String, String>,
     onAddRule: (CustomParseRule) -> Unit,
+    onUpdateRule: (Int, CustomParseRule) -> Unit,
     onMoveRule: (Int, Int) -> Unit,
     onRemoveRule: (Int) -> Unit,
     onToggleShow: (Int) -> Unit
 ) {
     val consoleColors = LocalConsoleColors.current
+    var editingIndex by rememberSaveable { mutableIntStateOf(-1) }
     var varName by rememberSaveable { mutableStateOf("") }
     var selectedMode by rememberSaveable { mutableStateOf(ParseRuleMode.JSON) }
     var expression by rememberSaveable { mutableStateOf("") }
     var leftDelim by rememberSaveable { mutableStateOf("") }
     var rightDelim by rememberSaveable { mutableStateOf("") }
     var showInOutput by rememberSaveable { mutableStateOf(true) }
+    var recursive by rememberSaveable { mutableStateOf(false) }
+    var defaultValue by rememberSaveable { mutableStateOf("") }
+
+    val discoveredKeys = remember(dryRunBodyText) {
+        CustomConfigStudioEngine.discoverJsonKeySuggestions(dryRunBodyText)
+    }
 
     Text(
-        text = "Extract values from JSON dot-paths, Left/Right delimiters, Regex groups, or HTTP Headers into variables. Captured values show as [name=value] and drive Checkpoints.",
+        text = "Extract values from JSON dot-paths (including arrays like errors[0].code), Left/Right delimiters, Regex groups, HTTP Headers, Set-Cookie, or HTML attributes into variables.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
@@ -1405,50 +2103,149 @@ private fun ParseStudioTabContent(
         PresetMiniPill(label = "+ Regex BIN6") {
             onAddRule(CustomParseRule(name = "bin", mode = ParseRuleMode.REGEX, expression = "\"bin\"\\s*:\\s*\"(\\d{6})\"", showInOutput = true))
         }
-        PresetMiniPill(label = "+ Header cf-ray") {
-            onAddRule(CustomParseRule(name = "ray", mode = ParseRuleMode.HEADER, expression = "cf-ray", showInOutput = false))
+        PresetMiniPill(label = "+ Cookie session") {
+            onAddRule(CustomParseRule(name = "sid", mode = ParseRuleMode.COOKIE, expression = "session_id", showInOutput = false))
+        }
+        PresetMiniPill(label = "+ HTML CSRF") {
+            onAddRule(CustomParseRule(name = "csrf", mode = ParseRuleMode.CSS, expression = "input[name=csrf_token]@value", showInOutput = false))
         }
     }
 
-    // Add New Capture Rule Builder Card
+    // Smart Auto-Discovered JSON Keys from Sample/Probe Body
+    if (discoveredKeys.isNotEmpty()) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = "Smart Auto-Discovered JSON Keys (Tap to capture):",
+                style = MaterialTheme.typography.labelSmall,
+                color = consoleColors.telegramAccent,
+                fontWeight = FontWeight.SemiBold
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                discoveredKeys.forEach { (path, sampleVal) ->
+                    val shortName = path.substringAfterLast('.').replace("[0]", "")
+                    PresetMiniPill(label = "+ $path (${sampleVal.take(14)})") {
+                        onAddRule(
+                            CustomParseRule(
+                                name = shortName.ifEmpty { "val" },
+                                mode = ParseRuleMode.JSON,
+                                expression = path,
+                                showInOutput = true
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // Add / Edit Capture Rule Builder Card
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = MaterialTheme.shapes.medium,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+        border = BorderStroke(
+            width = if (editingIndex >= 0) 1.25.dp else 1.dp,
+            color = if (editingIndex >= 0) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+            }
+        ),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(
-                text = "Add Capture / Parse Rule",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                ParseRuleMode.entries.forEachIndexed { idx, mode ->
-                    SegmentedButton(
-                        selected = selectedMode == mode,
-                        onClick = { selectedMode = mode },
-                        shape = SegmentedButtonDefaults.itemShape(idx, ParseRuleMode.entries.size)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (editingIndex >= 0) "Editing Parse Rule #${editingIndex + 1}" else "Add Capture / Parse Rule",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                if (editingIndex >= 0) {
+                    TextButton(
+                        onClick = {
+                            editingIndex = -1
+                            varName = ""
+                            expression = ""
+                            leftDelim = ""
+                            rightDelim = ""
+                            recursive = false
+                            defaultValue = ""
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(28.dp)
                     ) {
-                        Text(mode.label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                        Text("Cancel Edit", style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
 
-            OutlinedTextField(
-                value = varName,
-                onValueChange = { varName = it },
-                label = { Text("Variable Name (e.g. code, decline_reason, avs)") },
-                singleLine = true,
+            // 6 Parse Modes in scrollable strip
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("config_studio_parse_name_input")
-            )
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                ParseRuleMode.entries.forEach { mode ->
+                    val selected = selectedMode == mode
+                    Surface(
+                        onClick = { selectedMode = mode },
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerHighest
+                        },
+                        shape = MaterialTheme.shapes.small,
+                        border = BorderStroke(
+                            1.dp,
+                            if (selected) MaterialTheme.colorScheme.primary else Color.Transparent
+                        )
+                    ) {
+                        Text(
+                            text = mode.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = varName,
+                    onValueChange = { varName = it },
+                    label = { Text("Variable Name (e.g. code, avs)") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1.1f)
+                        .testTag("config_studio_parse_name_input")
+                )
+                OutlinedTextField(
+                    value = defaultValue,
+                    onValueChange = { defaultValue = it },
+                    label = { Text("Fallback (Opt)") },
+                    placeholder = { Text("N/A") },
+                    singleLine = true,
+                    modifier = Modifier.weight(0.9f)
+                )
+            }
 
             if (selectedMode == ParseRuleMode.LR) {
                 Row(
@@ -1494,13 +2291,18 @@ private fun ParseStudioTabContent(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Switch(
-                        checked = showInOutput,
-                        onCheckedChange = { showInOutput = it }
+                    FilterChip(
+                        selected = showInOutput,
+                        onClick = { showInOutput = !showInOutput },
+                        label = { Text("Show [var=val]", style = MaterialTheme.typography.labelSmall) }
                     )
-                    Text("Append [var=val] to result", style = MaterialTheme.typography.labelSmall)
+                    FilterChip(
+                        selected = recursive,
+                        onClick = { recursive = !recursive },
+                        label = { Text("Recursive", style = MaterialTheme.typography.labelSmall) }
+                    )
                 }
 
                 FilledTonalButton(
@@ -1511,35 +2313,50 @@ private fun ParseStudioTabContent(
                                 (selectedMode != ParseRuleMode.LR && expression.isNotBlank())
                             )
                         if (valid) {
-                            onAddRule(
-                                CustomParseRule(
-                                    name = cleanName,
-                                    mode = selectedMode,
-                                    expression = expression.trim(),
-                                    leftDelimiter = leftDelim,
-                                    rightDelimiter = rightDelim,
-                                    showInOutput = showInOutput
-                                )
+                            val builtRule = CustomParseRule(
+                                name = cleanName,
+                                mode = selectedMode,
+                                expression = expression.trim(),
+                                leftDelimiter = leftDelim,
+                                rightDelimiter = rightDelim,
+                                showInOutput = showInOutput,
+                                recursive = recursive,
+                                defaultValue = defaultValue.trim()
                             )
+                            if (editingIndex in parseRules.indices) {
+                                onUpdateRule(editingIndex, builtRule)
+                                editingIndex = -1
+                            } else {
+                                onAddRule(builtRule)
+                            }
                             varName = ""
                             expression = ""
                             leftDelim = ""
                             rightDelim = ""
+                            recursive = false
+                            defaultValue = ""
                         }
                     },
                     modifier = Modifier
                         .heightIn(min = 42.dp)
                         .testTag("config_studio_add_parse_rule_button")
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(
+                        imageVector = if (editingIndex >= 0) Icons.Default.Check else Icons.Default.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Add Rule", style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        text = if (editingIndex >= 0) "Update Rule" else "Add Rule",
+                        style = MaterialTheme.typography.labelSmall
+                    )
                 }
             }
         }
     }
 
-    // Active Rules List with Reordering
+    // Active Rules List with In-Place Edit & Reordering
     if (parseRules.isEmpty()) {
         Text(
             text = "No custom capture rules configured yet. Add one above or tap a quick preset.",
@@ -1549,10 +2366,28 @@ private fun ParseStudioTabContent(
     } else {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             parseRules.forEachIndexed { idx, rule ->
+                val isBeingEdited = editingIndex == idx
                 Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    color = if (isBeingEdited) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
                     shape = MaterialTheme.shapes.small,
-                    modifier = Modifier.fillMaxWidth()
+                    border = if (isBeingEdited) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            editingIndex = idx
+                            varName = rule.name
+                            selectedMode = rule.mode
+                            expression = rule.expression
+                            leftDelim = rule.leftDelimiter
+                            rightDelim = rule.rightDelimiter
+                            showInOutput = rule.showInOutput
+                            recursive = rule.recursive
+                            defaultValue = rule.defaultValue
+                        }
                 ) {
                     Row(
                         modifier = Modifier
@@ -1573,6 +2408,9 @@ private fun ParseStudioTabContent(
                                     fontFamily = JetBrainsMonoFamily,
                                     fontWeight = FontWeight.Bold
                                 )
+                                if (rule.recursive) {
+                                    StudioSummaryPill(label = "ALL", color = consoleColors.unknownAccent)
+                                }
                             }
                             val specDesc = if (rule.mode == ParseRuleMode.LR) {
                                 "L: '${rule.leftDelimiter}' .. R: '${rule.rightDelimiter}'"
@@ -1580,7 +2418,7 @@ private fun ParseStudioTabContent(
                                 rule.expression
                             }
                             Text(
-                                text = specDesc,
+                                text = specDesc + if (rule.defaultValue.isNotBlank()) " (default: ${rule.defaultValue})" else "",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontFamily = JetBrainsMonoFamily,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1590,6 +2428,26 @@ private fun ParseStudioTabContent(
                         }
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = {
+                                    editingIndex = idx
+                                    varName = rule.name
+                                    selectedMode = rule.mode
+                                    expression = rule.expression
+                                    leftDelim = rule.leftDelimiter
+                                    rightDelim = rule.rightDelimiter
+                                    showInOutput = rule.showInOutput
+                                    recursive = rule.recursive
+                                    defaultValue = rule.defaultValue
+                                },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Edit parse rule",
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
                             IconButton(
                                 onClick = { onMoveRule(idx, idx - 1) },
                                 enabled = idx > 0,
@@ -1619,7 +2477,10 @@ private fun ParseStudioTabContent(
                                 onCheckedChange = { onToggleShow(idx) }
                             )
                             IconButton(
-                                onClick = { onRemoveRule(idx) },
+                                onClick = {
+                                    if (editingIndex == idx) editingIndex = -1
+                                    onRemoveRule(idx)
+                                },
                                 modifier = Modifier.size(36.dp)
                             ) {
                                 Icon(
@@ -1685,10 +2546,10 @@ private fun ParseStudioTabContent(
 }
 
 // =============================================================================
-// TAB 3: CHECKPOINTS / KEYCHECK RULES
+// TAB 3: CHECKPOINTS / KEYCHECK ENGINE & STEP-BY-STEP DEBUGGER
 // =============================================================================
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun CheckpointsStudioTabContent(
     checkpointRules: List<CustomCheckpointRule>,
@@ -1696,8 +2557,10 @@ private fun CheckpointsStudioTabContent(
     onDryRunStatusCodeChange: (Int) -> Unit,
     dryRunBodyText: String,
     onDryRunBodyChange: (String) -> Unit,
-    dryRunCheckpointMatch: Pair<ResultBucket, String>?,
+    dryRunCaptures: Map<String, String>,
+    dryRunEvaluation: CheckpointEvaluationResult,
     onAddCheckpoint: (CustomCheckpointRule) -> Unit,
+    onUpdateCheckpoint: (Int, CustomCheckpointRule) -> Unit,
     onMoveCheckpoint: (Int, Int) -> Unit,
     onRemoveCheckpoint: (Int) -> Unit,
     liveKeywords: String,
@@ -1706,6 +2569,7 @@ private fun CheckpointsStudioTabContent(
     onDieKeywordsChange: (String) -> Unit
 ) {
     val consoleColors = LocalConsoleColors.current
+    var editingIndex by rememberSaveable { mutableIntStateOf(-1) }
     var selectedVerdict by rememberSaveable { mutableStateOf(ResultBucket.LIVE) }
     var selectedCondition by rememberSaveable { mutableStateOf(CheckpointCondition.BODY_CONTAINS) }
     var targetKey by rememberSaveable { mutableStateOf("") }
@@ -1718,7 +2582,7 @@ private fun CheckpointsStudioTabContent(
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
 
-    // Quick Checkpoint Presets
+    // Quick Checkpoint Presets + Captured Variable Suggestions
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1765,25 +2629,79 @@ private fun CheckpointsStudioTabContent(
                 )
             )
         }
+        PresetMiniPill(label = "+ HTTP 429 -> UNKNOWN") {
+            onAddCheckpoint(
+                CustomCheckpointRule(
+                    verdict = ResultBucket.UNKNOWN,
+                    condition = CheckpointCondition.STATUS_CODE_IN,
+                    expectedValue = "429,502,503",
+                    label = "Rate Limited"
+                )
+            )
+        }
+        dryRunCaptures.forEach { (varKey, varVal) ->
+            PresetMiniPill(label = "+ Var '$varKey'=='${varVal.take(10)}' -> LIVE") {
+                onAddCheckpoint(
+                    CustomCheckpointRule(
+                        verdict = ResultBucket.LIVE,
+                        condition = CheckpointCondition.CAPTURED_VAR_EQUALS,
+                        targetKey = varKey,
+                        expectedValue = varVal,
+                        label = "$varKey OK"
+                    )
+                )
+            }
+        }
     }
 
-    // Add Checkpoint Builder Card
+    // Add / Edit Checkpoint Builder Card
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = MaterialTheme.shapes.medium,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+        border = BorderStroke(
+            width = if (editingIndex >= 0) 1.25.dp else 1.dp,
+            color = if (editingIndex >= 0) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+            }
+        ),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(
-                text = "Add Keycheck / Checkpoint Assertion",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (editingIndex >= 0) {
+                        "Editing Checkpoint #${editingIndex + 1}"
+                    } else {
+                        "Add Keycheck / Checkpoint Assertion"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                if (editingIndex >= 0) {
+                    TextButton(
+                        onClick = {
+                            editingIndex = -1
+                            targetKey = ""
+                            expectedValue = ""
+                            customLabel = ""
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(28.dp)
+                    ) {
+                        Text("Cancel Edit", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
 
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                 ResultBucket.entries.forEachIndexed { idx, bucket ->
@@ -1797,7 +2715,7 @@ private fun CheckpointsStudioTabContent(
                 }
             }
 
-            // All 9 Checkpoint Conditions
+            // All 14 Checkpoint Conditions
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1835,10 +2753,11 @@ private fun CheckpointsStudioTabContent(
                     onValueChange = { targetKey = it },
                     label = {
                         Text(
-                            if (selectedCondition == CheckpointCondition.JSON_KEY_EQUALS) {
-                                "JSON Key Path (e.g. status or error.code)"
-                            } else {
-                                "Captured Variable Name (from Parse tab)"
+                            when (selectedCondition) {
+                                CheckpointCondition.JSON_KEY_EQUALS,
+                                CheckpointCondition.JSON_KEY_CONTAINS -> "JSON Key Path (e.g. status or errors[0].code)"
+                                CheckpointCondition.HEADER_CONTAINS -> "HTTP Header Name (e.g. content-type or x-error)"
+                                else -> "Captured Variable Name (from Parse tab)"
                             }
                         )
                     },
@@ -1879,16 +2798,23 @@ private fun CheckpointsStudioTabContent(
             ) {
                 FilledTonalButton(
                     onClick = {
-                        if (expectedValue.isNotBlank() || selectedCondition == CheckpointCondition.CAPTURED_VAR_CONTAINS) {
-                            onAddCheckpoint(
-                                CustomCheckpointRule(
-                                    verdict = selectedVerdict,
-                                    condition = selectedCondition,
-                                    targetKey = targetKey.trim(),
-                                    expectedValue = expectedValue.trim(),
-                                    label = customLabel.trim()
-                                )
+                        if (expectedValue.isNotBlank() ||
+                            selectedCondition == CheckpointCondition.CAPTURED_VAR_CONTAINS ||
+                            selectedCondition == CheckpointCondition.CAPTURED_VAR_NOT_CONTAINS
+                        ) {
+                            val builtRule = CustomCheckpointRule(
+                                verdict = selectedVerdict,
+                                condition = selectedCondition,
+                                targetKey = targetKey.trim(),
+                                expectedValue = expectedValue.trim(),
+                                label = customLabel.trim()
                             )
+                            if (editingIndex in checkpointRules.indices) {
+                                onUpdateCheckpoint(editingIndex, builtRule)
+                                editingIndex = -1
+                            } else {
+                                onAddCheckpoint(builtRule)
+                            }
                             expectedValue = ""
                             customLabel = ""
                         }
@@ -1897,28 +2823,53 @@ private fun CheckpointsStudioTabContent(
                         .heightIn(min = 42.dp)
                         .testTag("config_studio_add_checkpoint_button")
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(
+                        imageVector = if (editingIndex >= 0) Icons.Default.Check else Icons.Default.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Add Checkpoint", style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        text = if (editingIndex >= 0) "Update Checkpoint" else "Add Checkpoint",
+                        style = MaterialTheme.typography.labelSmall
+                    )
                 }
             }
         }
     }
 
-    // Active Checkpoints List with Priority Controls
+    // Active Checkpoints List with Priority Controls & In-Place Edit
     if (checkpointRules.isNotEmpty()) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             checkpointRules.forEachIndexed { idx, rule ->
+                val isBeingEdited = editingIndex == idx
                 val badgeColor = when (rule.verdict) {
                     ResultBucket.LIVE -> consoleColors.liveAccent
                     ResultBucket.DIE -> consoleColors.dieAccent
                     ResultBucket.UNKNOWN -> consoleColors.unknownAccent
                 }
+                val stepEval = dryRunEvaluation.steps.getOrNull(idx)
                 Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    color = if (isBeingEdited) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
                     shape = MaterialTheme.shapes.small,
-                    border = BorderStroke(0.75.dp, badgeColor.copy(alpha = 0.35f)),
-                    modifier = Modifier.fillMaxWidth()
+                    border = BorderStroke(
+                        if (stepEval?.isWinner == true || isBeingEdited) 1.25.dp else 0.75.dp,
+                        if (isBeingEdited) MaterialTheme.colorScheme.primary else badgeColor.copy(alpha = 0.45f)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            editingIndex = idx
+                            selectedVerdict = rule.verdict
+                            selectedCondition = rule.condition
+                            targetKey = rule.targetKey
+                            expectedValue = rule.expectedValue
+                            customLabel = rule.label
+                        }
                 ) {
                     Row(
                         modifier = Modifier
@@ -1944,6 +2895,9 @@ private fun CheckpointsStudioTabContent(
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.SemiBold
                                 )
+                                if (stepEval?.isWinner == true) {
+                                    StudioSummaryPill(label = "WINNER", color = badgeColor)
+                                }
                             }
                             val targetExpr = if (rule.targetKey.isNotBlank()) "${rule.targetKey} → " else ""
                             Text(
@@ -1954,8 +2908,33 @@ private fun CheckpointsStudioTabContent(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                            stepEval?.let { st ->
+                                Text(
+                                    text = if (st.matched) "✓ ${st.detail}" else "· ${st.detail}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = JetBrainsMonoFamily,
+                                    color = if (st.matched) badgeColor else MaterialTheme.colorScheme.outline
+                                )
+                            }
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = {
+                                    editingIndex = idx
+                                    selectedVerdict = rule.verdict
+                                    selectedCondition = rule.condition
+                                    targetKey = rule.targetKey
+                                    expectedValue = rule.expectedValue
+                                    customLabel = rule.label
+                                },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Edit checkpoint",
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
                             IconButton(
                                 onClick = { onMoveCheckpoint(idx, idx - 1) },
                                 enabled = idx > 0,
@@ -1981,7 +2960,10 @@ private fun CheckpointsStudioTabContent(
                                 )
                             }
                             IconButton(
-                                onClick = { onRemoveCheckpoint(idx) },
+                                onClick = {
+                                    if (editingIndex == idx) editingIndex = -1
+                                    onRemoveCheckpoint(idx)
+                                },
                                 modifier = Modifier.size(36.dp)
                             ) {
                                 Icon(
@@ -2015,11 +2997,11 @@ private fun CheckpointsStudioTabContent(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Dry-Run Checkpoint Simulator",
+                    text = "Dry-Run Keycheck Debugger",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold
                 )
-                val matchBadge = dryRunCheckpointMatch
+                val matchBadge = dryRunEvaluation.winner
                 if (matchBadge != null) {
                     val col = when (matchBadge.first) {
                         ResultBucket.LIVE -> consoleColors.liveAccent
@@ -2101,7 +3083,7 @@ private fun CheckpointsStudioTabContent(
 }
 
 // =============================================================================
-// TAB 4: PROXY POOL & NETWORK ROUTING
+// TAB 4: PROXY POOL, DIAGNOSTICS & NETWORK ROUTING
 // =============================================================================
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -2120,6 +3102,9 @@ private fun ProxyStudioTabContent(
     val consoleColors = LocalConsoleColors.current
     val parsedPool = remember(proxyListText, proxyProtocol) {
         CustomConfigStudioEngine.parseProxyPool(proxyListText, proxyProtocol)
+    }
+    val invalidLines = remember(proxyListText, proxyProtocol) {
+        CustomConfigStudioEngine.findInvalidProxyLines(proxyListText, proxyProtocol)
     }
     val authCount = remember(parsedPool) { parsedPool.count { it.requiresAuth } }
 
@@ -2197,9 +3182,14 @@ private fun ProxyStudioTabContent(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = "${parsedPool.size} valid proxies • $authCount authenticated",
+            text = "${parsedPool.size} valid • $authCount auth" +
+                if (invalidLines.isNotEmpty()) " • ${invalidLines.size} invalid" else "",
             style = MaterialTheme.typography.labelSmall,
-            color = if (parsedPool.isNotEmpty()) consoleColors.liveAccent else MaterialTheme.colorScheme.onSurfaceVariant
+            color = when {
+                invalidLines.isNotEmpty() -> consoleColors.unknownAccent
+                parsedPool.isNotEmpty() -> consoleColors.liveAccent
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
         )
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             PresetMiniPill(label = "Import .txt", onClick = onImportProxyFile)
@@ -2213,6 +3203,24 @@ private fun ProxyStudioTabContent(
                     }
                 onProxyListTextChange(cleaned)
             }
+        }
+    }
+
+    if (invalidLines.isNotEmpty()) {
+        Surface(
+            color = consoleColors.dieContainer.copy(alpha = 0.45f),
+            shape = MaterialTheme.shapes.small,
+            border = BorderStroke(0.75.dp, consoleColors.dieAccent.copy(alpha = 0.4f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "Invalid proxy syntax on line(s): " +
+                    invalidLines.take(3).joinToString(", ") { "L${it.first} (${it.second})" } +
+                    " — tap 'Clean & Dedupe' to strip.",
+                style = MaterialTheme.typography.labelSmall,
+                color = consoleColors.dieAccent,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+            )
         }
     }
 
@@ -2255,7 +3263,7 @@ private fun ProxyStudioTabContent(
 }
 
 // =============================================================================
-// TAB 5: PROFILES & JSON IMPORT/EXPORT
+// TAB 5: PROFILES, SEARCH & CODE EXPORT (JSON / cURL / LOLISCRIPT)
 // =============================================================================
 
 @Composable
@@ -2264,13 +3272,17 @@ private fun ProfilesStudioTabContent(
     onProfileNameChange: (String) -> Unit,
     savedProfiles: List<CustomConfigProfile>,
     onSaveCurrentProfile: (String) -> Unit,
+    onDuplicateProfile: (CustomConfigProfile) -> Unit,
     onLoadProfile: (CustomConfigProfile) -> Unit,
     onDeleteProfile: (String) -> Unit,
     onCopyJson: () -> Unit,
     onPasteJson: () -> Unit,
+    onCopyCurl: () -> Unit,
+    onCopyLoliScript: () -> Unit,
     onOpenCurlImporter: () -> Unit
 ) {
     var profileNote by rememberSaveable { mutableStateOf("") }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
 
     // Save Current Config Card
     Surface(
@@ -2322,7 +3334,7 @@ private fun ProfilesStudioTabContent(
                 ) {
                     Icon(AppIcons.Api, contentDescription = null, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("cURL / fetch()", style = MaterialTheme.typography.labelSmall)
+                    Text("Import Request", style = MaterialTheme.typography.labelSmall)
                 }
                 OutlinedButton(
                     onClick = onCopyJson,
@@ -2342,6 +3354,24 @@ private fun ProfilesStudioTabContent(
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Paste JSON", style = MaterialTheme.typography.labelSmall)
                 }
+                OutlinedButton(
+                    onClick = onCopyCurl,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier.height(34.dp)
+                ) {
+                    Icon(AppIcons.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Copy cURL", style = MaterialTheme.typography.labelSmall)
+                }
+                OutlinedButton(
+                    onClick = onCopyLoliScript,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier.height(34.dp)
+                ) {
+                    Icon(AppIcons.Terminal, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Copy Loli", style = MaterialTheme.typography.labelSmall)
+                }
                 FilledTonalButton(
                     onClick = {
                         onSaveCurrentProfile(profileNote)
@@ -2357,18 +3387,38 @@ private fun ProfilesStudioTabContent(
         }
     }
 
+    if (savedProfiles.size > 2) {
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            label = { Text("Filter Profiles by Name or Host") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+
+    val filteredSaved = remember(savedProfiles, searchQuery) {
+        if (searchQuery.isBlank()) savedProfiles
+        else savedProfiles.filter {
+            it.name.contains(searchQuery, ignoreCase = true) ||
+                it.description.contains(searchQuery, ignoreCase = true) ||
+                it.config.url.contains(searchQuery, ignoreCase = true)
+        }
+    }
+
     // User Saved Profiles
-    if (savedProfiles.isNotEmpty()) {
+    if (filteredSaved.isNotEmpty()) {
         Text(
-            text = "Saved User Configs (${savedProfiles.size})",
+            text = "Saved User Configs (${filteredSaved.size})",
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold
         )
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            savedProfiles.forEach { profile ->
+            filteredSaved.forEach { profile ->
                 ProfileItemCard(
                     profile = profile,
                     onLoad = { onLoadProfile(profile) },
+                    onDuplicate = { onDuplicateProfile(profile) },
                     onDelete = { onDeleteProfile(profile.id) }
                 )
             }
@@ -2386,6 +3436,7 @@ private fun ProfilesStudioTabContent(
             ProfileItemCard(
                 profile = preset,
                 onLoad = { onLoadProfile(preset) },
+                onDuplicate = { onDuplicateProfile(preset) },
                 onDelete = null
             )
         }
@@ -2396,6 +3447,7 @@ private fun ProfilesStudioTabContent(
 private fun ProfileItemCard(
     profile: CustomConfigProfile,
     onLoad: () -> Unit,
+    onDuplicate: () -> Unit,
     onDelete: (() -> Unit)?
 ) {
     val consoleColors = LocalConsoleColors.current
@@ -2424,6 +3476,12 @@ private fun ProfileItemCard(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
+                    if (profile.config.preRequestEnabled) {
+                        StudioSummaryPill(
+                            label = "2-STEP",
+                            color = consoleColors.unknownAccent
+                        )
+                    }
                     StudioSummaryPill(
                         label = profile.config.method.label,
                         color = MaterialTheme.colorScheme.primary
@@ -2447,6 +3505,14 @@ private fun ProfileItemCard(
                     modifier = Modifier.height(34.dp)
                 ) {
                     Text("Load", style = MaterialTheme.typography.labelSmall)
+                }
+                IconButton(onClick = onDuplicate, modifier = Modifier.size(34.dp)) {
+                    Icon(
+                        imageVector = AppIcons.ContentCopy,
+                        contentDescription = "Duplicate profile",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
                 }
                 if (onDelete != null) {
                     IconButton(onClick = onDelete, modifier = Modifier.size(34.dp)) {
@@ -2512,6 +3578,19 @@ private fun ConfigProbeTraceCard(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            if (probe.step1Executed && probe.step1Summary.isNotBlank()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    StudioSummaryPill(
+                        label = probe.step1Summary,
+                        color = consoleColors.unknownAccent
+                    )
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2569,7 +3648,7 @@ private fun ConfigProbeTraceCard(
                     modifier = Modifier.height(30.dp)
                 ) {
                     Text(
-                        text = if (showRawDetails) "Hide Trace Details" else "Inspect Request & Headers",
+                        text = if (showRawDetails) "Hide Trace Details" else "Inspect Request, Headers & Keychecks",
                         style = MaterialTheme.typography.labelSmall
                     )
                 }
@@ -2597,6 +3676,21 @@ private fun ConfigProbeTraceCard(
                         modifier = Modifier.padding(8.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
+                        if (probe.checkpointTrace.isNotEmpty()) {
+                            Text(
+                                text = "KEYCHECK TRACE:\n" + probe.checkpointTrace.joinToString("\n") { st ->
+                                    val mark = when {
+                                        st.isWinner -> "[WIN -> ${st.rule.verdict}]"
+                                        st.matched -> "[MATCH]"
+                                        else -> "[SKIP]"
+                                    }
+                                    "#${st.index} $mark ${st.rule.condition.label}: ${st.detail}"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = JetBrainsMonoFamily,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
                         if (probe.requestSummary.isNotBlank()) {
                             Text(
                                 text = "REQ: ${probe.requestSummary}",

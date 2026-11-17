@@ -16,7 +16,6 @@ enum class ValidationMode(
 ) {
     LOCAL_DETERMINISTIC("LUHN", fixedDelayMs = null),
     SANDBOX_SUITE("SANDBOX", fixedDelayMs = null),
-    CHKR_CC("CHKR.CC", fixedDelayMs = 10_000L),
     PAYATE_MOCK("PAYATE", fixedDelayMs = 3_000L),
     MULTI_API_AUTO("MULTI API", fixedDelayMs = 5_000L),
     REMOTE_WEBHOOK("CUSTOM HTTP", fixedDelayMs = null);
@@ -241,9 +240,72 @@ object CardValidatorEngine {
     ): ValidationRecord {
         val startNanos = System.nanoTime()
         val trimmed = rawLine.trim()
+        val resolvedWebhookConfig = if (mode == ValidationMode.REMOTE_WEBHOOK) {
+            (customHttpConfig ?: CustomHttpConfig(url = webhookUrl)).let { cfg ->
+                if (cfg.url.isBlank() && webhookUrl.isNotBlank()) cfg.copy(url = webhookUrl) else cfg
+            }
+        } else {
+            customHttpConfig
+        }
+
+        // Support email:pass / user:pass combo lines in REMOTE_WEBHOOK mode
+        if (mode == ValidationMode.REMOTE_WEBHOOK &&
+            CustomConfigStudioEngine.isComboInputLine(trimmed, resolvedWebhookConfig)
+        ) {
+            val comboParts = trimmed.split(':', '|', ';', limit = 3).map { it.trim() }
+            val userOrEmail = comboParts.getOrElse(0) { trimmed }
+            val passPart = comboParts.getOrElse(1) { "---" }
+            val cfg = resolvedWebhookConfig ?: CustomHttpConfig(url = webhookUrl)
+            if (cfg.url.isBlank()) {
+                val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
+                return ValidationRecord(
+                    id = "${System.nanoTime()}_${trimmed.hashCode()}",
+                    rawLine = trimmed,
+                    normalizedLine = trimmed,
+                    pan = userOrEmail,
+                    month = "--",
+                    year = "----",
+                    cvv = passPart,
+                    scheme = CardScheme.UNKNOWN,
+                    bucket = ResultBucket.UNKNOWN,
+                    message = "HTTP endpoint URL not configured in Settings",
+                    latencyMs = elapsed
+                )
+            }
+            return CustomHttpClient.executeValidation(
+                rawLine = trimmed,
+                normalizedLine = trimmed,
+                pan = userOrEmail,
+                mm = "--",
+                yyyy = "----",
+                cvv = passPart,
+                scheme = CardScheme.UNKNOWN,
+                config = cfg,
+                startNanos = startNanos,
+                useCacheAndDedup = useCacheAndDedup
+            )
+        }
+
         val parts = trimmed.split('|', '/', ':', ';').map { it.trim() }.filter { it.isNotEmpty() }
 
         if (parts.size < 4) {
+            if (mode == ValidationMode.REMOTE_WEBHOOK && resolvedWebhookConfig?.skipLocalLuhnPrecheck == true) {
+                val cfg = resolvedWebhookConfig
+                if (cfg.url.isNotBlank()) {
+                    return CustomHttpClient.executeValidation(
+                        rawLine = trimmed,
+                        normalizedLine = trimmed,
+                        pan = parts.getOrNull(0) ?: trimmed,
+                        mm = parts.getOrNull(1) ?: "--",
+                        yyyy = parts.getOrNull(2) ?: "----",
+                        cvv = parts.getOrNull(3) ?: "---",
+                        scheme = detectScheme(parts.getOrNull(0) ?: ""),
+                        config = cfg,
+                        startNanos = startNanos,
+                        useCacheAndDedup = useCacheAndDedup
+                    )
+                }
+            }
             val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
             return ValidationRecord(
                 id = "${System.nanoTime()}_${trimmed.hashCode()}",
@@ -300,6 +362,40 @@ object CardValidatorEngine {
 
         val normalizedLine = "$pan|$mm|$yyyy|$cvv"
         val scheme = detectScheme(pan)
+
+        if (mode == ValidationMode.REMOTE_WEBHOOK && resolvedWebhookConfig?.skipLocalLuhnPrecheck == true) {
+            val paddedMm = mm.padStart(2, '0')
+            val canonicalLine = "$pan|$paddedMm|$yyyy|$cvv"
+            val cfg = resolvedWebhookConfig
+            if (cfg.url.isBlank()) {
+                val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
+                return ValidationRecord(
+                    id = "${System.nanoTime()}_${canonicalLine.hashCode()}",
+                    rawLine = trimmed,
+                    normalizedLine = canonicalLine,
+                    pan = pan,
+                    month = paddedMm,
+                    year = yyyy,
+                    cvv = cvv,
+                    scheme = scheme,
+                    bucket = ResultBucket.UNKNOWN,
+                    message = "HTTP endpoint URL not configured in Settings",
+                    latencyMs = elapsed
+                )
+            }
+            return CustomHttpClient.executeValidation(
+                rawLine = trimmed,
+                normalizedLine = canonicalLine,
+                pan = pan,
+                mm = paddedMm,
+                yyyy = yyyy,
+                cvv = cvv,
+                scheme = scheme,
+                config = cfg,
+                startNanos = startNanos,
+                useCacheAndDedup = useCacheAndDedup
+            )
+        }
 
         // Step 1: Numeric syntax check
         if (!pan.all { it.isDigit() } || !mm.all { it.isDigit() } || !yyyy.all { it.isDigit() } || !cvv.all { it.isDigit() }) {
@@ -408,19 +504,6 @@ object CardValidatorEngine {
         val timeoutSec = customHttpConfig?.timeoutSeconds ?: 15
 
         return when (mode) {
-            ValidationMode.CHKR_CC -> ValidationApiProviders.executeChkr(
-                rawLine = trimmed,
-                normalizedLine = canonicalLine,
-                pan = pan,
-                mm = paddedMm,
-                yyyy = yyyy,
-                cvv = cvv,
-                scheme = scheme,
-                timeoutSeconds = timeoutSec,
-                startNanos = startNanos,
-                useCacheAndDedup = useCacheAndDedup
-            )
-
             ValidationMode.PAYATE_MOCK -> ValidationApiProviders.executePayate(
                 rawLine = trimmed,
                 normalizedLine = canonicalLine,

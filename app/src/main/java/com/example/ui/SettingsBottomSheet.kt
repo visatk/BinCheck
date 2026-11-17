@@ -352,7 +352,7 @@ fun SettingsBottomSheet(
 
                                 ModeOptionCard(
                                     title = stringResource(R.string.mode_sandbox_suite),
-                                    subtitle = "Runs $0.00 Zero-Dollar Auth across Stripe, Braintree, Adyen, Square, Auth.Net & Checkout.com.",
+                                    subtitle = "Runs $0.00 Zero-Dollar Auth across Stripe, Braintree, Auth.Net & Checkout.com.",
                                     icon = AppIcons.CheckCircle,
                                     selected = selectedMode == ValidationMode.SANDBOX_SUITE,
                                     onClick = { selectedMode = ValidationMode.SANDBOX_SUITE },
@@ -361,20 +361,11 @@ fun SettingsBottomSheet(
 
                                 ModeOptionCard(
                                     title = stringResource(R.string.mode_multi_api),
-                                    subtitle = "Tries Chkr.cc first and automatically switches to Payate if busy (5s pace).",
+                                    subtitle = "Tries Payate first and automatically switches to $0.00 Sandbox Auth if busy (5s pace).",
                                     icon = AppIcons.SyncAlt,
                                     selected = selectedMode == ValidationMode.MULTI_API_AUTO,
                                     onClick = { selectedMode = ValidationMode.MULTI_API_AUTO },
                                     testTag = "mode_multi_api_option"
-                                )
-
-                                ModeOptionCard(
-                                    title = stringResource(R.string.mode_chkr_cc),
-                                    subtitle = "Checks via api.chkr.cc with built-in bank & country details (10s pace).",
-                                    icon = AppIcons.Public,
-                                    selected = selectedMode == ValidationMode.CHKR_CC,
-                                    onClick = { selectedMode = ValidationMode.CHKR_CC },
-                                    testTag = "mode_chkr_option"
                                 )
 
                                 ModeOptionCard(
