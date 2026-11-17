@@ -185,7 +185,7 @@ fun CustomHttpSectionCard(
                     .fillMaxWidth()
                     .testTag("webhook_url_input"),
                 label = { Text(stringResource(R.string.endpoint_url_label)) },
-                placeholder = { Text("https://api.example.com/verify?lista={lista}") },
+                placeholder = { Text("https://api.stripe.com/v1/setup_intents") },
                 textStyle = MaterialTheme.typography.labelMedium.copy(fontFamily = JetBrainsMonoFamily),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 singleLine = true,
@@ -210,7 +210,7 @@ fun CustomHttpSectionCard(
                     SuggestionChip(
                         onClick = {
                             val updatedUrl = if (config.url.isEmpty()) {
-                                "https://api.example.com/check?lista=$token"
+                                "https://mock.payate.com/api.php?data=$token"
                             } else {
                                 config.url + token
                             }

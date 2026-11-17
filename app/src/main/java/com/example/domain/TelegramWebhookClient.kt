@@ -21,7 +21,6 @@ data class TelegramProbeResult(
 
 object TelegramWebhookClient {
 
-    private const val PLACEHOLDER_TOKEN = "MY_TELEGRAM_BOT_TOKEN"
     private const val TELEGRAM_API_BASE = "https://api.telegram.org"
     private const val TELEGRAM_HOST = "api.telegram.org"
 
@@ -29,7 +28,7 @@ object TelegramWebhookClient {
 
     fun resolveConfiguredBotToken(): String {
         val raw = runCatching { BuildConfig.TELEGRAM_BOT_TOKEN }.getOrDefault("").trim()
-        return if (raw.isEmpty() || raw == PLACEHOLDER_TOKEN) "" else raw
+        return if (raw.isEmpty() || !raw.contains(':')) "" else raw
     }
 
     fun hasConfiguredToken(): Boolean = resolveConfiguredBotToken().isNotEmpty()

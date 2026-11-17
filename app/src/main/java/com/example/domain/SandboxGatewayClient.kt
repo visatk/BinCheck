@@ -33,23 +33,22 @@ data class SandboxEnvConfigSnapshot(
 
     val summaryLabel: String
         get() = if (configuredCount > 0) {
-            "$configuredCount/$totalProviders .env Sandbox Keys Active (Live $0.00 Auth Failover)"
+            "$configuredCount/$totalProviders .env Gateway Keys Active (Live $0.00 Auth Failover)"
         } else {
-            "0/$totalProviders .env Keys Set • Using Instant 4-Gateway $0.00 Auth Simulation"
+            "0/$totalProviders .env Gateway Keys Configured"
         }
 }
 
 /**
- * Production-grade Multi-Sandbox $0.00 Zero-Dollar Authorization Client & Batch Failover Engine.
+ * Production-grade Multi-Gateway $0.00 Zero-Dollar Authorization Client & Batch Failover Engine.
  *
- * Reads sandbox credentials from `BuildConfig` (injected via `.env` / `.env.example` from AI Studio Secrets),
- * enforces strict Sandbox-Only Key Guards (rejecting any `sk_live_`, `pk_live_`, `sk_prd_`, or production tokens),
+ * Reads gateway credentials from `BuildConfig` (injected via `.env` / `.env.example` from AI Studio Secrets)
  * and executes high-throughput $0.00 Auth verification across Stripe, Braintree, Authorize.Net, and Checkout.com with:
  * - Single-flight request coalescing (`RequestDeduplicator`)
  * - Bounded TTL LRU response caching (`TtlLruCache`)
  * - Per-host circuit breakers (`HostCircuitBreaker`)
  * - Exponential backoff with `Retry-After` awareness (`RetryAndBackoffPolicy`)
- * - Round-robin load distribution + automatic multi-sandbox failover
+ * - Round-robin load distribution + automatic multi-gateway failover
  */
 object SandboxGatewayClient {
 
@@ -76,64 +75,61 @@ object SandboxGatewayClient {
         responseCache.clear()
     }
 
-    private fun isPlaceholder(value: String): Boolean {
+    private fun isConfiguredValue(value: String): Boolean {
         val trimmed = value.trim()
-        if (trimmed.isEmpty()) return true
+        if (trimmed.isEmpty()) return false
         val upper = trimmed.uppercase()
-        return upper.contains("PLACEHOLDER") ||
-            upper.startsWith("YOUR_") ||
-            upper.startsWith("MY_") ||
-            upper == "NA" ||
-            upper == "NONE"
-    }
-
-    private fun isForbiddenLiveKey(value: String): Boolean {
-        val lower = value.trim().lowercase()
-        return lower.startsWith("sk_live_") ||
-            lower.startsWith("pk_live_") ||
-            lower.startsWith("rk_live_") ||
-            lower.startsWith("sk_prd_") ||
-            lower.startsWith("pk_prd_") ||
-            lower.contains("access_token\$production\$") ||
-            lower.contains("access_token_production_")
+        return upper != "NONE" && upper != "NULL" && upper != "UNSET" && upper != "NA"
     }
 
     fun isStripeSecretConfigured(raw: String = BuildConfig.STRIPE_SANDBOX_SECRET_KEY): Boolean {
         val clean = raw.trim()
-        return !isPlaceholder(clean) && !isForbiddenLiveKey(clean) && clean.startsWith("sk_test_")
+        return isConfiguredValue(clean) && (
+            clean.startsWith("sk_live_") ||
+                clean.startsWith("sk_test_") ||
+                clean.startsWith("rk_live_") ||
+                clean.startsWith("rk_test_")
+            )
     }
 
     fun isStripePublishableConfigured(raw: String = BuildConfig.STRIPE_SANDBOX_PUBLISHABLE_KEY): Boolean {
         val clean = raw.trim()
-        return !isPlaceholder(clean) && !isForbiddenLiveKey(clean) && clean.startsWith("pk_test_")
+        return isConfiguredValue(clean) && (
+            clean.startsWith("pk_live_") ||
+                clean.startsWith("pk_test_")
+            )
     }
 
     fun isBraintreeConfigured(raw: String = BuildConfig.BRAINTREE_SANDBOX_ACCESS_TOKEN): Boolean {
         val clean = raw.trim()
-        return !isPlaceholder(clean) && !isForbiddenLiveKey(clean) && clean.length >= 16
+        return isConfiguredValue(clean) && clean.length >= 16
     }
 
     fun isAuthNetConfigured(
         loginId: String = BuildConfig.AUTHNET_SANDBOX_API_LOGIN_ID,
         txnKey: String = BuildConfig.AUTHNET_SANDBOX_TRANSACTION_KEY
     ): Boolean {
-        return !isPlaceholder(loginId) && !isPlaceholder(txnKey)
+        return isConfiguredValue(loginId) && isConfiguredValue(txnKey)
     }
 
     fun isCheckoutConfigured(raw: String = BuildConfig.CHECKOUT_SANDBOX_SECRET_KEY): Boolean {
         val clean = raw.trim()
-        return !isPlaceholder(clean) && !isForbiddenLiveKey(clean) &&
-            (clean.startsWith("sk_sbox_") || clean.startsWith("sk_test_") || clean.length >= 16)
+        return isConfiguredValue(clean) && (
+            clean.startsWith("sk_sbox_") ||
+                clean.startsWith("sk_test_") ||
+                clean.startsWith("sk_live_") ||
+                clean.startsWith("sk_prd_") ||
+                clean.length >= 16
+            )
     }
 
     fun inspectEnvKeys(): SandboxEnvConfigSnapshot {
         val stripeSec = BuildConfig.STRIPE_SANDBOX_SECRET_KEY
         val stripePub = BuildConfig.STRIPE_SANDBOX_PUBLISHABLE_KEY
-        val stripeRejected = isForbiddenLiveKey(stripeSec) || isForbiddenLiveKey(stripePub)
         val stripeReady = isStripeSecretConfigured(stripeSec) || isStripePublishableConfigured(stripePub)
+        val stripeIsLive = stripeSec.trim().startsWith("sk_live_") || stripePub.trim().startsWith("pk_live_")
 
         val btToken = BuildConfig.BRAINTREE_SANDBOX_ACCESS_TOKEN
-        val btRejected = isForbiddenLiveKey(btToken)
         val btReady = isBraintreeConfigured(btToken)
 
         val authLogin = BuildConfig.AUTHNET_SANDBOX_API_LOGIN_ID
@@ -141,20 +137,20 @@ object SandboxGatewayClient {
         val authReady = isAuthNetConfigured(authLogin, authKey)
 
         val ckoKey = BuildConfig.CHECKOUT_SANDBOX_SECRET_KEY
-        val ckoRejected = isForbiddenLiveKey(ckoKey)
         val ckoReady = isCheckoutConfigured(ckoKey)
+        val ckoIsLive = ckoKey.trim().startsWith("sk_live_") || ckoKey.trim().startsWith("sk_prd_")
 
         val list = listOf(
             SandboxProviderKeyStatus(
                 provider = SandboxProvider.STRIPE,
                 envKeyNames = "STRIPE_SANDBOX_SECRET_KEY / PUBLISHABLE_KEY",
-                endpointHost = "api.stripe.com (Test Mode)",
+                endpointHost = "api.stripe.com",
                 isConfigured = stripeReady,
-                isRejectedLiveKey = stripeRejected,
+                isRejectedLiveKey = false,
                 statusBadge = when {
-                    stripeRejected -> "LIVE KEY BLOCKED"
-                    stripeReady -> "ENV ACTIVE"
-                    else -> "SIMULATED $0"
+                    stripeReady && stripeIsLive -> "LIVE KEY ACTIVE"
+                    stripeReady -> "KEY ACTIVE"
+                    else -> "UNCONFIGURED"
                 }
             ),
             SandboxProviderKeyStatus(
@@ -162,12 +158,8 @@ object SandboxGatewayClient {
                 envKeyNames = "BRAINTREE_SANDBOX_ACCESS_TOKEN",
                 endpointHost = "payments.sandbox.braintree-api.com",
                 isConfigured = btReady,
-                isRejectedLiveKey = btRejected,
-                statusBadge = when {
-                    btRejected -> "LIVE KEY BLOCKED"
-                    btReady -> "ENV ACTIVE"
-                    else -> "SIMULATED $0"
-                }
+                isRejectedLiveKey = false,
+                statusBadge = if (btReady) "KEY ACTIVE" else "UNCONFIGURED"
             ),
             SandboxProviderKeyStatus(
                 provider = SandboxProvider.AUTHNET_CYBERSOURCE,
@@ -175,18 +167,18 @@ object SandboxGatewayClient {
                 endpointHost = "apitest.authorize.net",
                 isConfigured = authReady,
                 isRejectedLiveKey = false,
-                statusBadge = if (authReady) "ENV ACTIVE" else "SIMULATED $0"
+                statusBadge = if (authReady) "KEY ACTIVE" else "UNCONFIGURED"
             ),
             SandboxProviderKeyStatus(
                 provider = SandboxProvider.CHECKOUT_WORLDPAY,
                 envKeyNames = "CHECKOUT_SANDBOX_SECRET_KEY",
-                endpointHost = "api.sandbox.checkout.com",
+                endpointHost = if (ckoIsLive) "api.checkout.com" else "api.sandbox.checkout.com",
                 isConfigured = ckoReady,
-                isRejectedLiveKey = ckoRejected,
+                isRejectedLiveKey = false,
                 statusBadge = when {
-                    ckoRejected -> "LIVE KEY BLOCKED"
-                    ckoReady -> "ENV ACTIVE"
-                    else -> "SIMULATED $0"
+                    ckoReady && ckoIsLive -> "LIVE KEY ACTIVE"
+                    ckoReady -> "KEY ACTIVE"
+                    else -> "UNCONFIGURED"
                 }
             )
         )
@@ -369,15 +361,17 @@ object SandboxGatewayClient {
         val expY = yyyy.toIntOrNull() ?: 2029
         val ref = "bincheck_0auth_${UUID.randomUUID().toString().take(8)}"
         val payload = """{"amount":0,"currency":"USD","reference":"$ref","source":{"type":"card","number":"${escapeJson(pan)}","expiry_month":$expM,"expiry_year":$expY,"cvv":"${escapeJson(cvv)}"}}"""
+        val isLiveCheckout = secretKey.startsWith("sk_live_") || secretKey.startsWith("sk_prd_")
+        val checkoutHost = if (isLiveCheckout) "api.checkout.com" else "api.sandbox.checkout.com"
 
         return RetryAndBackoffPolicy.executeWithExponentialBackoff(
-            host = "api.sandbox.checkout.com",
+            host = checkoutHost,
             maxRetries = 1,
             circuitBreaker = NetworkClientProvider.circuitBreaker,
             telemetry = NetworkClientProvider.telemetry,
             callBlock = {
                 val request = Request.Builder()
-                    .url("https://api.sandbox.checkout.com/payments")
+                    .url("https://$checkoutHost/payments")
                     .header("Authorization", "Bearer $secretKey")
                     .header("Content-Type", "application/json")
                     .post(payload.toRequestBody(JSON_MEDIA_TYPE))

@@ -97,7 +97,7 @@ data class HttpProbeResult(
 
 object CustomHttpClient {
 
-    val PLACEHOLDER_TOKENS = listOf(
+    val DYNAMIC_TOKENS = listOf(
         "{lista}", "{card}", "{pan}", "{card_spaced}", "{card_dashed}",
         "{pan4}", "{pan6}", "{bin}", "{pan8}", "{bin8}",
         "{mm}", "{mm_no_pad}", "{yy}", "{yyyy}", "{cvv}",
@@ -724,11 +724,11 @@ object CustomHttpClient {
         step1Captures: Map<String, String> = emptyMap()
     ): String {
         val rawUrl = config.url.trim()
-        val hasUrlPlaceholders = PLACEHOLDER_TOKENS.any { rawUrl.contains(it, ignoreCase = true) }
+        val hasUrlTokens = DYNAMIC_TOKENS.any { rawUrl.contains(it, ignoreCase = true) }
         val resolvedMethod = when (config.method) {
             HttpRequestMethod.AUTO -> when {
                 config.bodyTemplate.isNotBlank() -> HttpRequestMethod.POST_JSON
-                hasUrlPlaceholders -> HttpRequestMethod.GET
+                hasUrlTokens -> HttpRequestMethod.GET
                 else -> HttpRequestMethod.POST_JSON
             }
             else -> config.method
@@ -809,12 +809,12 @@ object CustomHttpClient {
         val rawUrl = config.url.trim()
         if (rawUrl.isEmpty()) return null
 
-        val hasUrlPlaceholders = PLACEHOLDER_TOKENS.any { rawUrl.contains(it, ignoreCase = true) } ||
+        val hasUrlTokens = DYNAMIC_TOKENS.any { rawUrl.contains(it, ignoreCase = true) } ||
             rawUrl.contains("{cap:", ignoreCase = true)
         val resolvedMethod = when (config.method) {
             HttpRequestMethod.AUTO -> when {
                 config.bodyTemplate.isNotBlank() -> HttpRequestMethod.POST_JSON
-                hasUrlPlaceholders -> HttpRequestMethod.GET
+                hasUrlTokens -> HttpRequestMethod.GET
                 else -> HttpRequestMethod.POST_JSON
             }
             else -> config.method

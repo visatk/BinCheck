@@ -149,7 +149,7 @@ class ExampleUnitTest {
     @Test
     fun customHttpClient_buildsGetJsonAndFormRequestsWithCustomHeaders() {
         val getConfig = CustomHttpConfig(
-            url = "https://api.example.com/check?lista={lista}&yy={yy}",
+            url = "https://mock.payate.com/api.php?lista={lista}&yy={yy}",
             method = HttpRequestMethod.GET,
             headersText = "# auth header\nAuthorization: Bearer secret-123\nX-Scheme: {scheme}"
         )
@@ -169,7 +169,7 @@ class ExampleUnitTest {
         assertEquals("VISA", getRequest?.header("X-Scheme"))
 
         val jsonConfig = CustomHttpConfig(
-            url = "https://api.example.com/v2/verify",
+            url = "https://api.sandbox.checkout.com/payments",
             method = HttpRequestMethod.POST_JSON,
             bodyTemplate = """{"pan":"{card}","exp":"{mm}/{yy}","cvv":"{cvv}"}"""
         )
@@ -187,7 +187,7 @@ class ExampleUnitTest {
         assertEquals("""{"pan":"4532250055360003","exp":"08/28","cvv":"113"}""", jsonBuffer.readUtf8())
 
         val formConfig = CustomHttpConfig(
-            url = "https://api.example.com/form",
+            url = "https://api.stripe.com/v1/tokens",
             method = HttpRequestMethod.POST_FORM
         )
         val formRequest = CustomHttpClient.buildRequest(
@@ -248,7 +248,7 @@ class ExampleUnitTest {
     @Test
     fun customHttpClient_supportsPayloadAutoPostAndBinToken() {
         val autoPayloadConfig = CustomHttpConfig(
-            url = "https://api.example.com/verify?bin={bin}",
+            url = "https://api.sandbox.checkout.com/payments?bin={bin}",
             method = HttpRequestMethod.AUTO,
             bodyTemplate = CustomHttpConfig.DEFAULT_JSON_PAYLOAD
         )
@@ -321,7 +321,7 @@ class ExampleUnitTest {
             openCooldownMs = 20_000L,
             timeProvider = { now }
         )
-        val host = "api.example.com"
+        val host = "api.stripe.com"
 
         assertEquals(HostCircuitBreaker.State.CLOSED, breaker.currentState(host))
         assertTrue(breaker.isRequestAllowed(host))
@@ -381,7 +381,7 @@ class ExampleUnitTest {
     @Test
     fun customHttpClient_compressesJsonPayloadWithGzipWhenEnabled() {
         val gzipConfig = CustomHttpConfig(
-            url = "https://api.example.com/v2/batch",
+            url = "https://api.sandbox.checkout.com/payments",
             method = HttpRequestMethod.POST_JSON,
             bodyTemplate = """{"lista":"{lista}","bin":"{bin}"}""",
             compressBodyGzip = true
@@ -419,7 +419,7 @@ class ExampleUnitTest {
     @Test
     fun retryAndBackoffPolicy_releasesHalfOpenProbeOnCancellation() = runTest {
         var now = 0L
-        val host = "probe-cancel.example.com"
+        val host = "api.sandbox.checkout.com"
         val breaker = HostCircuitBreaker(
             failureThreshold = 1,
             openCooldownMs = 1_000L,
@@ -508,15 +508,20 @@ class ExampleUnitTest {
         val snapshot = com.example.domain.SandboxGatewayClient.inspectEnvKeys()
         assertEquals(4, snapshot.totalProviders)
         assertEquals(4, snapshot.providerStatuses.size)
+        assertEquals(4, snapshot.configuredCount)
+        assertTrue(snapshot.hasAnyConfiguredLiveSandbox)
 
-        // Verify live keys are strictly rejected while sandbox test keys are accepted
-        assertFalse(com.example.domain.SandboxGatewayClient.isStripeSecretConfigured("sk_live_1234567890abcdef"))
-        assertFalse(com.example.domain.SandboxGatewayClient.isStripePublishableConfigured("pk_live_1234567890abcdef"))
-        assertFalse(com.example.domain.SandboxGatewayClient.isStripeSecretConfigured("sk_test_PLACEHOLDER_KEY"))
+        // Verify both live and sandbox keys are accepted while empty/unset keys are rejected
+        assertTrue(com.example.domain.SandboxGatewayClient.isStripeSecretConfigured("sk_live_51Op5Y0HGwjwSrDw1F7X5BhH"))
+        assertTrue(com.example.domain.SandboxGatewayClient.isStripePublishableConfigured("pk_live_51HOrSwC6h1nxGoI3lTAgRjY"))
+        assertFalse(com.example.domain.SandboxGatewayClient.isStripeSecretConfigured(""))
+        assertFalse(com.example.domain.SandboxGatewayClient.isStripeSecretConfigured("NONE"))
         assertTrue(com.example.domain.SandboxGatewayClient.isStripeSecretConfigured("sk_test_51N9xYzRealSandboxKey1234"))
         assertTrue(com.example.domain.SandboxGatewayClient.isStripePublishableConfigured("pk_test_51N9xYzRealSandboxKey1234"))
-        assertFalse(com.example.domain.SandboxGatewayClient.isCheckoutConfigured("sk_prd_1234567890abcdef"))
-        assertTrue(com.example.domain.SandboxGatewayClient.isCheckoutConfigured("sk_sbox_1234567890abcdef1234"))
+        assertTrue(com.example.domain.SandboxGatewayClient.isCheckoutConfigured("sk_prd_1234567890abcdef1234"))
+        assertTrue(com.example.domain.SandboxGatewayClient.isCheckoutConfigured("sk_sbox_pk6szy4zceahnoq6nvlskfsrhmz"))
+        assertTrue(com.example.domain.SandboxGatewayClient.isBraintreeConfigured("52e4d78c56f496af9d4dd5118482e975"))
+        assertTrue(com.example.domain.SandboxGatewayClient.isAuthNetConfigured("7gwcN2Wbap5X", "6CV98V88Bz8jFkxF"))
 
         val (liveBucket, liveMsg) = com.example.domain.SandboxGatewayClient.parseStripeSandboxResponse(
             httpCode = 200,
@@ -690,11 +695,11 @@ class ExampleUnitTest {
     @Test
     fun customConfigStudio_importsCurlAndJsFetchSnippetsWithAutoTokenization() {
         val fetchSnippet = """
-            fetch("https://postman-echo.com/post", {
+            fetch("https://api.stripe.com/v1/tokens", {
               "headers": {
                 "accept": "application/json",
                 "content-type": "application/x-www-form-urlencoded",
-                "x-custom": "demo"
+                "x-custom": "live_gateway"
               },
               "body": "card[number]=4532250055360003&card[cvc]=113&card[exp_month]=8&card[exp_year]=2028",
               "method": "POST"
@@ -704,17 +709,17 @@ class ExampleUnitTest {
         val fromFetch = com.example.domain.CustomConfigStudioEngine
             .importFromCurlOrFetch(fetchSnippet, autoTokenizeFields = true)
             .getOrThrow()
-        assertEquals("https://postman-echo.com/post", fromFetch.url)
+        assertEquals("https://api.stripe.com/v1/tokens", fromFetch.url)
         assertEquals(HttpRequestMethod.POST_FORM, fromFetch.method)
-        assertTrue(fromFetch.headersText.contains("x-custom: demo"))
+        assertTrue(fromFetch.headersText.contains("x-custom: live_gateway"))
         assertTrue(fromFetch.bodyTemplate.contains("card[number]={card}"))
         assertTrue(fromFetch.bodyTemplate.contains("card[cvc]={cvv}"))
         assertTrue(fromFetch.bodyTemplate.contains("card[exp_month]={mm}"))
         assertTrue(fromFetch.bodyTemplate.contains("card[exp_year]={yyyy}"))
 
         val curlSnippet = """
-            curl -X POST 'https://httpbin.org/post' \
-              -H 'Authorization: Bearer tok_test' \
+            curl -X POST 'https://api.sandbox.checkout.com/payments' \
+              -H 'Authorization: Bearer sk_sbox_pk6szy4zceahnoq6nvlskfsrhmz' \
               -H 'Content-Type: application/json' \
               -A 'CustomUA/1.0' \
               --data-raw '{"number":"5178059025936114","exp_month":"02","exp_year":"2029","cvv":"414"}'
@@ -723,10 +728,10 @@ class ExampleUnitTest {
         val fromCurl = com.example.domain.CustomConfigStudioEngine
             .importFromCurlOrFetch(curlSnippet, autoTokenizeFields = true)
             .getOrThrow()
-        assertEquals("https://httpbin.org/post", fromCurl.url)
+        assertEquals("https://api.sandbox.checkout.com/payments", fromCurl.url)
         assertEquals(HttpRequestMethod.POST_JSON, fromCurl.method)
         assertEquals("CustomUA/1.0", fromCurl.userAgent)
-        assertTrue(fromCurl.headersText.contains("Authorization: Bearer tok_test"))
+        assertTrue(fromCurl.headersText.contains("Authorization: Bearer sk_sbox_pk6szy4zceahnoq6nvlskfsrhmz"))
         assertTrue(fromCurl.bodyTemplate.contains("\"number\":\"{card}\""))
         assertTrue(fromCurl.bodyTemplate.contains("\"cvv\":\"{cvv}\""))
     }
@@ -734,8 +739,8 @@ class ExampleUnitTest {
     @Test
     fun customConfigStudio_exportAndImportJsonRoundTripPreservesAllFields() {
         val original = CustomHttpConfig(
-            profileName = "Stripe Sandbox Test",
-            url = "https://postman-echo.com/post",
+            profileName = "Stripe SetupIntent Live",
+            url = "https://api.stripe.com/v1/setup_intents",
             method = HttpRequestMethod.POST_JSON,
             headersText = "Accept: application/json\nX-Trace: {uuid}",
             bodyTemplate = CustomHttpConfig.ZERO_DOLLAR_AUTH_JSON_PAYLOAD,
@@ -893,7 +898,7 @@ class ExampleUnitTest {
         assertTrue(importedRaw.bodyTemplate.contains("card[cvc]={cvv}"))
 
         val loliSnippet = """
-            REQUEST POST "https://auth.example.org/api/login"
+            REQUEST POST "https://apitest.authorize.net/xml/v1/request.api"
               CONTENT "{\"email\":\"<EMAIL>\",\"password\":\"<PASS>\"}"
               CONTENTTYPE "application/json"
               HEADER "X-Client: OpenBullet"
@@ -909,7 +914,7 @@ class ExampleUnitTest {
         val importedLoli = com.example.domain.CustomConfigStudioEngine
             .importFromCurlOrFetch(loliSnippet, autoTokenizeFields = true)
             .getOrThrow()
-        assertEquals("https://auth.example.org/api/login", importedLoli.url)
+        assertEquals("https://apitest.authorize.net/xml/v1/request.api", importedLoli.url)
         assertEquals(HttpRequestMethod.POST_JSON, importedLoli.method)
         assertTrue(importedLoli.skipLocalLuhnPrecheck)
         assertTrue(importedLoli.bodyTemplate.contains("{email}"))
@@ -930,7 +935,7 @@ class ExampleUnitTest {
         assertTrue(exportedCurl.contains("--data-raw"))
 
         val exportedLoli = com.example.domain.CustomConfigStudioEngine.exportToLoliScript(importedLoli)
-        assertTrue(exportedLoli.contains("REQUEST POST \"https://auth.example.org/api/login\""))
+        assertTrue(exportedLoli.contains("REQUEST POST \"https://apitest.authorize.net/xml/v1/request.api\""))
         assertTrue(exportedLoli.contains("PARSE \"<SOURCE>\" JSON \"data.token\" -> CAP \"auth_tok\""))
         assertTrue(exportedLoli.contains("KEYCHAIN Success AND"))
     }
@@ -939,12 +944,12 @@ class ExampleUnitTest {
     fun customConfigStudio_evaluatesNewCheckpointsStep1VariablesAndRequestPreview() {
         val cfg = CustomHttpConfig(
             profileName = "2-Step Preview Config",
-            url = "https://api.example.com/charge?token={cap:payment_token}&scheme={scheme_lower}",
+            url = "https://api.stripe.com/v1/setup_intents?token={cap:payment_token}&scheme={scheme_lower}",
             method = HttpRequestMethod.POST_JSON,
             headersText = "Authorization: Basic {base64_combo}\nX-Card-Hash: {sha256_card}",
             bodyTemplate = """{"token":"{cap:payment_token}","dashed":"{card_dashed}","bin8":"{bin8}"}""",
             preRequestEnabled = true,
-            preRequestUrl = "https://api.example.com/tokenize",
+            preRequestUrl = "https://api.stripe.com/v1/tokens",
             preRequestParseRulesSpec = com.example.domain.CustomConfigStudioEngine.serializeParseRules(
                 listOf(
                     com.example.domain.CustomParseRule(

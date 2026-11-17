@@ -181,7 +181,7 @@ class ExampleRobolectricTest {
         val prefsRepo = ValidatorPreferencesRepository(context)
         prefsRepo.updateSettings(
             validationMode = ValidationMode.REMOTE_WEBHOOK,
-            webhookUrl = "https://api.example.com/check?lista={lista}",
+            webhookUrl = "https://mock.payate.com/api.php?lista={lista}",
             httpMethod = HttpRequestMethod.POST_JSON,
             httpHeaders = "Authorization: Bearer abc",
             httpBodyTemplate = """{"lista":"{lista}"}""",
@@ -243,7 +243,7 @@ class ExampleRobolectricTest {
                 Box(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     CustomHttpSectionCard(
                         config = CustomHttpConfig(
-                            url = "https://api.example.com/verify",
+                            url = "https://api.stripe.com/v1/setup_intents",
                             method = HttpRequestMethod.POST_JSON,
                             headersText = "Authorization: Bearer test",
                             bodyTemplate = """{"lista":"{lista}"}"""
@@ -548,7 +548,7 @@ class ExampleRobolectricTest {
         val prefsRepo = ValidatorPreferencesRepository(context)
         prefsRepo.updateSettings(
             validationMode = ValidationMode.REMOTE_WEBHOOK,
-            webhookUrl = "https://api.example.com/check",
+            webhookUrl = "https://api.stripe.com/v1/setup_intents",
             autoResolveWildcards = true,
             batchDelayMs = 4_500L,
             concurrency = 2,
@@ -594,7 +594,7 @@ class ExampleRobolectricTest {
                 Box(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     CustomHttpSectionCard(
                         config = CustomHttpConfig(
-                            url = "https://api.example.com/verify",
+                            url = "https://api.stripe.com/v1/setup_intents",
                             method = HttpRequestMethod.AUTO
                         ),
                         isTestingEndpoint = false,
@@ -728,7 +728,7 @@ class ExampleRobolectricTest {
         val prefsRepo = ValidatorPreferencesRepository(context)
         prefsRepo.updateSettings(
             validationMode = ValidationMode.REMOTE_WEBHOOK,
-            webhookUrl = "https://api.example.com/check",
+            webhookUrl = "https://api.stripe.com/v1/setup_intents",
             autoResolveWildcards = true,
             batchDelayMs = 100L,
             concurrency = 4,
@@ -1046,7 +1046,7 @@ class ExampleRobolectricTest {
     @Test
     fun `listToolkitEngine extracts email pass combos from messy logs json and urls`() {
         val messyDump = """
-            https://portal.example.com/login:alice@gmail.com:AlicePass#1
+            https://api.stripe.com/login:alice@gmail.com:AlicePass#1
             {"email":"bob@outlook.com","password":"BobSecret99"}
             <div>Email: alice@gmail.com | Password: AlicePass#1</div>
             user=charlie@yahoo.com pass=Charlie!23
@@ -1144,14 +1144,14 @@ class ExampleRobolectricTest {
         // Switch to Gateway tab and verify HTTP Sandbox Presets
         composeTestRule.onNodeWithTag("settings_tab_gateway").performClick()
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithTag("http_sandbox_preset_httpbin_echo").performScrollTo().performClick()
+        composeTestRule.onNodeWithTag("http_sandbox_preset_checkout_zero_auth").performScrollTo().performClick()
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithTag("save_settings_button").performClick()
         composeTestRule.waitForIdle()
 
         assertEquals(ValidationMode.SANDBOX_SUITE, savedMode)
-        assertEquals("https://httpbin.org/post", savedHttpConfig?.url)
+        assertEquals("https://api.sandbox.checkout.com/payments", savedHttpConfig?.url)
         assertEquals(CustomHttpConfig.ZERO_DOLLAR_AUTH_JSON_PAYLOAD, savedHttpConfig?.bodyTemplate)
     }
 
@@ -1164,11 +1164,11 @@ class ExampleRobolectricTest {
                 com.example.ui.CustomConfigStudioBottomSheet(
                     initialConfig = CustomHttpConfig(
                         profileName = "Test Studio Profile",
-                        url = "https://postman-echo.com/post",
+                        url = "https://api.stripe.com/v1/setup_intents",
                         method = HttpRequestMethod.POST_JSON,
                         bodyTemplate = CustomHttpConfig.ZERO_DOLLAR_AUTH_JSON_PAYLOAD,
                         preRequestEnabled = true,
-                        preRequestUrl = "https://postman-echo.com/get"
+                        preRequestUrl = "https://api.stripe.com/v1/tokens"
                     ),
                     savedProfiles = emptyList(),
                     isTestingEndpoint = false,
@@ -1209,7 +1209,7 @@ class ExampleRobolectricTest {
 
         assertEquals("Test Studio Profile", appliedConfig?.profileName)
         assertEquals(true, appliedConfig?.preRequestEnabled)
-        assertEquals("https://postman-echo.com/get", appliedConfig?.preRequestUrl)
+        assertEquals("https://api.stripe.com/v1/tokens", appliedConfig?.preRequestUrl)
     }
 }
 

@@ -993,7 +993,7 @@ fun CustomConfigStudioBottomSheet(
                     OutlinedTextField(
                         value = sampleTestLine,
                         onValueChange = { sampleTestLine = it },
-                        label = { Text("Probe Sample Input Line (Card or email:pass)") },
+                        label = { Text("Probe Input Line (Card or email:pass)") },
                         placeholder = { Text("453225005536xxx3|08|2028|113") },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
@@ -1002,12 +1002,12 @@ fun CustomConfigStudioBottomSheet(
                             .testTag("config_studio_sample_line_input")
                     )
                     PresetMiniPill(
-                        label = if (sampleTestLine.contains('@')) "Card Sample" else "Combo Sample"
+                        label = if (sampleTestLine.contains('@')) "Card Input" else "Combo Input"
                     ) {
                         sampleTestLine = if (sampleTestLine.contains('@')) {
                             "453225005536xxx3|08|2028|113"
                         } else {
-                            "alice@example.com:Secr3tPass99"
+                            "admin@drkingbd.org:Secr3tPass99"
                         }
                     }
                 }
@@ -1186,45 +1186,46 @@ private fun CurlOrFetchImportDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                // Quick format samples for 1-tap testing
+                // Quick gateway request templates for 1-tap loading
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    PresetMiniPill(label = "Sample cURL") {
+                    PresetMiniPill(label = "Stripe cURL") {
                         snippet = """
-                            curl -X POST 'https://postman-echo.com/post' \
-                              -H 'Content-Type: application/json' \
-                              -H 'X-Idempotency: {uuid}' \
-                              --data-raw '{"number":"4532250055360003","exp_month":"08","exp_year":"2028","cvv":"113"}'
+                            curl -X POST 'https://api.stripe.com/v1/tokens' \
+                              -H 'Authorization: Bearer ${com.example.BuildConfig.STRIPE_SANDBOX_PUBLISHABLE_KEY}' \
+                              -H 'Content-Type: application/x-www-form-urlencoded' \
+                              --data-raw 'card[number]=4532250055360003&card[exp_month]=08&card[exp_year]=2028&card[cvc]=113'
                         """.trimIndent()
                         errorMsg = null
                     }
-                    PresetMiniPill(label = "Sample Raw HTTP") {
+                    PresetMiniPill(label = "Checkout Raw HTTP") {
                         snippet = """
-                            POST /post HTTP/1.1
-                            Host: httpbin.org
-                            Content-Type: application/x-www-form-urlencoded
-                            X-Custom-Trace: {uuid}
+                            POST /payments HTTP/1.1
+                            Host: api.sandbox.checkout.com
+                            Authorization: Bearer ${com.example.BuildConfig.CHECKOUT_SANDBOX_SECRET_KEY}
+                            Content-Type: application/json
+                            X-Idempotency-Key: {uuid}
 
-                            card[number]=4532250055360003&card[exp_month]=08&card[exp_year]=2028&card[cvc]=113
+                            {"amount":0,"currency":"USD","source":{"type":"card","number":"4532250055360003","expiry_month":8,"expiry_year":2028,"cvv":"113"}}
                         """.trimIndent()
                         errorMsg = null
                     }
-                    PresetMiniPill(label = "Sample LoliScript") {
+                    PresetMiniPill(label = "Payate LoliScript") {
                         snippet = """
-                            REQUEST POST "https://postman-echo.com/post"
-                              CONTENT "{\"card\":\"<CC>\",\"mm\":\"<MM>\",\"yyyy\":\"<YYYY>\",\"cvv\":\"<CVV>\"}"
-                              CONTENTTYPE "application/json"
+                            REQUEST POST "https://mock.payate.com/api.php"
+                              CONTENT "data=<CC>|<MM>|<YYYY>|<CVV>"
+                              CONTENTTYPE "application/x-www-form-urlencoded"
                               HEADER "Accept: application/json"
-                            PARSE "<SOURCE>" JSON "json.card" -> CAP "card_echo"
+                            PARSE "<SOURCE>" JSON "msg" -> CAP "msg"
                             KEYCHECK
                               KEYCHAIN Success OR
-                                KEY "card"
+                                KEY "Live"
                               KEYCHAIN Failure OR
-                                KEY "declined"
+                                KEY "Die"
                         """.trimIndent()
                         errorMsg = null
                     }
@@ -1429,30 +1430,31 @@ private fun RequestStudioTabContent(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         PresetMiniPill(label = "Preset: Tokenize Card Form") {
-                            onPreRequestUrlChange("https://postman-echo.com/post")
+                            onPreRequestUrlChange("https://api.stripe.com/v1/tokens")
                             onPreRequestMethodChange(HttpRequestMethod.POST_FORM)
-                            onPreRequestBodyChange("type=card&card[number]={card}&card[exp_month]={mm}&card[exp_year]={yyyy}&card[cvc]={cvv}&token_id=tok_{random_hex16}")
+                            onPreRequestHeadersChange("Authorization: Bearer ${com.example.BuildConfig.STRIPE_SANDBOX_PUBLISHABLE_KEY}\nAccept: application/json")
+                            onPreRequestBodyChange("card[number]={card}&card[exp_month]={mm}&card[exp_year]={yyyy}&card[cvc]={cvv}")
                             if (preRequestParseRules.none { it.name == "payment_token" }) {
                                 onAddPreRule(
                                     CustomParseRule(
                                         name = "payment_token",
                                         mode = ParseRuleMode.JSON,
-                                        expression = "form.token_id",
-                                        defaultValue = "tok_live"
+                                        expression = "id",
+                                        defaultValue = "tok_visa"
                                     )
                                 )
                             }
                         }
                         PresetMiniPill(label = "Preset: Fetch CSRF / Cookie") {
-                            onPreRequestUrlChange("https://postman-echo.com/get?nonce={uuid}")
+                            onPreRequestUrlChange("https://mock.payate.com/api.php")
                             onPreRequestMethodChange(HttpRequestMethod.GET)
                             onPreRequestBodyChange("")
-                            if (preRequestParseRules.none { it.name == "csrf" }) {
+                            if (preRequestParseRules.none { it.name == "session_cookie" }) {
                                 onAddPreRule(
                                     CustomParseRule(
-                                        name = "csrf",
-                                        mode = ParseRuleMode.JSON,
-                                        expression = "args.nonce"
+                                        name = "session_cookie",
+                                        mode = ParseRuleMode.COOKIE,
+                                        expression = "*"
                                     )
                                 )
                             }
@@ -1463,7 +1465,7 @@ private fun RequestStudioTabContent(
                         value = preRequestUrl,
                         onValueChange = onPreRequestUrlChange,
                         label = { Text("Step 1 Handshake URL") },
-                        placeholder = { Text("https://api.example.com/v1/tokens") },
+                        placeholder = { Text("https://api.stripe.com/v1/tokens") },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
                         modifier = Modifier
@@ -1500,7 +1502,7 @@ private fun RequestStudioTabContent(
                         value = preRequestHeaders,
                         onValueChange = onPreRequestHeadersChange,
                         label = { Text("Step 1 Custom Headers (Optional)") },
-                        placeholder = { Text("Authorization: Bearer pk_test_...") },
+                        placeholder = { Text("Authorization: Bearer pk_live_...") },
                         minLines = 1,
                         maxLines = 3,
                         textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
@@ -1602,7 +1604,7 @@ private fun RequestStudioTabContent(
         value = url,
         onValueChange = onUrlChange,
         label = { Text(if (preRequestEnabled) "Step 2 Main Endpoint URL" else "Endpoint URL (http:// or https://)") },
-        placeholder = { Text("https://postman-echo.com/post") },
+        placeholder = { Text("https://api.stripe.com/v1/setup_intents") },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
         textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
@@ -2517,7 +2519,7 @@ private fun ParseStudioTabContent(
             OutlinedTextField(
                 value = dryRunBodyText,
                 onValueChange = onDryRunBodyChange,
-                label = { Text("Sample HTTP Response Body (Auto-filled on Probe)") },
+                label = { Text("HTTP Response Body (Auto-filled on Probe)") },
                 minLines = 2,
                 maxLines = 4,
                 textStyle = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFamily),
@@ -2527,7 +2529,7 @@ private fun ParseStudioTabContent(
             )
             if (dryRunCaptures.isEmpty()) {
                 Text(
-                    text = "Extracted variables: (none matched current sample body)",
+                    text = "Extracted variables: (none matched current response body)",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -3042,7 +3044,7 @@ private fun CheckpointsStudioTabContent(
             OutlinedTextField(
                 value = dryRunBodyText,
                 onValueChange = onDryRunBodyChange,
-                label = { Text("Simulated Response Body") },
+                label = { Text("HTTP Response Body (Auto-filled on Probe)") },
                 minLines = 2,
                 maxLines = 3,
                 textStyle = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFamily),

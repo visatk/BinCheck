@@ -202,33 +202,33 @@ object CustomConfigStudioEngine {
         listOf(
             CustomConfigProfile(
                 id = "builtin_zero_dollar_sandbox",
-                name = "Zero-Dollar ($0.00) Auth JSON",
-                description = "POST JSON $0 verification payload with JSON dot-path captures & keycheck",
+                name = "Stripe $0.00 SetupIntent Auth",
+                description = "Real Stripe v1/setup_intents $0.00 off-session card verification with status & decline_code captures",
                 isBuiltIn = true,
                 config = CustomHttpConfig(
-                    profileName = "Zero-Dollar ($0.00) Auth JSON",
-                    url = "https://postman-echo.com/post",
-                    method = HttpRequestMethod.POST_JSON,
-                    headersText = "Accept: application/json\nX-Idempotency-Key: {uuid}",
-                    bodyTemplate = CustomHttpConfig.ZERO_DOLLAR_AUTH_JSON_PAYLOAD,
+                    profileName = "Stripe $0.00 SetupIntent Auth",
+                    url = "https://api.stripe.com/v1/setup_intents",
+                    method = HttpRequestMethod.POST_FORM,
+                    headersText = "Authorization: Bearer ${com.example.BuildConfig.STRIPE_SANDBOX_SECRET_KEY}\nAccept: application/json\nIdempotency-Key: {uuid}",
+                    bodyTemplate = "confirm=true&usage=off_session&payment_method_data[type]=card&payment_method_data[card][number]={card}&payment_method_data[card][exp_month]={mm}&payment_method_data[card][exp_year]={yyyy}&payment_method_data[card][cvc]={cvv}",
                     timeoutSeconds = 12,
                     maxRetries = 1,
-                    liveKeywords = "succeeded,approved,verified,valid,true",
-                    dieKeywords = "declined,invalid,expired,do_not_honor",
+                    liveKeywords = "succeeded,requires_action,seti_",
+                    dieKeywords = "card_declined,incorrect_cvc,expired_card,invalid_number",
                     userAgent = "BinCheck-ConfigStudio/2.5",
                     followRedirects = true,
                     parseRulesSpec = serializeParseRules(
                         listOf(
                             CustomParseRule(
-                                name = "auth_type",
+                                name = "status",
                                 mode = ParseRuleMode.JSON,
-                                expression = "json.auth_type",
+                                expression = "status",
                                 showInOutput = true
                             ),
                             CustomParseRule(
-                                name = "scheme",
+                                name = "decline_code",
                                 mode = ParseRuleMode.JSON,
-                                expression = "json.card.scheme",
+                                expression = "error.decline_code",
                                 showInOutput = true
                             )
                         )
@@ -238,15 +238,15 @@ object CustomConfigStudioEngine {
                             CustomCheckpointRule(
                                 verdict = ResultBucket.LIVE,
                                 condition = CheckpointCondition.JSON_KEY_EQUALS,
-                                targetKey = "json.auth_type",
-                                expectedValue = "zero_dollar",
-                                label = "Echo Verified $0"
+                                targetKey = "status",
+                                expectedValue = "succeeded",
+                                label = "Stripe $0 Succeeded"
                             ),
                             CustomCheckpointRule(
                                 verdict = ResultBucket.DIE,
                                 condition = CheckpointCondition.BODY_CONTAINS_ANY,
                                 expectedValue = "card_declined,incorrect_cvc,expired_card",
-                                label = "Gateway Decline"
+                                label = "Stripe Declined"
                             )
                         )
                     )
@@ -254,43 +254,43 @@ object CustomConfigStudioEngine {
             ),
             CustomConfigProfile(
                 id = "builtin_two_step_token_pipeline",
-                name = "2-Step Token -> Charge Pipeline",
-                description = "Step 1 tokenizes card & captures payment_token -> Step 2 verifies {cap:payment_token}",
+                name = "2-Step Stripe Token -> SetupIntent",
+                description = "Step 1 tokenizes card via /v1/tokens & captures payment_token -> Step 2 confirms {cap:payment_token}",
                 isBuiltIn = true,
                 config = CustomHttpConfig(
-                    profileName = "2-Step Token -> Charge Pipeline",
-                    url = "https://postman-echo.com/post",
-                    method = HttpRequestMethod.POST_JSON,
-                    headersText = "Accept: application/json\nX-Correlation-ID: {uuid}",
-                    bodyTemplate = """{"payment_token":"{cap:payment_token}","amount":0,"currency":"USD","bin":"{bin}","scheme":"{scheme_lower}"}""",
+                    profileName = "2-Step Stripe Token -> SetupIntent",
+                    url = "https://api.stripe.com/v1/setup_intents",
+                    method = HttpRequestMethod.POST_FORM,
+                    headersText = "Authorization: Bearer ${com.example.BuildConfig.STRIPE_SANDBOX_SECRET_KEY}\nAccept: application/json\nIdempotency-Key: {uuid}",
+                    bodyTemplate = "confirm=true&usage=off_session&payment_method_data[type]=card&payment_method_data[card][token]={cap:payment_token}",
                     timeoutSeconds = 15,
                     maxRetries = 1,
-                    liveKeywords = "succeeded,approved,zero_dollar,payment_token",
-                    dieKeywords = "declined,invalid,expired",
+                    liveKeywords = "succeeded,requires_action,seti_",
+                    dieKeywords = "card_declined,incorrect_cvc,expired_card",
                     userAgent = "BinCheck-ConfigStudio/2.5",
                     followRedirects = true,
                     preRequestEnabled = true,
-                    preRequestUrl = "https://postman-echo.com/post",
+                    preRequestUrl = "https://api.stripe.com/v1/tokens",
                     preRequestMethod = HttpRequestMethod.POST_FORM,
-                    preRequestHeaders = "Accept: application/json",
-                    preRequestBody = "type=card&card[number]={card}&card[exp_month]={mm}&card[exp_year]={yyyy}&card[cvc]={cvv}&token_id=tok_{random_hex16}",
+                    preRequestHeaders = "Authorization: Bearer ${com.example.BuildConfig.STRIPE_SANDBOX_PUBLISHABLE_KEY}\nAccept: application/json",
+                    preRequestBody = "card[number]={card}&card[exp_month]={mm}&card[exp_year]={yyyy}&card[cvc]={cvv}",
                     preRequestParseRulesSpec = serializeParseRules(
                         listOf(
                             CustomParseRule(
                                 name = "payment_token",
                                 mode = ParseRuleMode.JSON,
-                                expression = "form.token_id",
+                                expression = "id",
                                 showInOutput = true,
-                                defaultValue = "tok_fallback"
+                                defaultValue = "tok_visa"
                             )
                         )
                     ),
                     parseRulesSpec = serializeParseRules(
                         listOf(
                             CustomParseRule(
-                                name = "verified_tok",
+                                name = "setup_id",
                                 mode = ParseRuleMode.JSON,
-                                expression = "json.payment_token",
+                                expression = "id",
                                 showInOutput = true
                             )
                         )
@@ -299,10 +299,16 @@ object CustomConfigStudioEngine {
                         listOf(
                             CustomCheckpointRule(
                                 verdict = ResultBucket.LIVE,
-                                condition = CheckpointCondition.CAPTURED_VAR_CONTAINS,
-                                targetKey = "verified_tok",
-                                expectedValue = "tok_",
+                                condition = CheckpointCondition.JSON_KEY_EQUALS,
+                                targetKey = "status",
+                                expectedValue = "succeeded",
                                 label = "2-Step Token Verified"
+                            ),
+                            CustomCheckpointRule(
+                                verdict = ResultBucket.DIE,
+                                condition = CheckpointCondition.BODY_CONTAINS_ANY,
+                                expectedValue = "card_declined,incorrect_cvc,expired_card",
+                                label = "2-Step Declined"
                             )
                         )
                     )
@@ -310,51 +316,52 @@ object CustomConfigStudioEngine {
             ),
             CustomConfigProfile(
                 id = "builtin_form_gateway_capture",
-                name = "Form Gateway + LR & Origin Capture",
-                description = "URL-encoded form POST with Left/Right & JSON captures and HTTP status keycheck",
+                name = "Payate Form Gateway + Captures",
+                description = "URL-encoded form POST to Payate API (data={lista}) with JSON msg & error code keycheck",
                 isBuiltIn = true,
                 config = CustomHttpConfig(
-                    profileName = "Form Gateway + LR & Origin Capture",
-                    url = "https://httpbin.org/post",
+                    profileName = "Payate Form Gateway + Captures",
+                    url = "https://mock.payate.com/api.php",
                     method = HttpRequestMethod.POST_FORM,
-                    headersText = "Accept: application/json\nAccept-Language: en-US",
-                    bodyTemplate = "card[number]={card_spaced}&card[exp_month]={mm_no_pad}&card[exp_year]={yyyy}&card[cvc]={cvv}&guid={uuid}&ts={timestamp}",
+                    headersText = "Accept: application/json, text/plain, */*\nX-Requested-With: XMLHttpRequest\nOrigin: https://mock.payate.com\nReferer: https://mock.payate.com/",
+                    bodyTemplate = "data={lista}",
                     timeoutSeconds = 15,
                     maxRetries = 1,
-                    liveKeywords = "tok_,seti_,pm_,succeeded,form",
-                    dieKeywords = "incorrect_number,invalid_expiry,card_declined,expired_card",
+                    liveKeywords = "Live,Approved,Checked",
+                    dieKeywords = "Die,Dead,Declined",
                     userAgent = "Mozilla/5.0 (Linux; Android 15) BinCheck/2.5",
                     followRedirects = true,
                     parseRulesSpec = serializeParseRules(
                         listOf(
                             CustomParseRule(
-                                name = "origin",
+                                name = "err",
                                 mode = ParseRuleMode.JSON,
-                                expression = "origin",
+                                expression = "error",
                                 showInOutput = true
                             ),
                             CustomParseRule(
-                                name = "card_echo",
-                                mode = ParseRuleMode.LR,
-                                leftDelimiter = "\"card[number]\": \"",
-                                rightDelimiter = "\"",
-                                showInOutput = false
+                                name = "msg",
+                                mode = ParseRuleMode.JSON,
+                                expression = "msg",
+                                showInOutput = true
                             )
                         )
                     ),
                     checkpointRulesSpec = serializeCheckpointRules(
                         listOf(
                             CustomCheckpointRule(
-                                verdict = ResultBucket.DIE,
-                                condition = CheckpointCondition.BODY_CONTAINS_ANY,
-                                expectedValue = "incorrect_number,card_declined,invalid_cvc",
-                                label = "Declined"
+                                verdict = ResultBucket.LIVE,
+                                condition = CheckpointCondition.JSON_KEY_EQUALS,
+                                targetKey = "error",
+                                expectedValue = "1",
+                                label = "Payate Live"
                             ),
                             CustomCheckpointRule(
-                                verdict = ResultBucket.LIVE,
-                                condition = CheckpointCondition.STATUS_CODE_IN,
-                                expectedValue = "200,201",
-                                label = "HTTP 2xx OK"
+                                verdict = ResultBucket.DIE,
+                                condition = CheckpointCondition.JSON_KEY_EQUALS,
+                                targetKey = "error",
+                                expectedValue = "2",
+                                label = "Payate Die"
                             )
                         )
                     )
@@ -362,34 +369,34 @@ object CustomConfigStudioEngine {
             ),
             CustomConfigProfile(
                 id = "builtin_get_query_regex",
-                name = "GET Query + Regex & Header Capture",
-                description = "GET endpoint with {lista} query param, Regex capture group & HTTP Header check",
+                name = "Checkout.com $0.00 Card Verify JSON",
+                description = "POST JSON $0.00 Zero-Dollar Auth to Checkout.com /payments with response_summary capture",
                 isBuiltIn = true,
                 config = CustomHttpConfig(
-                    profileName = "GET Query + Regex & Header Capture",
-                    url = "https://postman-echo.com/get?lista={lista}&bin={bin}&scheme={scheme}&ts={timestamp}",
-                    method = HttpRequestMethod.GET,
-                    headersText = "Accept: application/json",
-                    bodyTemplate = "",
-                    timeoutSeconds = 10,
+                    profileName = "Checkout.com $0.00 Card Verify JSON",
+                    url = "https://api.sandbox.checkout.com/payments",
+                    method = HttpRequestMethod.POST_JSON,
+                    headersText = "Authorization: Bearer ${com.example.BuildConfig.CHECKOUT_SANDBOX_SECRET_KEY}\nAccept: application/json",
+                    bodyTemplate = """{"amount":0,"currency":"USD","reference":"{uuid}","source":{"type":"card","number":"{card}","expiry_month":{mm_no_pad},"expiry_year":{yyyy},"cvv":"{cvv}"}}""",
+                    timeoutSeconds = 12,
                     maxRetries = 1,
-                    liveKeywords = "args,lista,live,approved",
-                    dieKeywords = "die,declined,error",
+                    liveKeywords = "Authorized,Card Verified,10000",
+                    dieKeywords = "Declined,20005,20014",
                     userAgent = "BinCheck-ConfigStudio/2.5",
                     followRedirects = true,
                     parseRulesSpec = serializeParseRules(
                         listOf(
                             CustomParseRule(
-                                name = "bin",
-                                mode = ParseRuleMode.REGEX,
-                                expression = "\"bin\"\\s*:\\s*\"(\\d{6})\"",
+                                name = "status",
+                                mode = ParseRuleMode.JSON,
+                                expression = "status",
                                 showInOutput = true
                             ),
                             CustomParseRule(
-                                name = "ctype",
-                                mode = ParseRuleMode.HEADER,
-                                expression = "content-type",
-                                showInOutput = false
+                                name = "summary",
+                                mode = ParseRuleMode.JSON,
+                                expression = "response_summary",
+                                showInOutput = true
                             )
                         )
                     ),
@@ -397,10 +404,15 @@ object CustomConfigStudioEngine {
                         listOf(
                             CustomCheckpointRule(
                                 verdict = ResultBucket.LIVE,
-                                condition = CheckpointCondition.CAPTURED_VAR_CONTAINS,
-                                targetKey = "bin",
-                                expectedValue = "",
-                                label = "BIN Captured"
+                                condition = CheckpointCondition.BODY_CONTAINS_ANY,
+                                expectedValue = "Card Verified,Authorized,10000",
+                                label = "Checkout Approved"
+                            ),
+                            CustomCheckpointRule(
+                                verdict = ResultBucket.DIE,
+                                condition = CheckpointCondition.BODY_CONTAINS_ANY,
+                                expectedValue = "Declined,20005,20014",
+                                label = "Checkout Declined"
                             )
                         )
                     )
@@ -408,28 +420,27 @@ object CustomConfigStudioEngine {
             ),
             CustomConfigProfile(
                 id = "builtin_combo_auth_json",
-                name = "Credential Combo (email:pass) JSON",
-                description = "POST JSON login probe using {email}, {user}, {pass}, {uuid} + status assertions",
+                name = "Authorize.Net $0.00 authOnly JSON",
+                description = "POST JSON createTransactionRequest ($0.00 authOnlyTransaction) to Authorize.Net API",
                 isBuiltIn = true,
                 config = CustomHttpConfig(
-                    profileName = "Credential Combo (email:pass) JSON",
-                    url = "https://httpbin.org/anything",
+                    profileName = "Authorize.Net $0.00 authOnly JSON",
+                    url = "https://apitest.authorize.net/xml/v1/request.api",
                     method = HttpRequestMethod.POST_JSON,
-                    headersText = "Accept: application/json\nX-Trace-ID: {uuid}",
-                    bodyTemplate = """{"email":"{email}","username":"{user}","password":"{pass}","device_id":"{random6}"}""",
+                    headersText = "Accept: application/json",
+                    bodyTemplate = """{"createTransactionRequest":{"merchantAuthentication":{"name":"${com.example.BuildConfig.AUTHNET_SANDBOX_API_LOGIN_ID}","transactionKey":"${com.example.BuildConfig.AUTHNET_SANDBOX_TRANSACTION_KEY}"},"transactionRequest":{"transactionType":"authOnlyTransaction","amount":"0.00","payment":{"creditCard":{"cardNumber":"{card}","expirationDate":"{yyyy}-{mm}","cardCode":"{cvv}"}}}}}""",
                     timeoutSeconds = 12,
                     maxRetries = 1,
-                    liveKeywords = "token,session,authenticated,success,data",
-                    dieKeywords = "invalid_credentials,unauthorized,locked,banned",
+                    liveKeywords = "Approved,1",
+                    dieKeywords = "Declined,Error,2,3",
                     userAgent = "BinCheck-ConfigStudio/2.5",
                     followRedirects = true,
-                    skipLocalLuhnPrecheck = true,
                     parseRulesSpec = serializeParseRules(
                         listOf(
                             CustomParseRule(
-                                name = "email",
+                                name = "responseCode",
                                 mode = ParseRuleMode.JSON,
-                                expression = "json.email",
+                                expression = "transactionResponse.responseCode",
                                 showInOutput = true
                             )
                         )
@@ -437,17 +448,17 @@ object CustomConfigStudioEngine {
                     checkpointRulesSpec = serializeCheckpointRules(
                         listOf(
                             CustomCheckpointRule(
-                                verdict = ResultBucket.DIE,
-                                condition = CheckpointCondition.STATUS_CODE_IN,
-                                expectedValue = "401,403,422",
-                                label = "Auth Rejected"
+                                verdict = ResultBucket.LIVE,
+                                condition = CheckpointCondition.JSON_KEY_EQUALS,
+                                targetKey = "transactionResponse.responseCode",
+                                expectedValue = "1",
+                                label = "Auth.Net 1-1 Approved"
                             ),
                             CustomCheckpointRule(
-                                verdict = ResultBucket.LIVE,
-                                condition = CheckpointCondition.CAPTURED_VAR_CONTAINS,
-                                targetKey = "email",
-                                expectedValue = "@",
-                                label = "Echo Verified"
+                                verdict = ResultBucket.DIE,
+                                condition = CheckpointCondition.BODY_CONTAINS_ANY,
+                                expectedValue = "\"responseCode\":\"2\",\"responseCode\":\"3\"",
+                                label = "Auth.Net Declined"
                             )
                         )
                     )
@@ -1998,7 +2009,7 @@ object CustomConfigStudioEngine {
         val cvv = parts.getOrElse(3) { "113" }.trim()
         val scheme = CardValidatorEngine.detectScheme(pan)
 
-        val step1DummyCaptures = config.parsedPreRequestParseRules().associate { rule ->
+        val step1PreviewCaptures = config.parsedPreRequestParseRules().associate { rule ->
             rule.name to (rule.defaultValue.ifBlank { "step1_${rule.name}_val" })
         }
 
@@ -2010,7 +2021,7 @@ object CustomConfigStudioEngine {
             cvv = cvv,
             scheme = scheme,
             config = config,
-            step1Captures = step1DummyCaptures
+            step1Captures = step1PreviewCaptures
         )
 
         val resolvedMethod = built?.method ?: when (config.method) {
@@ -2033,7 +2044,7 @@ object CustomConfigStudioEngine {
                 cvv = cvv,
                 scheme = scheme,
                 config = config,
-                step1Captures = step1DummyCaptures
+                step1Captures = step1PreviewCaptures
             )
         }
 

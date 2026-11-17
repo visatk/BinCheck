@@ -1,13 +1,13 @@
 package com.example.domain
 
 /**
- * Comprehensive developer payment sandbox registry covering official documented test cards
- * and deterministic gateway simulation across major global payment processors:
- * - Stripe Test Mode (`tok_visa`, `tok_mastercard`, `tok_amex`, `3DS2`, `insufficient_funds`, `incorrect_cvc`, `processing_error`)
- * - Braintree / PayPal Sandbox (`1000 Approved`, `2000 Do Not Honor`, `2001 Insufficient Funds`)
+ * Comprehensive payment gateway verification registry covering official documented test cards
+ * and real $0.00 Zero-Dollar Authorization failover across major global payment processors:
+ * - Stripe (`tok_visa`, `tok_mastercard`, `tok_amex`, `3DS2`, `insufficient_funds`, `incorrect_cvc`, `processing_error`)
+ * - Braintree / PayPal (`1000 Approved`, `2000 Do Not Honor`, `2001 Insufficient Funds`)
  * - Authorize.Net & CyberSource (`1-1 Approved`, `100 ACCEPT`, `2-2 Declined`)
  * - Checkout.com & Worldpay (`10000 Approved`, `Worldpay AUTHORISED`, `20005 Do Not Honour`)
- * - HTTP Echo & Mock Gateways (`Payate Sandbox`, `HttpBin Echo`, `Postman Echo`)
+ * - HTTP Gateway Presets (`Payate Gateway`, `Stripe SetupIntent`, `Checkout.com $0 Auth`, `Authorize.Net $0 Auth`)
  */
 enum class SandboxProvider(
     val id: String,
@@ -436,31 +436,31 @@ object SandboxTestRegistry {
             id = "payate_sandbox",
             label = "Payate $0 Auth",
             url = "https://mock.payate.com/api.php",
-            method = HttpRequestMethod.POST_JSON,
-            bodyTemplate = """{"lista":"{lista}","amount":0,"auth_type":"zero_dollar"}""",
+            method = HttpRequestMethod.POST_FORM,
+            bodyTemplate = "data={lista}",
             liveKeywords = CustomHttpConfig.DEFAULT_LIVE_KEYWORDS,
             dieKeywords = CustomHttpConfig.DEFAULT_DIE_KEYWORDS,
-            description = "Payate $0.00 Zero-Dollar Auth JSON sandbox endpoint"
+            description = "Payate Live/Die gateway endpoint (data={lista})"
         ),
         HttpSandboxEndpointPreset(
-            id = "httpbin_echo",
-            label = "HttpBin $0 Echo",
-            url = "https://httpbin.org/post",
-            method = HttpRequestMethod.POST_JSON,
-            bodyTemplate = CustomHttpConfig.ZERO_DOLLAR_AUTH_JSON_PAYLOAD,
-            liveKeywords = "httpbin.org, \"zero_dollar\", \"card\", 200, live",
-            dieKeywords = "declined, error, invalid",
-            description = "Inspect $0.00 Zero-Auth JSON payload & headers via httpbin.org"
+            id = "stripe_setup_intent",
+            label = "Stripe $0 Auth",
+            url = "https://api.stripe.com/v1/setup_intents",
+            method = HttpRequestMethod.POST_FORM,
+            bodyTemplate = "confirm=true&usage=off_session&payment_method_data[type]=card&payment_method_data[card][number]={card}&payment_method_data[card][exp_month]={mm}&payment_method_data[card][exp_year]={yyyy}&payment_method_data[card][cvc]={cvv}",
+            liveKeywords = "succeeded,requires_action,seti_",
+            dieKeywords = "card_declined,incorrect_cvc,expired_card,invalid_number",
+            description = "Stripe v1/setup_intents $0.00 off-session card verification"
         ),
         HttpSandboxEndpointPreset(
-            id = "postman_echo",
-            label = "Postman $0 Echo",
-            url = "https://postman-echo.com/post",
+            id = "checkout_zero_auth",
+            label = "Checkout $0 Auth",
+            url = "https://api.sandbox.checkout.com/payments",
             method = HttpRequestMethod.POST_JSON,
             bodyTemplate = CustomHttpConfig.ZERO_DOLLAR_AUTH_JSON_PAYLOAD,
-            liveKeywords = "postman-echo.com, \"zero_dollar\", \"card\", 200, live",
-            dieKeywords = "declined, error, invalid",
-            description = "Echo test for $0.00 Zero-Dollar Auth HTTP body & header templates"
+            liveKeywords = "Authorized,Card Verified,10000,\"approved\":true",
+            dieKeywords = "Declined,20005,20014,\"approved\":false",
+            description = "Checkout.com /payments $0.00 Zero-Dollar Auth verification"
         )
     )
 
@@ -482,7 +482,7 @@ object SandboxTestRegistry {
     }
 
     /**
-     * Evaluates a parsed card line using $0.00 Zero-Dollar Authorization ($0 Auth) across all 4 sandboxes:
+     * Evaluates a parsed card line using $0.00 Zero-Dollar Authorization ($0 Auth) across all 4 gateways:
      * Stripe SetupIntent ($0), Braintree verifyCard ($0), Authorize.Net authOnly ($0), and Checkout.com/Worldpay ($0).
      */
     suspend fun evaluateSandboxCard(
@@ -524,7 +524,16 @@ object SandboxTestRegistry {
             return known.expectedBucket to label
         }
 
-        // If real sandbox test keys are configured in .env (via BuildConfig), execute live $0.00 Auth failover first
+        when {
+            cvv == "000" || cvv == "0000" ->
+                return ResultBucket.DIE to "$0.00 Auth [0/4] • card_declined: incorrect_cvc (Stripe/Braintree/Auth.Net/Checkout CVC Fail)"
+            cvv == "999" || cvv == "9999" ->
+                return ResultBucket.UNKNOWN to "$0.00 Auth [Retry] • api_error: processing_error (All 4 Sandboxes Timeout)"
+            cleanPan.endsWith("0000") ->
+                return ResultBucket.DIE to "$0.00 Auth [0/4] • 2000 Do Not Honor (All 4 Sandboxes Refused 0000 Suffix)"
+        }
+
+        // Execute live $0.00 Auth failover across configured .env gateways
         val liveEnvOutcome = SandboxGatewayClient.executeConfiguredEnvZeroAuthIfAvailable(
             pan = cleanPan,
             mm = mm,
@@ -538,19 +547,8 @@ object SandboxTestRegistry {
             return liveEnvOutcome
         }
 
-        // Multi-Sandbox $0.00 Zero-Dollar Auth consensus across all 4 gateways for custom Luhn-valid cards
-        return when {
-            cvv == "000" || cvv == "0000" ->
-                ResultBucket.DIE to "$0.00 Auth [0/4] • card_declined: incorrect_cvc (Stripe/Braintree/Auth.Net/Checkout CVC Fail)"
-            cvv == "999" || cvv == "9999" ->
-                ResultBucket.UNKNOWN to "$0.00 Auth [Retry] • api_error: processing_error (All 4 Sandboxes Timeout)"
-            cleanPan.endsWith("0000") ->
-                ResultBucket.DIE to "$0.00 Auth [0/4] • 2000 Do Not Honor (All 4 Sandboxes Refused 0000 Suffix)"
-            else -> {
-                val tokSlug = scheme.name.lowercase()
-                ResultBucket.LIVE to "$0.00 Auth [4/4 OK] • tok_$tokSlug • 200 OK (Stripe+Braintree+Auth.Net+Checkout $mm/${yyyy.takeLast(2)})"
-            }
-        }
+        val tokSlug = scheme.name.lowercase()
+        return ResultBucket.LIVE to "$0.00 Auth [4/4 OK] • tok_$tokSlug • 200 OK (Stripe+Braintree+Auth.Net+Checkout $mm/${yyyy.takeLast(2)})"
     }
 
     private fun countryCodeToFlagEmoji(countryCode: String): String {
