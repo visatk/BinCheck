@@ -1,5 +1,6 @@
 package com.example.ui
 
+import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,8 +30,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -39,6 +42,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -53,12 +57,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,6 +81,11 @@ import com.example.analytics.FirebaseMetrics
 import com.example.domain.CardScheme
 import com.example.domain.DedupMode
 import com.example.domain.FileTextExtractor
+import com.example.domain.LargeFileWorkspace
+import com.example.domain.LargeFileWorkspace.BulkEditSpec
+import com.example.domain.LargeFileWorkspace.BulkEditType
+import com.example.domain.LargeFileWorkspace.LargeFileSession
+import com.example.domain.LargeFileWorkspace.SearchScanResult
 import com.example.domain.ListSortOrder
 import com.example.domain.ListToolkitEngine
 import com.example.domain.ListToolkitOptions
@@ -87,13 +99,22 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.Calendar
+import java.util.Locale
+import java.util.UUID
 import kotlin.random.Random
 
 private enum class ToolkitStudioTab(val label: String) {
     CLEAN("Clean"),
     FORMAT("Format"),
-    FILTER("Filter")
+    FILTER("Filter"),
+    EDITOR("Editor")
+}
+
+private enum class ExportTargetMode {
+    OUTPUT,
+    RANGE
 }
 
 @OptIn(
@@ -112,7 +133,8 @@ fun ListToolkitBottomSheet(
     onCopyOutput: (String) -> Unit,
     onApplyToConsole: (String, ToolkitTransformResult) -> Unit,
     onDismiss: () -> Unit,
-    onFileStatusMessage: (String) -> Unit = {}
+    onFileStatusMessage: (String) -> Unit = {},
+    onQueueLargeFileForBatch: ((stagedFile: File, sourceName: String, expectedLines: Int) -> Unit)? = null
 ) {
     BackHandler(onBack = onDismiss)
 
@@ -125,12 +147,46 @@ fun ListToolkitBottomSheet(
     var activeTab by remember { mutableStateOf(ToolkitStudioTab.CLEAN) }
     var activePreset by remember { mutableStateOf<ToolkitPreset?>(ToolkitPreset.FULL_CLEAN) }
     var options by remember { mutableStateOf(ListToolkitOptions.fromPreset(ToolkitPreset.FULL_CLEAN)) }
+
     var sourceText by remember(initialInputText) { mutableStateOf(initialInputText) }
+    var largeSession by remember { mutableStateOf<LargeFileSession?>(null) }
+    var sourceRevision by remember { mutableIntStateOf(0) }
+    var activePageIndex by remember { mutableIntStateOf(0) }
+    var viewingOutputPages by remember { mutableStateOf(false) }
+    var currentPageLines by remember { mutableStateOf<List<String>>(emptyList()) }
+    var highlightedLineInPage by remember { mutableStateOf<Int?>(null) }
+
     var isEditingSource by remember { mutableStateOf(initialInputText.isBlank()) }
     var shuffleNonce by remember { mutableIntStateOf(0) }
     var loadedFileBadge by remember { mutableStateOf<String?>(null) }
     var inlineFeedbackMessage by remember { mutableStateOf<String?>(null) }
     var isFileBusy by remember { mutableStateOf(false) }
+    var progressFraction by remember { mutableFloatStateOf(0f) }
+    var progressLabel by remember { mutableStateOf<String?>(null) }
+
+    // Editor tab find/replace state
+    var findQuery by remember { mutableStateOf("") }
+    var replaceWith by remember { mutableStateOf("") }
+    var findUseRegex by remember { mutableStateOf(false) }
+    var findIgnoreCase by remember { mutableStateOf(true) }
+    var searchScanResult by remember { mutableStateOf<SearchScanResult?>(null) }
+
+    var pendingExportMode by remember { mutableStateOf(ExportTargetMode.OUTPUT) }
+    var pendingRangePair by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var showLargeApplyDialog by remember { mutableStateOf(false) }
+
+    val latestSessionState = rememberUpdatedState(largeSession)
+    DisposableEffect(Unit) {
+        onDispose {
+            LargeFileWorkspace.cleanupSession(latestSessionState.value)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            LargeFileWorkspace.pruneOldWorkspaces(context.cacheDir)
+        }
+    }
 
     LaunchedEffect(activeTab) {
         FirebaseMetrics.logScreenView("ListToolkit_${activeTab.label}", "MainActivity")
@@ -146,34 +202,181 @@ fun ListToolkitBottomSheet(
         )
     }
 
+    suspend fun promoteRawTextToLargeWorkspace(label: String, text: String) {
+        isFileBusy = true
+        progressFraction = 0.1f
+        progressLabel = "Staging $label into disk-stream workspace..."
+        val prev = largeSession
+        LargeFileWorkspace.ingestFileOrText(
+            cacheDir = context.cacheDir,
+            fileName = label,
+            rawText = text,
+            onProgress = { pct, msg ->
+                scope.launch {
+                    progressFraction = pct
+                    progressLabel = msg
+                }
+            }
+        ).fold(
+            onSuccess = { session ->
+                LargeFileWorkspace.cleanupSession(prev)
+                largeSession = session
+                sourceText = ""
+                sourceRevision++
+                activePageIndex = 0
+                viewingOutputPages = false
+                highlightedLineInPage = null
+                isEditingSource = true
+                loadedFileBadge = "${session.fileName} (${FileTextExtractor.formatFileSize(session.fileSizeBytes)})"
+                val msg = "Disk-stream ready • ${session.totalLines} lines"
+                inlineFeedbackMessage = msg
+                onFileStatusMessage(msg)
+            },
+            onFailure = { err ->
+                inlineFeedbackMessage = err.localizedMessage ?: "Failed to stage text workspace."
+            }
+        )
+        isFileBusy = false
+        progressLabel = null
+    }
+
     val openFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         isFileBusy = true
+        progressFraction = 0.05f
+        progressLabel = "Inspecting selected file..."
         inlineFeedbackMessage = null
+        searchScanResult = null
+
         scope.launch {
-            val result = FileTextExtractor.readAndParseUri(context, uri)
-            isFileBusy = false
-            result.fold(
-                onSuccess = { preview ->
-                    val textToLoad = if (preview.fileType == SupportedFileType.HTML) {
-                        preview.allNonEmptyLines.joinToString("\n")
-                    } else {
-                        preview.rawContent
+            val reportedSize = withContext(Dispatchers.IO) {
+                runCatching {
+                    var sz = -1L
+                    context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+                        if (c.moveToFirst()) {
+                            val idx = c.getColumnIndex(OpenableColumns.SIZE)
+                            if (idx >= 0 && !c.isNull(idx)) sz = c.getLong(idx)
+                        }
                     }
-                    sourceText = textToLoad
-                    loadedFileBadge = "${preview.fileName} (${FileTextExtractor.formatFileSize(preview.fileSizeBytes)})"
-                    val msg = "Loaded ${preview.allNonEmptyLines.size} line(s) from ${preview.fileName}"
-                    inlineFeedbackMessage = msg
-                    onFileStatusMessage(msg)
-                },
-                onFailure = { err ->
-                    val msg = err.localizedMessage ?: "Failed to read selected file."
-                    inlineFeedbackMessage = msg
-                    onFileStatusMessage(msg)
-                }
-            )
+                    sz
+                }.getOrDefault(-1L)
+            }
+
+            if (reportedSize in 0L..LargeFileWorkspace.INLINE_EDITOR_THRESHOLD_BYTES) {
+                val result = FileTextExtractor.readAndParseUri(context, uri)
+                result.fold(
+                    onSuccess = { preview ->
+                        if (!preview.isLargeStagedFile) {
+                            LargeFileWorkspace.cleanupSession(largeSession)
+                            largeSession = null
+                            val textToLoad = if (preview.fileType == SupportedFileType.HTML) {
+                                preview.allNonEmptyLines.joinToString("\n")
+                            } else {
+                                preview.rawContent
+                            }
+                            if (textToLoad.length > LargeFileWorkspace.INLINE_EDITOR_THRESHOLD_BYTES) {
+                                promoteRawTextToLargeWorkspace(preview.fileName, textToLoad)
+                            } else {
+                                sourceText = textToLoad
+                                loadedFileBadge = "${preview.fileName} (${FileTextExtractor.formatFileSize(preview.fileSizeBytes)})"
+                                val msg = "Loaded ${preview.allNonEmptyLines.size} line(s) from ${preview.fileName}"
+                                inlineFeedbackMessage = msg
+                                onFileStatusMessage(msg)
+                            }
+                        } else {
+                            val stagedPath = preview.stagedFilePath?.let(::File)
+                            if (stagedPath != null && stagedPath.exists()) {
+                                LargeFileWorkspace.ingestFileOrText(
+                                    cacheDir = context.cacheDir,
+                                    fileName = preview.fileName,
+                                    existingFile = stagedPath,
+                                    onProgress = { pct, msg ->
+                                        scope.launch {
+                                            progressFraction = pct
+                                            progressLabel = msg
+                                        }
+                                    }
+                                ).onSuccess { session ->
+                                    stagedPath.delete()
+                                    LargeFileWorkspace.cleanupSession(largeSession)
+                                    largeSession = session
+                                    sourceText = ""
+                                    sourceRevision++
+                                    activePageIndex = 0
+                                    viewingOutputPages = false
+                                    highlightedLineInPage = null
+                                    isEditingSource = true
+                                    loadedFileBadge = "${session.fileName} (${FileTextExtractor.formatFileSize(session.fileSizeBytes)})"
+                                    val msg = "Disk-stream ready • ${session.totalLines} lines (${FileTextExtractor.formatFileSize(session.fileSizeBytes)})"
+                                    inlineFeedbackMessage = msg
+                                    onFileStatusMessage(msg)
+                                }.onFailure { err ->
+                                    stagedPath.delete()
+                                    val msg = err.localizedMessage ?: "Failed to index file."
+                                    inlineFeedbackMessage = msg
+                                    onFileStatusMessage(msg)
+                                }
+                            }
+                        }
+                    },
+                    onFailure = { err ->
+                        val msg = err.localizedMessage ?: "Failed to read selected file."
+                        inlineFeedbackMessage = msg
+                        onFileStatusMessage(msg)
+                    }
+                )
+            } else {
+                // Direct streaming ingestion (0–260 MB) with zero double heap allocation
+                LargeFileWorkspace.ingestUri(
+                    context = context,
+                    uri = uri,
+                    onProgress = { pct, msg ->
+                        scope.launch {
+                            progressFraction = pct
+                            progressLabel = msg
+                        }
+                    }
+                ).fold(
+                    onSuccess = { session ->
+                        if (session.fileSizeBytes <= LargeFileWorkspace.INLINE_EDITOR_THRESHOLD_BYTES &&
+                            session.totalLines <= 3_000
+                        ) {
+                            val headLines = LargeFileWorkspace.readHeadLines(session.sourceFile, 3_000)
+                            LargeFileWorkspace.cleanupSession(largeSession)
+                            LargeFileWorkspace.cleanupSession(session)
+                            largeSession = null
+                            sourceText = headLines.joinToString("\n")
+                            loadedFileBadge = "${session.fileName} (${FileTextExtractor.formatFileSize(session.fileSizeBytes)})"
+                            val msg = "Loaded ${session.totalLines} line(s) from ${session.fileName}"
+                            inlineFeedbackMessage = msg
+                            onFileStatusMessage(msg)
+                        } else {
+                            LargeFileWorkspace.cleanupSession(largeSession)
+                            largeSession = session
+                            sourceText = ""
+                            sourceRevision++
+                            activePageIndex = 0
+                            viewingOutputPages = false
+                            highlightedLineInPage = null
+                            isEditingSource = true
+                            loadedFileBadge = "${session.fileName} (${FileTextExtractor.formatFileSize(session.fileSizeBytes)})"
+                            val msg = "Disk-stream ready • ${session.totalLines} lines (${FileTextExtractor.formatFileSize(session.fileSizeBytes)})"
+                            inlineFeedbackMessage = msg
+                            onFileStatusMessage(msg)
+                        }
+                    },
+                    onFailure = { err ->
+                        val msg = err.localizedMessage ?: "Failed to stream selected file."
+                        inlineFeedbackMessage = msg
+                        onFileStatusMessage(msg)
+                    }
+                )
+            }
+
+            isFileBusy = false
+            progressLabel = null
         }
     }
 
@@ -181,52 +384,376 @@ fun ListToolkitBottomSheet(
         contract = ActivityResultContracts.CreateDocument("text/plain")
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        val textToSave = transformResult.outputText
-        if (textToSave.isBlank()) return@rememberLauncherForActivityResult
-        isFileBusy = true
-        inlineFeedbackMessage = null
-        scope.launch {
-            val result = FileTextExtractor.writeTextToUri(context, uri, textToSave)
-            isFileBusy = false
-            result.fold(
-                onSuccess = { lineCount ->
-                    val msg = "Exported $lineCount line(s) to file."
-                    inlineFeedbackMessage = msg
-                    onFileStatusMessage(msg)
-                },
-                onFailure = { err ->
-                    val msg = err.localizedMessage ?: "Could not save file."
-                    inlineFeedbackMessage = msg
-                    onFileStatusMessage(msg)
-                }
-            )
+        val session = largeSession
+        if (session != null) {
+            isFileBusy = true
+            progressFraction = 0.05f
+            progressLabel = "Streaming export to file..."
+            inlineFeedbackMessage = null
+            val range = pendingRangePair
+            val mode = pendingExportMode
+            scope.launch {
+                val useOutput = mode == ExportTargetMode.OUTPUT && session.outputFile != null
+                val startIdx = if (mode == ExportTargetMode.RANGE && range != null) range.first else 0
+                val endIdx = if (mode == ExportTargetMode.RANGE && range != null) range.second else Int.MAX_VALUE
+                val result = LargeFileWorkspace.streamExportToUri(
+                    context = context,
+                    session = session,
+                    useOutputFile = useOutput && mode != ExportTargetMode.RANGE,
+                    uri = uri,
+                    startLineInclusive = startIdx,
+                    endLineExclusive = endIdx,
+                    onProgress = { pct, msg ->
+                        scope.launch {
+                            progressFraction = pct
+                            progressLabel = msg
+                        }
+                    }
+                )
+                isFileBusy = false
+                progressLabel = null
+                pendingExportMode = ExportTargetMode.OUTPUT
+                pendingRangePair = null
+                result.fold(
+                    onSuccess = { lineCount ->
+                        val msg = "Exported $lineCount line(s) via streaming write."
+                        inlineFeedbackMessage = msg
+                        onFileStatusMessage(msg)
+                    },
+                    onFailure = { err ->
+                        val msg = err.localizedMessage ?: "Could not save file."
+                        inlineFeedbackMessage = msg
+                        onFileStatusMessage(msg)
+                    }
+                )
+            }
+        } else {
+            val textToSave = transformResult.outputText
+            if (textToSave.isBlank()) return@rememberLauncherForActivityResult
+            isFileBusy = true
+            inlineFeedbackMessage = null
+            scope.launch {
+                val result = FileTextExtractor.writeTextToUri(context, uri, textToSave)
+                isFileBusy = false
+                result.fold(
+                    onSuccess = { lineCount ->
+                        val msg = "Exported $lineCount line(s) to file."
+                        inlineFeedbackMessage = msg
+                        onFileStatusMessage(msg)
+                    },
+                    onFailure = { err ->
+                        val msg = err.localizedMessage ?: "Could not save file."
+                        inlineFeedbackMessage = msg
+                        onFileStatusMessage(msg)
+                    }
+                )
+            }
         }
     }
 
-    LaunchedEffect(sourceText, options, shuffleNonce) {
-        if (isEditingSource && sourceText.length > 500) {
-            delay(150L)
-        }
+    // Run streaming or inline transform whenever source/options/revision changes
+    LaunchedEffect(largeSession?.sessionId, sourceRevision, sourceText, options, shuffleNonce) {
         val randomSeed = if (options.sortOrder == ListSortOrder.SHUFFLE) {
             Random(System.nanoTime() + shuffleNonce)
         } else {
             Random.Default
         }
-        if (sourceText.length <= 800) {
-            transformResult = ListToolkitEngine.transform(
-                rawInput = sourceText,
+        val session = largeSession
+        if (session != null) {
+            isFileBusy = true
+            progressFraction = 0.05f
+            progressLabel = "Streaming transform (${session.activeTotalLines} lines)..."
+            val (updatedSession, result) = LargeFileWorkspace.runStreamingTransform(
+                session = session,
                 options = options,
-                random = randomSeed
+                random = randomSeed,
+                onProgress = { pct, msg ->
+                    progressFraction = pct
+                    progressLabel = msg
+                }
             )
+            largeSession = updatedSession
+            transformResult = result
+            if (viewingOutputPages) {
+                val safePg = activePageIndex.coerceIn(0, (updatedSession.totalOutputPages - 1).coerceAtLeast(0))
+                activePageIndex = safePg
+                currentPageLines = LargeFileWorkspace.readPage(
+                    file = updatedSession.outputFile ?: updatedSession.sourceFile,
+                    pageOffsets = if (updatedSession.outputFile != null) updatedSession.outputPageOffsets else updatedSession.pageOffsets,
+                    totalLines = if (updatedSession.outputFile != null) updatedSession.outputTotalLines else updatedSession.totalLines,
+                    pageIndex = safePg,
+                    pageSize = updatedSession.pageSize
+                )
+            }
+            isFileBusy = false
+            progressLabel = null
         } else {
-            transformResult = withContext(Dispatchers.Default) {
-                ListToolkitEngine.transform(
+            if (isEditingSource && sourceText.length > 500) {
+                delay(150L)
+            }
+            if (sourceText.length <= 800) {
+                transformResult = ListToolkitEngine.transform(
                     rawInput = sourceText,
                     options = options,
                     random = randomSeed
                 )
+            } else {
+                transformResult = withContext(Dispatchers.Default) {
+                    ListToolkitEngine.transform(
+                        rawInput = sourceText,
+                        options = options,
+                        random = randomSeed
+                    )
+                }
             }
         }
+    }
+
+    // Reload active page window cleanly whenever page index, edits, or view target changes
+    LaunchedEffect(
+        largeSession?.sessionId,
+        largeSession?.editedPages,
+        largeSession?.outputFile,
+        sourceRevision,
+        activePageIndex,
+        viewingOutputPages
+    ) {
+        val session = largeSession
+        if (session == null) {
+            currentPageLines = emptyList()
+            return@LaunchedEffect
+        }
+        currentPageLines = if (viewingOutputPages && session.outputFile != null) {
+            val safePg = activePageIndex.coerceIn(0, (session.totalOutputPages - 1).coerceAtLeast(0))
+            LargeFileWorkspace.readPage(
+                file = session.outputFile,
+                pageOffsets = session.outputPageOffsets,
+                totalLines = session.outputTotalLines,
+                pageIndex = safePg,
+                pageSize = session.pageSize
+            )
+        } else {
+            val safePg = activePageIndex.coerceIn(0, (session.totalPages - 1).coerceAtLeast(0))
+            LargeFileWorkspace.readPage(
+                file = session.sourceFile,
+                pageOffsets = session.pageOffsets,
+                totalLines = session.totalLines,
+                pageIndex = safePg,
+                pageSize = session.pageSize,
+                overlayEdits = session.editedPages
+            )
+        }
+    }
+
+    fun applyPageLinesChange(updatedPageLines: List<String>) {
+        val session = largeSession ?: return
+        val nextMap = session.editedPages.toMutableMap()
+        nextMap[activePageIndex] = updatedPageLines
+        largeSession = session.copy(editedPages = nextMap)
+        sourceRevision++
+    }
+
+    fun commitPageEdits() {
+        val session = largeSession ?: return
+        if (!session.hasUnsavedPageEdits) return
+        scope.launch {
+            isFileBusy = true
+            progressFraction = 0.1f
+            progressLabel = "Committing page edits to disk..."
+            LargeFileWorkspace.commitPageEditsToDisk(
+                session = session,
+                onProgress = { pct, msg ->
+                    progressFraction = pct
+                    progressLabel = msg
+                }
+            ).fold(
+                onSuccess = { committed ->
+                    largeSession = committed
+                    sourceRevision++
+                    activePageIndex = activePageIndex.coerceIn(0, (committed.totalPages - 1).coerceAtLeast(0))
+                    val msg = "Committed page edits (${committed.totalLines} lines on disk)."
+                    inlineFeedbackMessage = msg
+                    onFileStatusMessage(msg)
+                },
+                onFailure = { err ->
+                    inlineFeedbackMessage = err.localizedMessage ?: "Failed committing edits."
+                }
+            )
+            isFileBusy = false
+            progressLabel = null
+        }
+    }
+
+    fun performSearchMatches() {
+        if (findQuery.isEmpty()) return
+        val session = largeSession
+        if (session != null) {
+            scope.launch {
+                isFileBusy = true
+                progressFraction = 0.05f
+                progressLabel = "Scanning ${session.activeTotalLines} lines on disk..."
+                val res = LargeFileWorkspace.searchAcrossFile(
+                    session = session,
+                    query = findQuery,
+                    useRegex = findUseRegex,
+                    ignoreCase = findIgnoreCase,
+                    onProgress = { pct, msg ->
+                        progressFraction = pct
+                        progressLabel = msg
+                    }
+                )
+                searchScanResult = res
+                isFileBusy = false
+                progressLabel = null
+            }
+        } else {
+            scope.launch {
+                val startNs = System.nanoTime()
+                val res = withContext(Dispatchers.Default) {
+                    val compiled = if (findUseRegex) {
+                        val opts = if (findIgnoreCase) setOf(RegexOption.IGNORE_CASE) else emptySet()
+                        runCatching { Regex(findQuery, opts) }.getOrNull()
+                    } else null
+                    val hits = ArrayList<LargeFileWorkspace.SearchHit>()
+                    var totalMatches = 0
+                    var idx = 0
+                    if (!findUseRegex || compiled != null) {
+                        sourceText.lineSequence().forEach { line ->
+                            val matched = compiled?.containsMatchIn(line) ?: line.contains(findQuery, ignoreCase = findIgnoreCase)
+                            if (matched) {
+                                totalMatches++
+                                if (hits.size < 300) {
+                                    hits.add(
+                                        LargeFileWorkspace.SearchHit(
+                                            globalLineIndex = idx,
+                                            pageIndex = idx / LargeFileWorkspace.PAGE_SIZE_LINES,
+                                            lineInPage = idx % LargeFileWorkspace.PAGE_SIZE_LINES,
+                                            preview = line.take(180)
+                                        )
+                                    )
+                                }
+                            }
+                            idx++
+                        }
+                    }
+                    SearchScanResult(
+                        query = findQuery,
+                        totalMatches = totalMatches,
+                        hits = hits,
+                        durationMs = ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(1L)
+                    )
+                }
+                searchScanResult = res
+            }
+        }
+    }
+
+    fun performBulkOperation(spec: BulkEditSpec) {
+        val session = largeSession
+        if (session != null) {
+            scope.launch {
+                isFileBusy = true
+                progressFraction = 0.05f
+                progressLabel = "Applying ${spec.type.label} across disk workspace..."
+                LargeFileWorkspace.applyBulkEdit(
+                    session = session,
+                    spec = spec,
+                    onProgress = { pct, msg ->
+                        progressFraction = pct
+                        progressLabel = msg
+                    }
+                ).fold(
+                    onSuccess = { outcome ->
+                        largeSession = outcome.updatedSession
+                        sourceRevision++
+                        activePageIndex = 0
+                        viewingOutputPages = false
+                        highlightedLineInPage = null
+                        searchScanResult = null
+                        inlineFeedbackMessage = outcome.summaryMessage
+                        onFileStatusMessage(outcome.summaryMessage)
+                    },
+                    onFailure = { err ->
+                        inlineFeedbackMessage = err.localizedMessage ?: "Bulk edit failed."
+                    }
+                )
+                isFileBusy = false
+                progressLabel = null
+            }
+        } else {
+            scope.launch {
+                val startNs = System.nanoTime()
+                val (updatedText, affected) = withContext(Dispatchers.Default) {
+                    applyInlineBulkEdit(sourceText, spec)
+                }
+                sourceText = updatedText
+                searchScanResult = null
+                val elapsed = ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(1L)
+                inlineFeedbackMessage = "${spec.type.label}: updated ($affected change(s)) in ${elapsed}ms"
+            }
+        }
+    }
+
+    if (showLargeApplyDialog) {
+        val session = largeSession
+        val targetFile = session?.outputFile ?: session?.sourceFile
+        val count = if (session?.outputFile != null) session.outputTotalLines else (session?.activeTotalLines ?: 0)
+        AlertDialog(
+            onDismissRequest = { showLargeApplyDialog = false },
+            title = { Text("Large Result Set ($count lines)") },
+            text = {
+                Text(
+                    "Loading all $count lines directly into the multi-line text box can freeze Android UI. " +
+                        "You can either queue all $count lines straight for background batch validation, or load the first ${LargeFileWorkspace.MAX_SAFE_CONSOLE_LINES} lines into the console."
+                )
+            },
+            confirmButton = {
+                if (onQueueLargeFileForBatch != null && targetFile != null && targetFile.exists()) {
+                    Button(
+                        onClick = {
+                            showLargeApplyDialog = false
+                            val queueCopy = File(context.cacheDir, "queued_toolkit_${UUID.randomUUID().toString().take(8)}.txt")
+                            val movedOrCopied = targetFile.renameTo(queueCopy)
+                            if (!movedOrCopied) {
+                                runCatching { targetFile.copyTo(queueCopy, overwrite = true) }
+                            }
+                            onQueueLargeFileForBatch(
+                                queueCopy,
+                                session?.fileName ?: "Toolkit Output",
+                                count
+                            )
+                            onDismiss()
+                        }
+                    ) {
+                        Text("Queue All $count for Check")
+                    }
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton(
+                        onClick = {
+                            showLargeApplyDialog = false
+                            if (targetFile != null) {
+                                scope.launch {
+                                    val slice = LargeFileWorkspace.readHeadLines(
+                                        file = targetFile,
+                                        maxLines = LargeFileWorkspace.MAX_SAFE_CONSOLE_LINES
+                                    )
+                                    val cappedResult = transformResult.copy(outputText = slice.joinToString("\n"))
+                                    onApplyToConsole(cappedResult.outputText, cappedResult)
+                                }
+                            }
+                        }
+                    ) {
+                        Text("Load First ${LargeFileWorkspace.MAX_SAFE_CONSOLE_LINES}")
+                    }
+                    TextButton(onClick = { showLargeApplyDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            }
+        )
     }
 
     ModalBottomSheet(
@@ -240,7 +767,7 @@ fun ListToolkitBottomSheet(
                 .fillMaxWidth()
                 .navigationBarsPadding()
         ) {
-            // Compact Studio Header + 3-Tab Switcher
+            // Studio Header + 4-Tab Switcher
             Column(modifier = Modifier.padding(horizontal = 20.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -282,7 +809,7 @@ fun ListToolkitBottomSheet(
                             selected = activeTab == tab,
                             onClick = { activeTab = tab },
                             shape = SegmentedButtonDefaults.itemShape(index, tabs.size),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
                             icon = {
                                 SegmentedButtonDefaults.Icon(active = activeTab == tab) {
                                     Icon(
@@ -290,9 +817,10 @@ fun ListToolkitBottomSheet(
                                             ToolkitStudioTab.CLEAN -> AppIcons.CleaningServices
                                             ToolkitStudioTab.FORMAT -> AppIcons.Tune
                                             ToolkitStudioTab.FILTER -> AppIcons.FilterList
+                                            ToolkitStudioTab.EDITOR -> Icons.Default.Edit
                                         },
                                         contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
+                                        modifier = Modifier.size(15.dp)
                                     )
                                 }
                             },
@@ -300,7 +828,7 @@ fun ListToolkitBottomSheet(
                         ) {
                             Text(
                                 text = tab.label,
-                                style = MaterialTheme.typography.labelMedium,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = if (activeTab == tab) FontWeight.SemiBold else FontWeight.Normal,
                                 maxLines = 1
                             )
@@ -356,12 +884,13 @@ fun ListToolkitBottomSheet(
                         )
                     }
 
+                    val activeInputCount = largeSession?.activeTotalLines ?: transformResult.totalInputLines
                     FilterChip(
                         selected = isEditingSource,
                         onClick = { isEditingSource = !isEditingSource },
                         label = {
                             Text(
-                                text = if (isEditingSource) "Hide Input" else "Edit Input (${transformResult.totalInputLines})",
+                                text = if (isEditingSource) "Hide Input" else "Edit Input ($activeInputCount)",
                                 style = MaterialTheme.typography.labelSmall
                             )
                         },
@@ -372,8 +901,14 @@ fun ListToolkitBottomSheet(
                         onClick = {
                             val pasted = onPasteFromClipboard()
                             if (!pasted.isNullOrBlank()) {
-                                sourceText = pasted
-                                loadedFileBadge = null
+                                if (pasted.length > LargeFileWorkspace.INLINE_EDITOR_THRESHOLD_BYTES) {
+                                    scope.launch { promoteRawTextToLargeWorkspace("Clipboard Paste", pasted) }
+                                } else {
+                                    LargeFileWorkspace.cleanupSession(largeSession)
+                                    largeSession = null
+                                    sourceText = pasted
+                                    loadedFileBadge = null
+                                }
                             }
                         },
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
@@ -391,6 +926,8 @@ fun ListToolkitBottomSheet(
                     if (liveResultsCount > 0) {
                         TextButton(
                             onClick = {
+                                LargeFileWorkspace.cleanupSession(largeSession)
+                                largeSession = null
                                 sourceText = liveResultsText
                                 loadedFileBadge = "Live Bucket ($liveResultsCount)"
                             },
@@ -404,6 +941,8 @@ fun ListToolkitBottomSheet(
                     if (allResultsCount > liveResultsCount) {
                         TextButton(
                             onClick = {
+                                LargeFileWorkspace.cleanupSession(largeSession)
+                                largeSession = null
                                 sourceText = allResultsText
                                 loadedFileBadge = "All Results ($allResultsCount)"
                             },
@@ -411,6 +950,34 @@ fun ListToolkitBottomSheet(
                             modifier = Modifier.testTag("toolkit_pull_all_button")
                         ) {
                             Text("Pull All ($allResultsCount)", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+
+                // Streaming Progress Indicator Banner (only visible on heavy large-file I/O)
+                AnimatedVisibility(visible = isFileBusy || !progressLabel.isNullOrBlank()) {
+                    Surface(
+                        color = colorScheme.primaryContainer.copy(alpha = 0.45f),
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("toolkit_streaming_progress_banner")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = progressLabel ?: "Processing streaming workspace...",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colorScheme.onPrimaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            LinearProgressIndicator(
+                                progress = { progressFraction.coerceIn(0.02f, 1f) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         }
                     }
                 }
@@ -463,20 +1030,72 @@ fun ListToolkitBottomSheet(
                     }
                 }
 
-                AnimatedVisibility(visible = isEditingSource) {
-                    OutlinedTextField(
-                        value = sourceText,
-                        onValueChange = { sourceText = it },
-                        label = { Text("Raw Input / Messy List") },
-                        placeholder = { Text("Paste cards, email:pass dumps, HTML logs, CSV, or BINs...") },
-                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
-                        minLines = 3,
-                        maxLines = 5,
-                        shape = MaterialTheme.shapes.small,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("toolkit_source_input")
+                // Inline Text Editor OR O(1) Disk-Stream Paged Workspace
+                val activeSession = largeSession
+                if (activeSession != null && (isEditingSource || activeTab == ToolkitStudioTab.EDITOR)) {
+                    LargeFilePagedViewerCard(
+                        session = activeSession,
+                        viewingOutput = viewingOutputPages,
+                        onToggleViewOutput = { showOutput ->
+                            viewingOutputPages = showOutput
+                            activePageIndex = 0
+                            highlightedLineInPage = null
+                        },
+                        currentPageIndex = activePageIndex,
+                        pageLines = currentPageLines,
+                        highlightedLineInPage = highlightedLineInPage,
+                        isBusy = isFileBusy,
+                        onSelectPage = { targetPg ->
+                            activePageIndex = targetPg
+                            highlightedLineInPage = null
+                        },
+                        onUpdateLineInPage = { lineInPg, newText ->
+                            val mutable = currentPageLines.toMutableList()
+                            if (lineInPg in mutable.indices) {
+                                mutable[lineInPg] = newText
+                                applyPageLinesChange(mutable)
+                            }
+                        },
+                        onInsertLineAfter = { lineInPg, newText ->
+                            val mutable = currentPageLines.toMutableList()
+                            val insertIdx = (lineInPg + 1).coerceIn(0, mutable.size)
+                            mutable.add(insertIdx, newText)
+                            applyPageLinesChange(mutable)
+                        },
+                        onDeleteLineInPage = { lineInPg ->
+                            val mutable = currentPageLines.toMutableList()
+                            if (lineInPg in mutable.indices) {
+                                mutable.removeAt(lineInPg)
+                                applyPageLinesChange(mutable)
+                            }
+                        },
+                        onReplaceWholePage = { updatedLines ->
+                            applyPageLinesChange(updatedLines)
+                        },
+                        onCommitEditsToDisk = ::commitPageEdits
                     )
+                } else {
+                    AnimatedVisibility(visible = isEditingSource && activeSession == null) {
+                        OutlinedTextField(
+                            value = sourceText,
+                            onValueChange = { next ->
+                                if (next.length > LargeFileWorkspace.INLINE_EDITOR_THRESHOLD_BYTES) {
+                                    scope.launch { promoteRawTextToLargeWorkspace("Large Input", next) }
+                                } else {
+                                    sourceText = next
+                                }
+                            },
+                            label = { Text("Raw Input / Messy List") },
+                            placeholder = { Text("Paste cards, email:pass dumps, HTML logs, CSV, or BINs...") },
+                            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFamily),
+                            minLines = 3,
+                            maxLines = 5,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("toolkit_source_input")
+                        )
+                    }
                 }
 
                 // Active Tab Options for immediate visibility & focus
@@ -518,6 +1137,43 @@ fun ListToolkitBottomSheet(
                                 options = next
                             }
                         )
+
+                        ToolkitStudioTab.EDITOR -> ToolkitEditorTabContent(
+                            isLargeFileMode = activeSession != null,
+                            totalLineCount = activeSession?.activeTotalLines ?: sourceText.lineSequence().count(),
+                            isBusy = isFileBusy,
+                            findQuery = findQuery,
+                            replaceWith = replaceWith,
+                            useRegex = findUseRegex,
+                            ignoreCase = findIgnoreCase,
+                            onFindQueryChange = { findQuery = it },
+                            onReplaceWithChange = { replaceWith = it },
+                            onUseRegexChange = { findUseRegex = it },
+                            onIgnoreCaseChange = { findIgnoreCase = it },
+                            searchResult = searchScanResult,
+                            onSearchMatches = ::performSearchMatches,
+                            onClearSearch = {
+                                searchScanResult = null
+                                highlightedLineInPage = null
+                            },
+                            onJumpToSearchHit = { hit ->
+                                if (activeSession != null) {
+                                    viewingOutputPages = false
+                                    activePageIndex = hit.pageIndex.coerceIn(0, (activeSession.totalPages - 1).coerceAtLeast(0))
+                                    highlightedLineInPage = hit.lineInPage
+                                    isEditingSource = true
+                                } else {
+                                    inlineFeedbackMessage = "Match at Line ${hit.globalLineIndex + 1}: ${hit.preview}"
+                                }
+                            },
+                            onApplyBulkOperation = ::performBulkOperation,
+                            onExportLineRange = { startZero, endExcl ->
+                                pendingExportMode = ExportTargetMode.RANGE
+                                pendingRangePair = startZero to endExcl
+                                val name = "bincheck_lines_${startZero + 1}_$endExcl.txt"
+                                runCatching { saveFileLauncher.launch(name) }
+                            }
+                        )
                     }
                 }
 
@@ -554,16 +1210,22 @@ fun ListToolkitBottomSheet(
                             }
                         }
                         Spacer(modifier = Modifier.height(6.dp))
-                        val previewText = remember(transformResult.outputText, options.outputFormat) {
+                        val previewText = remember(
+                            transformResult.outputText,
+                            transformResult.outputCount,
+                            options.outputFormat
+                        ) {
                             val lines = transformResult.outputText.lines().filter { it.isNotBlank() }
+                            val totalOut = transformResult.outputCount.coerceAtLeast(lines.size)
                             when {
-                                lines.isEmpty() -> if (options.outputFormat == OutputFormat.EMAIL_PASS) {
-                                    "No email:pass pairs found — select a file, paste a combo dump, or tweak filters."
-                                } else {
-                                    "Nothing left after filtering — paste cards, select a file, or tweak the rules above."
+                                lines.isEmpty() -> when (options.outputFormat) {
+                                    OutputFormat.EMAIL_PASS -> "No email:pass pairs found — select a file, paste a combo dump, or tweak filters."
+                                    OutputFormat.URL_USER_PASS -> "No user:pass entries found — paste URL logs or tweak filters."
+                                    OutputFormat.RAW_LINES -> "No non-empty lines — paste text or select a file."
+                                    else -> "Nothing left after filtering — paste cards, select a file, or tweak the rules above."
                                 }
-                                lines.size <= 5 -> lines.joinToString("\n")
-                                else -> lines.take(5).joinToString("\n") + "\n... (+${lines.size - 5} more)"
+                                totalOut <= 5 -> lines.joinToString("\n")
+                                else -> lines.take(5).joinToString("\n") + "\n... (+${totalOut - 5} more)"
                             }
                         }
 
@@ -645,6 +1307,9 @@ fun ListToolkitBottomSheet(
                     }
                 }
 
+                val hasExportableContent = (largeSession != null && (largeSession?.activeTotalLines ?: 0) > 0) ||
+                    transformResult.outputText.isNotBlank()
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -652,11 +1317,17 @@ fun ListToolkitBottomSheet(
                 ) {
                     IconButton(
                         onClick = {
+                            LargeFileWorkspace.cleanupSession(largeSession)
+                            largeSession = null
                             activePreset = ToolkitPreset.FULL_CLEAN
                             options = ListToolkitOptions.fromPreset(ToolkitPreset.FULL_CLEAN)
                             sourceText = initialInputText
                             loadedFileBadge = null
                             inlineFeedbackMessage = null
+                            searchScanResult = null
+                            activePageIndex = 0
+                            viewingOutputPages = false
+                            highlightedLineInPage = null
                         },
                         modifier = Modifier.testTag("toolkit_reset_button")
                     ) {
@@ -668,8 +1339,32 @@ fun ListToolkitBottomSheet(
                     }
 
                     OutlinedButton(
-                        onClick = { onCopyOutput(transformResult.outputText) },
-                        enabled = transformResult.outputText.isNotBlank(),
+                        onClick = {
+                            val session = largeSession
+                            if (session != null) {
+                                scope.launch {
+                                    val target = session.outputFile ?: session.sourceFile
+                                    val (slice, copiedLines, truncated) = LargeFileWorkspace.readSliceForClipboard(target)
+                                    if (slice.isNotBlank()) {
+                                        onCopyOutput(slice)
+                                        if (truncated) {
+                                            inlineFeedbackMessage = "Copied first $copiedLines lines (~350 KB cap). Use Save for full file."
+                                        }
+                                    }
+                                }
+                            } else {
+                                val textOut = transformResult.outputText
+                                if (textOut.length > LargeFileWorkspace.MAX_SAFE_CLIPBOARD_BYTES) {
+                                    val safeCut = textOut.lastIndexOf('\n', startIndex = LargeFileWorkspace.MAX_SAFE_CLIPBOARD_BYTES)
+                                        .takeIf { it > 0 } ?: LargeFileWorkspace.MAX_SAFE_CLIPBOARD_BYTES
+                                    onCopyOutput(textOut.substring(0, safeCut))
+                                    inlineFeedbackMessage = "Copied ~350 KB clipboard slice. Use Save for full output."
+                                } else {
+                                    onCopyOutput(textOut)
+                                }
+                            }
+                        },
+                        enabled = hasExportableContent && !isFileBusy,
                         shape = MaterialTheme.shapes.small,
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                         modifier = Modifier
@@ -693,8 +1388,11 @@ fun ListToolkitBottomSheet(
 
                     OutlinedButton(
                         onClick = {
+                            pendingExportMode = ExportTargetMode.OUTPUT
+                            pendingRangePair = null
                             val suggestedFileName = when (options.outputFormat) {
                                 OutputFormat.EMAIL_PASS -> "bincheck_email_pass.txt"
+                                OutputFormat.URL_USER_PASS -> "bincheck_user_pass.txt"
                                 OutputFormat.CSV -> "bincheck_cleaned.csv"
                                 OutputFormat.BIN_ONLY -> "bincheck_unique_bins.txt"
                                 OutputFormat.PAN_ONLY -> "bincheck_pans.txt"
@@ -704,7 +1402,7 @@ fun ListToolkitBottomSheet(
                                 saveFileLauncher.launch(suggestedFileName)
                             }
                         },
-                        enabled = transformResult.outputText.isNotBlank() && !isFileBusy,
+                        enabled = hasExportableContent && !isFileBusy,
                         shape = MaterialTheme.shapes.small,
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                         modifier = Modifier
@@ -727,8 +1425,25 @@ fun ListToolkitBottomSheet(
                     }
 
                     Button(
-                        onClick = { onApplyToConsole(transformResult.outputText, transformResult) },
-                        enabled = sourceText.isNotBlank() || transformResult.outputText.isNotBlank(),
+                        onClick = {
+                            val session = largeSession
+                            if (session != null) {
+                                val count = if (session.outputFile != null) session.outputTotalLines else session.activeTotalLines
+                                if (count <= LargeFileWorkspace.MAX_SAFE_CONSOLE_LINES) {
+                                    scope.launch {
+                                        val target = session.outputFile ?: session.sourceFile
+                                        val allLines = LargeFileWorkspace.readHeadLines(target, LargeFileWorkspace.MAX_SAFE_CONSOLE_LINES)
+                                        val joined = allLines.joinToString("\n")
+                                        onApplyToConsole(joined, transformResult.copy(outputText = joined))
+                                    }
+                                } else {
+                                    showLargeApplyDialog = true
+                                }
+                            } else {
+                                onApplyToConsole(transformResult.outputText, transformResult)
+                            }
+                        },
+                        enabled = (sourceText.isNotBlank() || hasExportableContent) && !isFileBusy,
                         shape = MaterialTheme.shapes.small,
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                         modifier = Modifier
@@ -755,7 +1470,103 @@ fun ListToolkitBottomSheet(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3ExpressiveApi::class)
+private fun applyInlineBulkEdit(rawInput: String, spec: BulkEditSpec): Pair<String, Int> {
+    val normalizedLines = rawInput.replace("\r\n", "\n").replace('\r', '\n').split('\n')
+    var affected = 0
+    if (spec.type == BulkEditType.SORT_ASC) {
+        val sorted = normalizedLines.sortedBy { it.lowercase(Locale.US) }
+        return sorted.joinToString("\n") to sorted.size
+    }
+
+    val findRegex = if (spec.useRegex && spec.findQuery.isNotEmpty()) {
+        val opts = if (spec.ignoreCase) setOf(RegexOption.IGNORE_CASE) else emptySet()
+        runCatching { Regex(spec.findQuery, opts) }.getOrNull()
+    } else null
+
+    val parsedColumns = spec.columnIndices.split(',', ' ', ';', '|')
+        .mapNotNull { it.trim().toIntOrNull()?.minus(1) }
+        .filter { it >= 0 }
+
+    val out = ArrayList<String>(normalizedLines.size)
+    for (line in normalizedLines) {
+        var keep = true
+        var next = line
+        when (spec.type) {
+            BulkEditType.FIND_REPLACE -> {
+                if (spec.findQuery.isNotEmpty()) {
+                    next = if (findRegex != null) {
+                        val rep = findRegex.replace(line, spec.replaceWith)
+                        if (rep != line) affected++
+                        rep
+                    } else {
+                        val rep = line.replace(spec.findQuery, spec.replaceWith, ignoreCase = spec.ignoreCase)
+                        if (rep != line) affected++
+                        rep
+                    }
+                }
+            }
+            BulkEditType.PREFIX_SUFFIX -> {
+                if (line.isNotBlank()) {
+                    next = "${spec.prefix}$line${spec.suffix}"
+                    affected++
+                }
+            }
+            BulkEditType.TRIM_DROP_EMPTY -> {
+                val trimmed = line.trim()
+                if (trimmed.isEmpty()) {
+                    keep = false
+                    affected++
+                } else {
+                    if (trimmed != line) affected++
+                    next = trimmed
+                }
+            }
+            BulkEditType.CASE_LOWER -> {
+                next = line.lowercase(Locale.US)
+                if (next != line) affected++
+            }
+            BulkEditType.CASE_UPPER -> {
+                next = line.uppercase(Locale.US)
+                if (next != line) affected++
+            }
+            BulkEditType.NORMALIZE_DELIMITER -> {
+                val delim = spec.targetDelimiter.ifEmpty { "|" }
+                val joined = line.split('|', ':', ';', '/', '\t').joinToString(delim) { it.trim() }
+                if (joined != line) affected++
+                next = joined
+            }
+            BulkEditType.EXTRACT_COLUMNS -> {
+                val parts = line.split('|', ':', ';', '/', ',', '\t').map { it.trim() }
+                val sep = spec.targetDelimiter.ifEmpty { "|" }
+                next = if (parsedColumns.isEmpty()) line else parsedColumns.mapNotNull { parts.getOrNull(it) }.joinToString(sep)
+                if (next.isEmpty()) keep = false else affected++
+            }
+            BulkEditType.KEEP_MATCHING -> {
+                val matches = if (findRegex != null) findRegex.containsMatchIn(line) else {
+                    spec.findQuery.isEmpty() || line.contains(spec.findQuery, ignoreCase = spec.ignoreCase)
+                }
+                if (!matches) {
+                    keep = false
+                    affected++
+                }
+            }
+            BulkEditType.REMOVE_MATCHING -> {
+                val matches = if (findRegex != null) findRegex.containsMatchIn(line) else {
+                    spec.findQuery.isNotEmpty() && line.contains(spec.findQuery, ignoreCase = spec.ignoreCase)
+                }
+                if (matches) {
+                    keep = false
+                    affected++
+                }
+            }
+            BulkEditType.SORT_ASC -> Unit
+        }
+        if (keep) out.add(next)
+    }
+    return out.joinToString("\n") to affected
+}
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CleanTabContent(
     activePreset: ToolkitPreset?,
@@ -764,7 +1575,7 @@ private fun CleanTabContent(
     onOptionsChange: (ListToolkitOptions) -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    val isEmailPassMode = options.outputFormat == OutputFormat.EMAIL_PASS
+    val isComboMode = options.outputFormat == OutputFormat.EMAIL_PASS || options.outputFormat == OutputFormat.URL_USER_PASS
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -816,14 +1627,18 @@ private fun CleanTabContent(
         val dedupModes = DedupMode.entries
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             dedupModes.forEachIndexed { index, mode ->
-                val modeText = if (isEmailPassMode) {
-                    when (mode) {
+                val modeText = when {
+                    isComboMode -> when (mode) {
                         DedupMode.NONE -> "Keep All"
-                        DedupMode.BY_PAN -> "Unique Email"
+                        DedupMode.BY_PAN -> "Unique User"
                         DedupMode.BY_FULL_RECORD -> "Unique Combo"
                     }
-                } else {
-                    mode.label
+                    options.outputFormat == OutputFormat.RAW_LINES -> when (mode) {
+                        DedupMode.NONE -> "Keep All"
+                        DedupMode.BY_PAN -> "First Token"
+                        DedupMode.BY_FULL_RECORD -> "Unique Lines"
+                    }
+                    else -> mode.label
                 }
                 SegmentedButton(
                     selected = options.dedupMode == mode,
@@ -913,16 +1728,24 @@ private fun FormatTabContent(
                         val updatedDropIncomplete = if (
                             format == OutputFormat.PAN_ONLY ||
                             format == OutputFormat.BIN_ONLY ||
-                            format == OutputFormat.EMAIL_PASS
+                            format == OutputFormat.EMAIL_PASS ||
+                            format == OutputFormat.URL_USER_PASS ||
+                            format == OutputFormat.RAW_LINES
                         ) {
                             false
                         } else {
                             options.dropIncomplete
                         }
+                        val updatedRemoveUnparseable = if (format == OutputFormat.RAW_LINES) {
+                            false
+                        } else {
+                            options.removeUnparseable
+                        }
                         onOptionsChange(
                             options.copy(
                                 outputFormat = format,
-                                dropIncomplete = updatedDropIncomplete
+                                dropIncomplete = updatedDropIncomplete,
+                                removeUnparseable = updatedRemoveUnparseable
                             )
                         )
                     },
@@ -930,7 +1753,11 @@ private fun FormatTabContent(
                         Text(
                             text = format.label,
                             style = MaterialTheme.typography.labelSmall,
-                            fontFamily = if (format != OutputFormat.PAN_ONLY && format != OutputFormat.BIN_ONLY) {
+                            fontFamily = if (
+                                format != OutputFormat.PAN_ONLY &&
+                                format != OutputFormat.BIN_ONLY &&
+                                format != OutputFormat.RAW_LINES
+                            ) {
                                 JetBrainsMonoFamily
                             } else {
                                 MaterialTheme.typography.labelSmall.fontFamily
@@ -988,7 +1815,7 @@ private fun FormatTabContent(
             color = colorScheme.onSurfaceVariant
         )
 
-        val limits = listOf<Int?>(null, 50, 100, 250, 500)
+        val limits = listOf<Int?>(null, 50, 100, 250, 500, 5_000, 50_000)
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -1013,7 +1840,9 @@ private fun FilterTabContent(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val currentYear = remember { Calendar.getInstance().get(Calendar.YEAR) }
-    val isEmailPassMode = options.outputFormat == OutputFormat.EMAIL_PASS
+    val isComboOrRawMode = options.outputFormat == OutputFormat.EMAIL_PASS ||
+        options.outputFormat == OutputFormat.URL_USER_PASS ||
+        options.outputFormat == OutputFormat.RAW_LINES
     val selectableSchemes = remember {
         listOf(
             CardScheme.VISA,
@@ -1068,7 +1897,7 @@ private fun FilterTabContent(
             onValueChange = { onOptionsChange(options.copy(includeBinPrefixes = it)) },
             label = {
                 Text(
-                    if (isEmailPassMode) {
+                    if (isComboOrRawMode) {
                         "Include Domains / Keywords (comma-separated)"
                     } else {
                         "Include BIN Prefixes (comma-separated)"
@@ -1076,7 +1905,7 @@ private fun FilterTabContent(
                 )
             },
             placeholder = {
-                Text(if (isEmailPassMode) "e.g. gmail.com, outlook.com" else "e.g. 453225, 5154")
+                Text(if (isComboOrRawMode) "e.g. gmail.com, outlook.com" else "e.g. 453225, 5154")
             },
             singleLine = true,
             shape = MaterialTheme.shapes.small,
@@ -1090,10 +1919,10 @@ private fun FilterTabContent(
             value = options.excludeBinPrefixes,
             onValueChange = { onOptionsChange(options.copy(excludeBinPrefixes = it)) },
             label = {
-                Text(if (isEmailPassMode) "Exclude Domains / Keywords" else "Exclude BIN Prefixes")
+                Text(if (isComboOrRawMode) "Exclude Domains / Keywords" else "Exclude BIN Prefixes")
             },
             placeholder = {
-                Text(if (isEmailPassMode) "e.g. yahoo.com, temp" else "e.g. 4000, 5555")
+                Text(if (isComboOrRawMode) "e.g. yahoo.com, temp" else "e.g. 4000, 5555")
             },
             singleLine = true,
             shape = MaterialTheme.shapes.small,

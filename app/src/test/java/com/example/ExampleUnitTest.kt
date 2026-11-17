@@ -1411,7 +1411,159 @@ class ExampleUnitTest {
         assertEquals(ResultBucket.DIE, stopResult.verdict?.first)
         assertNull(stopResult.variables["after_stop"])
     }
+
+    @Test
+    fun listToolkitEngine_supportsRawLinesUrlUserPassPrefixSuffixAndCase() {
+        val mixedDump = """
+            https://portal.example.com/login:alice_dev:Pass#1
+            ftp://files.net:bob99:Secret99
+            https://portal.example.com/login:alice_dev:Pass#1
+            noise_without_pass
+        """.trimIndent()
+
+        val userPassRes = com.example.domain.ListToolkitEngine.transform(
+            rawInput = mixedDump,
+            options = com.example.domain.ListToolkitOptions.fromPreset(com.example.domain.ToolkitPreset.EXTRACT_USER_PASS)
+        )
+        assertEquals(2, userPassRes.outputCount)
+        assertEquals(1, userPassRes.removedDuplicates)
+        assertEquals(1, userPassRes.removedUnparseable)
+        assertEquals("alice_dev:Pass#1\nbob99:Secret99", userPassRes.outputText)
+
+        val rawTextRes = com.example.domain.ListToolkitEngine.transform(
+            rawInput = "  alpha_token  \n\nBETA_TOKEN\nalpha_token",
+            options = com.example.domain.ListToolkitOptions.fromPreset(com.example.domain.ToolkitPreset.CLEAN_TEXT_DEDUPE)
+                .copy(
+                    caseMode = com.example.domain.ListCaseMode.LOWER,
+                    addPrefix = "ID=",
+                    addSuffix = ";",
+                    dedupMode = com.example.domain.DedupMode.BY_FULL_RECORD
+                )
+        )
+        assertEquals(3, rawTextRes.totalInputLines)
+        assertEquals("ID=alpha_token;\nID=beta_token;\nID=alpha_token;", rawTextRes.outputText)
+
+        val rawExactDedup = com.example.domain.ListToolkitEngine.transform(
+            rawInput = "item_a\nitem_b\nitem_a",
+            options = com.example.domain.ListToolkitOptions.fromPreset(com.example.domain.ToolkitPreset.CLEAN_TEXT_DEDUPE)
+        )
+        assertEquals(2, rawExactDedup.outputCount)
+        assertEquals(1, rawExactDedup.removedDuplicates)
+        assertEquals("item_a\nitem_b", rawExactDedup.outputText)
+    }
+
+    @Test
+    fun largeFileWorkspace_indexesPagesSearchesEditsAndExternalSortsSmoothly() = runTest {
+        val tempRoot = java.nio.file.Files.createTempDirectory("lf_test_").toFile()
+        val bigInputFile = java.io.File(tempRoot, "big_list.txt")
+        val totalTestLines = 48_500 // Exceeds 45,000 external sort run threshold -> tests k-way merge!
+        try {
+            bigInputFile.bufferedWriter().use { bw ->
+                for (i in totalTestLines downTo 1) {
+                    val bin = 453200 + (i % 900)
+                    bw.write("4532250055360003|08|2029|${100 + (i % 899)}|tag_${i.toString().padStart(5, '0')}_bin$bin")
+                    bw.newLine()
+                }
+            }
+
+            val ingested = com.example.domain.LargeFileWorkspace.ingestFileOrText(
+                cacheDir = tempRoot,
+                fileName = "big_list.txt",
+                existingFile = bigInputFile
+            ).getOrThrow()
+
+            try {
+                assertEquals(totalTestLines, ingested.totalLines)
+                assertTrue(ingested.totalPages >= 242)
+
+                // O(1) seek check on page 0 and page 150
+                val p0 = com.example.domain.LargeFileWorkspace.readPage(
+                    ingested.sourceFile,
+                    ingested.pageOffsets,
+                    ingested.totalLines,
+                    pageIndex = 0
+                )
+                assertEquals(200, p0.size)
+                assertTrue(p0.first().contains("tag_48500"))
+
+                val p150 = com.example.domain.LargeFileWorkspace.readPage(
+                    ingested.sourceFile,
+                    ingested.pageOffsets,
+                    ingested.totalLines,
+                    pageIndex = 150
+                )
+                assertEquals(200, p150.size)
+                assertTrue(p150.first().contains("tag_${(totalTestLines - 150 * 200).toString().padStart(5, '0')}"))
+
+                // Overlay edit on page 120 + commit to disk + search verification
+                val modifiedPage120 = com.example.domain.LargeFileWorkspace.readPage(
+                    ingested.sourceFile,
+                    ingested.pageOffsets,
+                    ingested.totalLines,
+                    pageIndex = 120
+                ).toMutableList()
+                modifiedPage120[5] = "CUSTOM_EDITED_MARKER|09|2030|999"
+
+                val withOverlay = ingested.copy(editedPages = mapOf(120 to modifiedPage120))
+                val searchRes = com.example.domain.LargeFileWorkspace.searchAcrossFile(
+                    session = withOverlay,
+                    query = "CUSTOM_EDITED_MARKER"
+                )
+                assertEquals(1, searchRes.totalMatches)
+                assertEquals(120, searchRes.hits.first().pageIndex)
+                assertEquals(5, searchRes.hits.first().lineInPage)
+
+                val committed = com.example.domain.LargeFileWorkspace.commitPageEditsToDisk(withOverlay).getOrThrow()
+                assertFalse(committed.hasUnsavedPageEdits)
+                val reloaded120 = com.example.domain.LargeFileWorkspace.readPage(
+                    committed.sourceFile,
+                    committed.pageOffsets,
+                    committed.totalLines,
+                    pageIndex = 120
+                )
+                assertEquals("CUSTOM_EDITED_MARKER|09|2030|999", reloaded120[5])
+
+                // Bulk External Sort A -> Z across all 48,500 lines (triggers multi-run k-way merge)
+                val sortOutcome = com.example.domain.LargeFileWorkspace.applyBulkEdit(
+                    session = committed,
+                    spec = com.example.domain.LargeFileWorkspace.BulkEditSpec(
+                        type = com.example.domain.LargeFileWorkspace.BulkEditType.SORT_ASC
+                    )
+                ).getOrThrow()
+                assertEquals(totalTestLines, sortOutcome.updatedSession.totalLines)
+                val sortedFirstPage = com.example.domain.LargeFileWorkspace.readPage(
+                    sortOutcome.updatedSession.sourceFile,
+                    sortOutcome.updatedSession.pageOffsets,
+                    sortOutcome.updatedSession.totalLines,
+                    pageIndex = 0
+                )
+                assertTrue(sortedFirstPage.first().startsWith("453225"))
+
+                // Streaming transform: deduplicate identical PAN+tuple across 48.5k lines in RAW mode vs BY_PAN
+                val (transformedSession, transformRes) = com.example.domain.LargeFileWorkspace.runStreamingTransform(
+                    session = sortOutcome.updatedSession,
+                    options = com.example.domain.ListToolkitOptions(
+                        outputFormat = com.example.domain.OutputFormat.RAW_LINES,
+                        dedupMode = com.example.domain.DedupMode.BY_FULL_RECORD,
+                        sortOrder = com.example.domain.ListSortOrder.BY_BIN_ASC,
+                        removeExpired = false,
+                        removeInvalidLuhn = false,
+                        removeUnparseable = false,
+                        dropIncomplete = false
+                    )
+                )
+                assertEquals(totalTestLines, transformRes.totalInputLines)
+                assertEquals(totalTestLines, transformRes.outputCount)
+                assertTrue(transformedSession.outputFile?.exists() == true)
+            } finally {
+                com.example.domain.LargeFileWorkspace.cleanupSession(ingested)
+            }
+        } finally {
+            tempRoot.deleteRecursively()
+        }
+    }
 }
+
 
 
 

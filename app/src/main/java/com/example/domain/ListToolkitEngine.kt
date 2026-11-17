@@ -19,15 +19,23 @@ enum class OutputFormat(val label: String, val example: String) {
     CSV("PAN,MM,YYYY,CVV", "4532...,08,2028,113"),
     PAN_ONLY("PAN Only", "4532250055360003"),
     BIN_ONLY("Unique BIN6", "453225"),
-    EMAIL_PASS("email:pass", "alex@domain.com:Pass123!")
+    EMAIL_PASS("email:pass", "alex@domain.com:Pass123!"),
+    URL_USER_PASS("user:pass", "alex_dev:Pass123!"),
+    RAW_LINES("Raw Lines", "Keep & clean any text lines")
 }
 
 enum class ListSortOrder(val label: String) {
     KEEP_ORDER("Original"),
-    BY_BIN_ASC("PAN / BIN ↑"),
-    BY_EXPIRY_DESC("Expiry ↓"),
-    BY_SCHEME("Scheme"),
+    BY_BIN_ASC("PAN / A-Z ↑"),
+    BY_EXPIRY_DESC("Expiry / Len ↓"),
+    BY_SCHEME("Scheme / Host"),
     SHUFFLE("Shuffle")
+}
+
+enum class ListCaseMode(val label: String) {
+    NONE("Keep Case"),
+    LOWER("lowercase"),
+    UPPER("UPPERCASE")
 }
 
 enum class ToolkitPreset(val label: String, val summary: String) {
@@ -35,7 +43,9 @@ enum class ToolkitPreset(val label: String, val summary: String) {
     DEDUPE_FORMAT("Dedupe & Format", "Keep valid syntax, remove dupes & normalize"),
     EXTRACT_PANS("Extract PANs", "Pull clean unique card numbers from messy logs"),
     EXTRACT_BINS("Unique BINs", "Extract unique 6-digit BINs from list"),
-    EXTRACT_EMAIL_PASS("Email:Pass", "Extract clean unique email:pass combos from dumps/logs")
+    EXTRACT_EMAIL_PASS("Email:Pass", "Extract clean unique email:pass combos from dumps/logs"),
+    EXTRACT_USER_PASS("User:Pass", "Pull user:pass from URL logs (https://site:user:pass)"),
+    CLEAN_TEXT_DEDUPE("Raw Text Dedupe", "Trim blanks, remove duplicates & keep any text")
 }
 
 data class ListToolkitOptions(
@@ -52,7 +62,15 @@ data class ListToolkitOptions(
     val excludeBinPrefixes: String = "",
     val minExpiryYear: Int? = null,
     val sortOrder: ListSortOrder = ListSortOrder.KEEP_ORDER,
-    val limitCount: Int? = null
+    val limitCount: Int? = null,
+    val trimWhitespace: Boolean = true,
+    val findQuery: String = "",
+    val replaceWith: String = "",
+    val findUseRegex: Boolean = false,
+    val findIgnoreCase: Boolean = true,
+    val addPrefix: String = "",
+    val addSuffix: String = "",
+    val caseMode: ListCaseMode = ListCaseMode.NONE
 ) {
     companion object {
         fun fromPreset(preset: ToolkitPreset): ListToolkitOptions = when (preset) {
@@ -110,6 +128,28 @@ data class ListToolkitOptions(
                 solveWildcards = false,
                 outputFormat = OutputFormat.EMAIL_PASS
             )
+
+            ToolkitPreset.EXTRACT_USER_PASS -> ListToolkitOptions(
+                dedupMode = DedupMode.BY_FULL_RECORD,
+                removeExpired = false,
+                removeInvalidLuhn = false,
+                removeInvalidCvvOrLength = false,
+                dropIncomplete = false,
+                removeUnparseable = true,
+                solveWildcards = false,
+                outputFormat = OutputFormat.URL_USER_PASS
+            )
+
+            ToolkitPreset.CLEAN_TEXT_DEDUPE -> ListToolkitOptions(
+                dedupMode = DedupMode.BY_FULL_RECORD,
+                removeExpired = false,
+                removeInvalidLuhn = false,
+                removeInvalidCvvOrLength = false,
+                dropIncomplete = false,
+                removeUnparseable = false,
+                solveWildcards = false,
+                outputFormat = OutputFormat.RAW_LINES
+            )
         }
     }
 }
@@ -162,6 +202,10 @@ object ListToolkitEngine {
         """([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\s*[:|;\t,]\s*([^\s|;,"'<>]+)"""
     )
 
+    // Matches `url:user:pass` or `user:pass` / `user|pass` / `user;pass`
+    private val URL_PREFIX_REGEX = Regex("""^(?:https?://)?[A-Za-z0-9._\-]+\.[A-Za-z]{2,}(?::\d+)?(?:/[^\s:|;,]*)?[:|;\s]+""", RegexOption.IGNORE_CASE)
+    private val GENERIC_USER_PASS_REGEX = Regex("""^([^\s:|;,"'<>]{2,128})\s*[:|;\t]\s*([^\s|;,"'<>]{1,128})$""")
+
     data class ParsedCardEntry(
         val rawLine: String,
         val pan: String,
@@ -181,6 +225,39 @@ object ListToolkitEngine {
             get() = "$email:$password"
     }
 
+    fun compileFindRegex(options: ListToolkitOptions): Regex? {
+        if (!options.findUseRegex || options.findQuery.isEmpty()) return null
+        val regexOptions = if (options.findIgnoreCase) setOf(RegexOption.IGNORE_CASE) else emptySet()
+        return runCatching { Regex(options.findQuery, regexOptions) }.getOrNull()
+    }
+
+    fun applyLineEdits(
+        line: String,
+        options: ListToolkitOptions,
+        compiledFindRegex: Regex? = compileFindRegex(options)
+    ): String {
+        var out = if (options.trimWhitespace) line.trim() else line
+        if (options.findQuery.isNotEmpty()) {
+            out = if (options.findUseRegex && compiledFindRegex != null) {
+                compiledFindRegex.replace(out, options.replaceWith)
+            } else {
+                out.replace(options.findQuery, options.replaceWith, ignoreCase = options.findIgnoreCase)
+            }
+        }
+        out = when (options.caseMode) {
+            ListCaseMode.NONE -> out
+            ListCaseMode.LOWER -> out.lowercase(Locale.US)
+            ListCaseMode.UPPER -> out.uppercase(Locale.US)
+        }
+        if (options.addPrefix.isNotEmpty()) {
+            out = "${options.addPrefix}$out"
+        }
+        if (options.addSuffix.isNotEmpty()) {
+            out = "$out${options.addSuffix}"
+        }
+        return if (options.trimWhitespace) out.trim() else out
+    }
+
     fun transform(
         rawInput: String,
         options: ListToolkitOptions,
@@ -188,18 +265,31 @@ object ListToolkitEngine {
         referenceMonth: Int? = null,
         random: Random = Random.Default
     ): ToolkitTransformResult {
+        val compiledFindRegex = compileFindRegex(options)
         val nonBlankLines = rawInput.lines()
-            .map { it.trim() }
+            .asSequence()
+            .map { if (options.trimWhitespace) it.trim() else it }
             .filter { it.isNotEmpty() }
+            .toList()
 
         if (nonBlankLines.isEmpty()) {
             return ToolkitTransformResult(outputText = "")
         }
 
-        if (options.outputFormat == OutputFormat.EMAIL_PASS) {
+        if (options.outputFormat == OutputFormat.RAW_LINES) {
+            return transformRawLines(
+                nonBlankLines = nonBlankLines,
+                options = options,
+                compiledFindRegex = compiledFindRegex,
+                random = random
+            )
+        }
+
+        if (options.outputFormat == OutputFormat.EMAIL_PASS || options.outputFormat == OutputFormat.URL_USER_PASS) {
             return transformEmailPass(
                 nonBlankLines = nonBlankLines,
                 options = options,
+                compiledFindRegex = compiledFindRegex,
                 random = random
             )
         }
@@ -363,12 +453,14 @@ object ListToolkitEngine {
 
         val formattedLines = ArrayList<String>(limitedEntries.size + passthroughRawLines.size)
         for (entry in limitedEntries) {
-            formattedLines.add(formatEntry(entry, options.outputFormat))
+            formattedLines.add(applyLineEdits(formatEntry(entry, options.outputFormat), options, compiledFindRegex))
         }
         if (!options.removeUnparseable && passthroughRawLines.isNotEmpty()) {
             val remainingSlots = options.limitCount?.let { (it - formattedLines.size).coerceAtLeast(0) }
             val extra = if (remainingSlots != null) passthroughRawLines.take(remainingSlots) else passthroughRawLines
-            formattedLines.addAll(extra)
+            extra.forEach { raw ->
+                formattedLines.add(applyLineEdits(raw, options, compiledFindRegex))
+            }
         }
 
         return ToolkitTransformResult(
@@ -386,13 +478,80 @@ object ListToolkitEngine {
         )
     }
 
-    private fun transformEmailPass(
+    private fun transformRawLines(
         nonBlankLines: List<String>,
         options: ListToolkitOptions,
+        compiledFindRegex: Regex?,
         random: Random
     ): ToolkitTransformResult {
         val includeTokens = parseGenericTokens(options.includeBinPrefixes)
         val excludeTokens = parseGenericTokens(options.excludeBinPrefixes)
+
+        val seenKeys = HashSet<String>()
+        val kept = ArrayList<String>(nonBlankLines.size)
+        var removedDuplicates = 0
+        var removedByFilter = 0
+        var removedUnparseable = 0
+
+        for (rawLine in nonBlankLines) {
+            val edited = applyLineEdits(rawLine, options, compiledFindRegex)
+            if (edited.isEmpty()) {
+                removedUnparseable++
+                continue
+            }
+            val lower = edited.lowercase(Locale.US)
+            if (includeTokens.isNotEmpty() && includeTokens.none { lower.contains(it) }) {
+                removedByFilter++
+                continue
+            }
+            if (excludeTokens.isNotEmpty() && excludeTokens.any { lower.contains(it) }) {
+                removedByFilter++
+                continue
+            }
+            val dedupKey = when (options.dedupMode) {
+                DedupMode.NONE -> null
+                DedupMode.BY_PAN -> edited.substringBefore('|').substringBefore(':').lowercase(Locale.US)
+                DedupMode.BY_FULL_RECORD -> edited
+            }
+            if (dedupKey != null && !seenKeys.add(dedupKey)) {
+                removedDuplicates++
+                continue
+            }
+            kept.add(edited)
+        }
+
+        val sorted = when (options.sortOrder) {
+            ListSortOrder.KEEP_ORDER -> kept
+            ListSortOrder.BY_BIN_ASC -> kept.sortedBy { it.lowercase(Locale.US) }
+            ListSortOrder.BY_EXPIRY_DESC -> kept.sortedByDescending { it.length }
+            ListSortOrder.BY_SCHEME -> kept.sorted()
+            ListSortOrder.SHUFFLE -> kept.shuffled(random)
+        }
+        val limited = if (options.limitCount != null && options.limitCount > 0) {
+            sorted.take(options.limitCount)
+        } else {
+            sorted
+        }
+
+        return ToolkitTransformResult(
+            outputText = limited.joinToString("\n"),
+            totalInputLines = nonBlankLines.size,
+            outputCount = limited.size,
+            removedDuplicates = removedDuplicates,
+            removedUnparseable = removedUnparseable,
+            removedByFilter = removedByFilter
+        )
+    }
+
+    private fun transformEmailPass(
+        nonBlankLines: List<String>,
+        options: ListToolkitOptions,
+        compiledFindRegex: Regex?,
+        random: Random
+    ): ToolkitTransformResult {
+        val includeTokens = parseGenericTokens(options.includeBinPrefixes)
+        val excludeTokens = parseGenericTokens(options.excludeBinPrefixes)
+        val includeUsernames = options.outputFormat == OutputFormat.URL_USER_PASS
 
         val seenKeys = HashSet<String>()
         val keptCombos = ArrayList<EmailPassEntry>(nonBlankLines.size)
@@ -402,7 +561,11 @@ object ListToolkitEngine {
         var removedByFilter = 0
 
         for (rawLine in nonBlankLines) {
-            val extracted = extractEmailPassEntries(rawLine)
+            val extracted = if (includeUsernames) {
+                extractUserPassEntries(rawLine)
+            } else {
+                extractEmailPassEntries(rawLine)
+            }
             if (extracted.isEmpty()) {
                 removedUnparseable++
                 continue
@@ -461,14 +624,42 @@ object ListToolkitEngine {
             sortedCombos
         }
 
+        val finalLines = limitedCombos.map { applyLineEdits(it.formatted, options, compiledFindRegex) }
+
         return ToolkitTransformResult(
-            outputText = limitedCombos.joinToString("\n") { it.formatted },
+            outputText = finalLines.joinToString("\n"),
             totalInputLines = nonBlankLines.size,
-            outputCount = limitedCombos.size,
+            outputCount = finalLines.size,
             removedDuplicates = removedDuplicates,
             removedUnparseable = removedUnparseable,
             removedByFilter = removedByFilter
         )
+    }
+
+    /**
+     * Extracts either `email:pass` or general `user:pass` pairs (including from `url:user:pass` / `url|user|pass`).
+     */
+    fun extractUserPassEntries(rawLine: String): List<EmailPassEntry> {
+        val emailMatches = extractEmailPassEntries(rawLine)
+        if (emailMatches.isNotEmpty()) return emailMatches
+        val stripped = stripHtmlAndNoise(rawLine)
+        if (stripped.isBlank()) return emptyList()
+        val urlMatch = URL_PREFIX_REGEX.find(stripped)
+        val candidate = if (urlMatch != null) {
+            stripped.substring(urlMatch.range.last + 1).trim()
+        } else {
+            stripped
+        }
+        val m = GENERIC_USER_PASS_REGEX.find(candidate) ?: return emptyList()
+        val user = sanitizeEmail(m.groupValues[1])
+        val pass = sanitizePassword(m.groupValues[2])
+        if (user.isEmpty() || pass.isEmpty()) return emptyList()
+        val lowerPass = pass.lowercase(Locale.US)
+        if (lowerPass == "password" || lowerPass == "pass" || lowerPass == "null" || lowerPass == "none") {
+            return emptyList()
+        }
+        val domain = if ('@' in user) user.substringAfter('@') else urlMatch?.value?.substringBefore(':').orEmpty().ifEmpty { "user" }
+        return listOf(EmailPassEntry(email = user, password = pass, domain = domain))
     }
 
     /**
@@ -635,9 +826,19 @@ object ListToolkitEngine {
             OutputFormat.CSV -> "${entry.pan},$mm,$yyyy,$cvv"
             OutputFormat.PAN_ONLY -> entry.pan
             OutputFormat.BIN_ONLY -> entry.pan.take(6)
-            OutputFormat.EMAIL_PASS -> "${entry.pan}:$cvv"
+            OutputFormat.EMAIL_PASS, OutputFormat.URL_USER_PASS -> "${entry.pan}:$cvv"
+            OutputFormat.RAW_LINES -> entry.rawLine
         }
     }
+
+    internal fun solveEntryWildcardsPublic(entry: ParsedCardEntry, random: Random): ParsedCardEntry? =
+        solveEntryWildcards(entry, random)
+
+    internal fun parsePrefixesPublic(raw: String): List<String> = parsePrefixes(raw)
+
+    internal fun parseGenericTokensPublic(raw: String): List<String> = parseGenericTokens(raw)
+
+    internal fun ParsedCardEntry.containsWildcardPublic(): Boolean = containsWildcard()
 
     private fun ParsedCardEntry.containsWildcard(): Boolean =
         pan.any { it.equals('x', ignoreCase = true) } ||

@@ -36,6 +36,7 @@ import com.example.domain.ValidationRecord
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -44,7 +45,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.BufferedInputStream
+import java.io.BufferedReader
 import java.io.File
+import java.io.FileInputStream
+import java.io.InputStreamReader
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -154,8 +160,35 @@ class BatchValidationWorker(
 
         val repository = ValidationHistoryRepository(database.validationHistoryDao())
 
-        val queueItems = repository.getQueuedBatch(batchId)
-        if (queueItems.isEmpty()) {
+        val streamFilePath = inputData.getString(KEY_STREAM_FILE_PATH)?.takeIf { it.isNotBlank() }
+        val streamFile = streamFilePath?.let(::File)?.takeIf { it.isFile && it.canRead() }
+        val streamFilterDelimited = inputData.getBoolean(KEY_STREAM_FILTER_DELIMITED, false)
+
+        val queueItems = if (streamFile == null) {
+            repository.getQueuedBatch(batchId)
+        } else {
+            emptyList()
+        }
+        val total = if (streamFile != null) {
+            val passedTotal = inputData.getInt(KEY_TOTAL, 0)
+            if (passedTotal > 0) {
+                passedTotal
+            } else {
+                BufferedReader(InputStreamReader(BufferedInputStream(FileInputStream(streamFile), 64 * 1024), StandardCharsets.UTF_8), 64 * 1024).use { br ->
+                    var count = 0
+                    while (true) {
+                        val line = br.readLine() ?: break
+                        if (line.isNotBlank()) count++
+                    }
+                    count
+                }
+            }
+        } else {
+            queueItems.size
+        }
+
+        if (total == 0) {
+            runCatching { streamFile?.delete() }
             return@withContext Result.success(
                 workDataOf(
                     KEY_BATCH_ID to batchId,
@@ -164,8 +197,6 @@ class BatchValidationWorker(
                 )
             )
         }
-
-        val total = queueItems.size
         val processedCounter = AtomicInteger(0)
         val liveCounter = AtomicInteger(0)
         val dieCounter = AtomicInteger(0)
@@ -397,7 +428,64 @@ class BatchValidationWorker(
 
         try {
             val workerCount = effectiveConcurrency.coerceAtMost(total).coerceAtLeast(1)
-            if (workerCount == 1) {
+            if (streamFile != null) {
+                // Lazy bounded-channel streaming for huge 100–200 MB queued files (O(1) memory)
+                val channel = Channel<String>(capacity = (workerCount * 32).coerceAtLeast(64))
+                val delimitedRegex = Regex("""[0-9xX]{6,19}[|/:;][0-9xX]{1,2}[|/:;][0-9xX]{2,4}[|/:;][0-9xX]{3,4}""")
+                coroutineScope {
+                    val producer = launch(Dispatchers.IO) {
+                        try {
+                            BufferedReader(
+                                InputStreamReader(BufferedInputStream(FileInputStream(streamFile), 64 * 1024), StandardCharsets.UTF_8),
+                                64 * 1024
+                            ).use { reader ->
+                                while (!isStopped) {
+                                    val rawLine = reader.readLine() ?: break
+                                    val trimmed = rawLine.trim()
+                                    if (trimmed.isEmpty()) continue
+                                    if (streamFilterDelimited) {
+                                        val match = delimitedRegex.find(trimmed)?.value
+                                        if (match != null) {
+                                            channel.send(match)
+                                        }
+                                    } else {
+                                        channel.send(trimmed)
+                                    }
+                                }
+                            }
+                        } finally {
+                            channel.close()
+                        }
+                    }
+
+                    val consumers = List(workerCount) {
+                        launch {
+                            for (lineText in channel) {
+                                if (isStopped) break
+                                val (record, wasDedupHit) = validateSingleLine(lineText)
+                                if (wasDedupHit) {
+                                    dedupSavedCounter.incrementAndGet()
+                                }
+                                persistRecord(sourceName, record)
+                                when (record.bucket) {
+                                    ResultBucket.LIVE -> liveCounter.incrementAndGet()
+                                    ResultBucket.DIE -> dieCounter.incrementAndGet()
+                                    ResultBucket.UNKNOWN -> unknownCounter.incrementAndGet()
+                                }
+                                handleTelegramDispatch(record)
+                                val done = processedCounter.incrementAndGet()
+                                maybePublishProgress(done, force = false)
+                                if (!wasDedupHit && effectiveDelayMs > 0L && !isStopped) {
+                                    delay(effectiveDelayMs)
+                                }
+                            }
+                        }
+                    }
+                    producer.join()
+                    consumers.joinAll()
+                }
+                maybePublishProgress(processedCounter.get(), force = true)
+            } else if (workerCount == 1) {
                 for ((index, item) in queueItems.withIndex()) {
                     if (isStopped) break
                     val wasDedupHit = processQueueItem(item, forceProgress = index == queueItems.lastIndex)
@@ -530,6 +618,7 @@ class BatchValidationWorker(
                 runCatching { repository.clearQueuedBatch(batchId) }
                 runCatching { explicitSnapshotFile?.delete() }
                 runCatching { defaultSnapshotFile.delete() }
+                runCatching { streamFile?.delete() }
             }
         }
     }
@@ -628,6 +717,8 @@ class BatchValidationWorker(
         const val KEY_TELEGRAM_ENABLED = "telegram_enabled"
         const val KEY_TELEGRAM_CHAT_ID = "telegram_chat_id"
         const val KEY_TELEGRAM_LIVE_ONLY = "telegram_live_only"
+        const val KEY_STREAM_FILE_PATH = "stream_file_path"
+        const val KEY_STREAM_FILTER_DELIMITED = "stream_filter_delimited"
 
         const val KEY_PROCESSED = "processed"
         const val KEY_TOTAL = "total"

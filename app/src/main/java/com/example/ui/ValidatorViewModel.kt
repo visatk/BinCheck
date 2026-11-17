@@ -37,6 +37,7 @@ import com.example.domain.DeviceNetworkStatus
 import com.example.domain.FileTextExtractor
 import com.example.domain.HttpProbeResult
 import com.example.domain.ImportedFilePreview
+import com.example.domain.LargeFileWorkspace
 import com.example.domain.NetworkClientProvider
 import com.example.domain.NetworkTelemetrySnapshot
 import com.example.domain.ResultBucket
@@ -746,15 +747,64 @@ class ValidatorViewModel(
             return
         }
 
-        val payload = chosenLines.joinToString("\n")
+        val fullTotal = if (onlyDelimitedRecords && preview.delimitedLineCount > 0) {
+            preview.delimitedLineCount
+        } else {
+            preview.totalLineCount
+        }
+
         FirebaseMetrics.logFileImported(
             fileType = preview.fileType.name.lowercase(),
-            totalLines = preview.allNonEmptyLines.size,
-            delimitedLines = preview.delimitedRecordLines.size,
+            totalLines = preview.totalLineCount,
+            delimitedLines = preview.delimitedLineCount,
             append = append,
             onlyDelimited = onlyDelimitedRecords,
             startImmediately = startImmediately
         )
+
+        val stagedPath = preview.stagedFilePath
+        if (preview.isLargeStagedFile && !stagedPath.isNullOrBlank()) {
+            val stagedFile = File(stagedPath)
+            if (startImmediately && stagedFile.exists()) {
+                _localState.update {
+                    it.copy(
+                        loadedFileName = preview.fileName,
+                        isFileImportOpen = false,
+                        importedFilePreview = null,
+                        fileImportError = null
+                    )
+                }
+                enqueueLargeFileBatch(
+                    stagedFile = stagedFile,
+                    sourceName = preview.fileName,
+                    expectedLines = fullTotal,
+                    filterOnlyDelimited = onlyDelimitedRecords && preview.delimitedLineCount > 0
+                )
+                return
+            } else {
+                val capped = chosenLines.take(LargeFileWorkspace.MAX_SAFE_CONSOLE_LINES)
+                val payload = capped.joinToString("\n")
+                runCatching { stagedFile.delete() }
+                _localState.update { prev ->
+                    val existing = prev.rawInputText.trim()
+                    val merged = if (append && existing.isNotEmpty()) "$existing\n$payload" else payload
+                    prev.copy(
+                        rawInputText = merged,
+                        loadedFileName = preview.fileName,
+                        isFileImportOpen = false,
+                        importedFilePreview = null,
+                        fileImportError = null,
+                        statusBannerMessage = "Loaded ${capped.size} of $fullTotal line(s) from ${preview.fileName} (open Toolkit for full ${FileTextExtractor.formatFileSize(preview.fileSizeBytes)} editing)."
+                    )
+                }
+                if (startImmediately) {
+                    startBatchRun()
+                }
+                return
+            }
+        }
+
+        val payload = chosenLines.joinToString("\n")
         _localState.update { prev ->
             val existing = prev.rawInputText.trim()
             val merged = if (append && existing.isNotEmpty()) {
@@ -773,6 +823,43 @@ class ValidatorViewModel(
 
         if (startImmediately) {
             startBatchRun()
+        }
+    }
+
+    fun enqueueLargeFileBatch(
+        stagedFile: File,
+        sourceName: String,
+        expectedLines: Int,
+        filterOnlyDelimited: Boolean = false
+    ) {
+        if (!stagedFile.exists()) return
+        val currentState = uiState.value
+        val batchId = UUID.randomUUID().toString()
+        val settings = currentState.settings
+
+        activeWorkId?.let { workManager.cancelWorkById(it) }
+        activeWorkId = null
+        workerObserverJob?.cancel()
+        batchResultsObserverJob?.cancel()
+
+        viewModelScope.launch {
+            val queueFile = withContext(Dispatchers.IO) {
+                val queueDir = File(getApplication<Application>().filesDir, "batch_queues").apply { mkdirs() }
+                val dest = File(queueDir, "$batchId.txt")
+                if (!stagedFile.renameTo(dest)) {
+                    stagedFile.copyTo(dest, overwrite = true)
+                    stagedFile.delete()
+                }
+                dest
+            }
+            launchWorkerForBatch(
+                batchId = batchId,
+                sourceName = sourceName.ifBlank { "Large File" },
+                totalLines = expectedLines.coerceAtLeast(1),
+                settings = settings,
+                streamFilePath = queueFile.absolutePath,
+                streamFilterDelimited = filterOnlyDelimited
+            )
         }
     }
 
@@ -825,19 +912,6 @@ class ValidatorViewModel(
         batchResultsObserverJob?.cancel()
 
         val settings = currentState.settings
-        val deviceStatus = NetworkClientProvider.inspectDeviceNetworkStatus(getApplication())
-        val isNetworkEngine = (
-            settings.validationMode != ValidationMode.LOCAL_DETERMINISTIC &&
-                (settings.validationMode != ValidationMode.SANDBOX_SUITE ||
-                    SandboxGatewayClient.inspectEnvKeys().hasAnyConfiguredLiveSandbox)
-            ) || (settings.telegramWebhookEnabled && settings.telegramChatId.isNotBlank())
-
-        val effectiveConcurrency = if (settings.batterySaverMode || deviceStatus.shouldThrottleForBatteryOrData) {
-            settings.concurrency.coerceAtMost(2)
-        } else {
-            settings.concurrency
-        }
-
         val batchId = UUID.randomUUID().toString()
         val sourceName = currentState.loadedFileName ?: "Console"
 
@@ -863,106 +937,140 @@ class ValidatorViewModel(
                 sourceName = sourceName
             )
 
-            val fullConfig = settings.toCustomHttpConfig()
-            val snapshotFilePath = withContext(Dispatchers.IO) {
-                runCatching {
-                    val dir = File(getApplication<Application>().filesDir, "batch_configs").apply { mkdirs() }
-                    val file = File(dir, "$batchId.json")
-                    file.writeText(CustomConfigStudioEngine.exportConfigToJson(fullConfig))
-                    file.absolutePath
-                }.getOrDefault("")
-            }
-
-            val effectiveDelayMs = settings.effectiveDelayMs
-            val inputData = workDataOf(
-                BatchValidationWorker.KEY_BATCH_ID to batchId,
-                BatchValidationWorker.KEY_CONFIG_SNAPSHOT_PATH to snapshotFilePath,
-                BatchValidationWorker.KEY_VALIDATION_MODE to settings.validationMode.name,
-                BatchValidationWorker.KEY_WEBHOOK_URL to settings.webhookUrl.take(1024),
-                BatchValidationWorker.KEY_HTTP_METHOD to settings.httpMethod.name,
-                BatchValidationWorker.KEY_HTTP_HEADERS to settings.httpHeaders.take(1500),
-                BatchValidationWorker.KEY_HTTP_BODY_TEMPLATE to settings.httpBodyTemplate.take(1500),
-                BatchValidationWorker.KEY_HTTP_TIMEOUT_SECONDS to settings.httpTimeoutSeconds,
-                BatchValidationWorker.KEY_HTTP_MAX_RETRIES to settings.httpMaxRetries,
-                BatchValidationWorker.KEY_HTTP_LIVE_KEYWORDS to settings.httpLiveKeywords.take(512),
-                BatchValidationWorker.KEY_HTTP_DIE_KEYWORDS to settings.httpDieKeywords.take(512),
-                BatchValidationWorker.KEY_GZIP_REQUESTS to settings.gzipCustomRequests,
-                BatchValidationWorker.KEY_DEDUPLICATE_INPUTS to settings.deduplicateBatchInputs,
-                BatchValidationWorker.KEY_AUTO_RESOLVE_WILDCARDS to settings.autoResolveWildcards,
-                BatchValidationWorker.KEY_CONCURRENCY to effectiveConcurrency,
-                BatchValidationWorker.KEY_BATCH_DELAY_MS to effectiveDelayMs,
-                BatchValidationWorker.KEY_SOURCE_NAME to sourceName,
-                BatchValidationWorker.KEY_TELEGRAM_ENABLED to settings.telegramWebhookEnabled,
-                BatchValidationWorker.KEY_TELEGRAM_CHAT_ID to settings.telegramChatId,
-                BatchValidationWorker.KEY_TELEGRAM_LIVE_ONLY to settings.telegramNotifyLiveOnly
-            )
-
-            val constraintsBuilder = Constraints.Builder()
-            if (isNetworkEngine) {
-                constraintsBuilder.setRequiredNetworkType(
-                    if (settings.wifiOnlyBatch) NetworkType.UNMETERED else NetworkType.CONNECTED
-                )
-            }
-            if (settings.batterySaverMode) {
-                constraintsBuilder.setRequiresBatteryNotLow(true)
-            }
-
-            val canRunExpedited = !settings.batterySaverMode && (!isNetworkEngine || !settings.wifiOnlyBatch)
-            val workRequestBuilder = OneTimeWorkRequestBuilder<BatchValidationWorker>()
-                .setInputData(inputData)
-                .setConstraints(constraintsBuilder.build())
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
-                .addTag("batch:$batchId")
-            if (canRunExpedited) {
-                workRequestBuilder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-            }
-            val workRequest = workRequestBuilder.build()
-
-            activeWorkId = workRequest.id
-
-            val runningStatus = when {
-                isNetworkEngine && settings.wifiOnlyBatch && deviceStatus.isMetered ->
-                    "Waiting for Wi-Fi before running remote checks..."
-                settings.validationMode.hasFixedDelay ->
-                    "Running ${settings.validationMode.badgeLabel} (${effectiveDelayMs / 1000L}s pace)..."
-                settings.batterySaverMode || deviceStatus.shouldThrottleForBatteryOrData ->
-                    "Eco run active (${effectiveConcurrency}x • ${effectiveDelayMs}ms pace)..."
-                else ->
-                    "Checking ${lines.size} item(s) (${effectiveConcurrency}x • ${effectiveDelayMs}ms pace)..."
-            }
-
-            _localState.update {
-                it.copy(
-                    isRunning = true,
-                    processedCount = 0,
-                    totalBatchCount = lines.size,
-                    deviceNetworkStatus = deviceStatus,
-                    statusBannerMessage = runningStatus
-                )
-            }
-
-            observeBatchResultsAndWork(
-                workId = workRequest.id,
+            launchWorkerForBatch(
                 batchId = batchId,
-                fallbackTotal = lines.size
-            )
-
-            workManager.enqueueUniqueWork(
-                BatchValidationWorker.UNIQUE_BATCH_WORK_NAME,
-                ExistingWorkPolicy.REPLACE,
-                workRequest
-            )
-            FirebaseMetrics.logBatchStarted(
-                mode = settings.validationMode,
-                sourceType = if (sourceName.equals("Console", ignoreCase = true)) "console" else "file",
-                lineCount = lines.size,
-                concurrency = effectiveConcurrency,
-                delayMs = effectiveDelayMs,
-                wifiOnly = settings.wifiOnlyBatch,
-                batterySaver = settings.batterySaverMode,
-                deduplicate = settings.deduplicateBatchInputs
+                sourceName = sourceName,
+                totalLines = lines.size,
+                settings = settings,
+                streamFilePath = null,
+                streamFilterDelimited = false
             )
         }
+    }
+
+    private suspend fun launchWorkerForBatch(
+        batchId: String,
+        sourceName: String,
+        totalLines: Int,
+        settings: ValidatorSettings,
+        streamFilePath: String?,
+        streamFilterDelimited: Boolean
+    ) {
+        val deviceStatus = NetworkClientProvider.inspectDeviceNetworkStatus(getApplication())
+        val isNetworkEngine = (
+            settings.validationMode != ValidationMode.LOCAL_DETERMINISTIC &&
+                (settings.validationMode != ValidationMode.SANDBOX_SUITE ||
+                    SandboxGatewayClient.inspectEnvKeys().hasAnyConfiguredLiveSandbox)
+            ) || (settings.telegramWebhookEnabled && settings.telegramChatId.isNotBlank())
+
+        val effectiveConcurrency = if (settings.batterySaverMode || deviceStatus.shouldThrottleForBatteryOrData) {
+            settings.concurrency.coerceAtMost(2)
+        } else {
+            settings.concurrency
+        }
+
+        val fullConfig = settings.toCustomHttpConfig()
+        val snapshotFilePath = withContext(Dispatchers.IO) {
+            runCatching {
+                val dir = File(getApplication<Application>().filesDir, "batch_configs").apply { mkdirs() }
+                val file = File(dir, "$batchId.json")
+                file.writeText(CustomConfigStudioEngine.exportConfigToJson(fullConfig))
+                file.absolutePath
+            }.getOrDefault("")
+        }
+
+        val effectiveDelayMs = settings.effectiveDelayMs
+        val inputData = workDataOf(
+            BatchValidationWorker.KEY_BATCH_ID to batchId,
+            BatchValidationWorker.KEY_CONFIG_SNAPSHOT_PATH to snapshotFilePath,
+            BatchValidationWorker.KEY_VALIDATION_MODE to settings.validationMode.name,
+            BatchValidationWorker.KEY_WEBHOOK_URL to settings.webhookUrl.take(1024),
+            BatchValidationWorker.KEY_HTTP_METHOD to settings.httpMethod.name,
+            BatchValidationWorker.KEY_HTTP_HEADERS to settings.httpHeaders.take(1500),
+            BatchValidationWorker.KEY_HTTP_BODY_TEMPLATE to settings.httpBodyTemplate.take(1500),
+            BatchValidationWorker.KEY_HTTP_TIMEOUT_SECONDS to settings.httpTimeoutSeconds,
+            BatchValidationWorker.KEY_HTTP_MAX_RETRIES to settings.httpMaxRetries,
+            BatchValidationWorker.KEY_HTTP_LIVE_KEYWORDS to settings.httpLiveKeywords.take(512),
+            BatchValidationWorker.KEY_HTTP_DIE_KEYWORDS to settings.httpDieKeywords.take(512),
+            BatchValidationWorker.KEY_GZIP_REQUESTS to settings.gzipCustomRequests,
+            BatchValidationWorker.KEY_DEDUPLICATE_INPUTS to settings.deduplicateBatchInputs,
+            BatchValidationWorker.KEY_AUTO_RESOLVE_WILDCARDS to settings.autoResolveWildcards,
+            BatchValidationWorker.KEY_CONCURRENCY to effectiveConcurrency,
+            BatchValidationWorker.KEY_BATCH_DELAY_MS to effectiveDelayMs,
+            BatchValidationWorker.KEY_SOURCE_NAME to sourceName,
+            BatchValidationWorker.KEY_TELEGRAM_ENABLED to settings.telegramWebhookEnabled,
+            BatchValidationWorker.KEY_TELEGRAM_CHAT_ID to settings.telegramChatId,
+            BatchValidationWorker.KEY_TELEGRAM_LIVE_ONLY to settings.telegramNotifyLiveOnly,
+            BatchValidationWorker.KEY_STREAM_FILE_PATH to (streamFilePath ?: ""),
+            BatchValidationWorker.KEY_STREAM_FILTER_DELIMITED to streamFilterDelimited,
+            BatchValidationWorker.KEY_TOTAL to totalLines
+        )
+
+        val constraintsBuilder = Constraints.Builder()
+        if (isNetworkEngine) {
+            constraintsBuilder.setRequiredNetworkType(
+                if (settings.wifiOnlyBatch) NetworkType.UNMETERED else NetworkType.CONNECTED
+            )
+        }
+        if (settings.batterySaverMode) {
+            constraintsBuilder.setRequiresBatteryNotLow(true)
+        }
+
+        val canRunExpedited = !settings.batterySaverMode && (!isNetworkEngine || !settings.wifiOnlyBatch)
+        val workRequestBuilder = OneTimeWorkRequestBuilder<BatchValidationWorker>()
+            .setInputData(inputData)
+            .setConstraints(constraintsBuilder.build())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+            .addTag("batch:$batchId")
+        if (canRunExpedited) {
+            workRequestBuilder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        }
+        val workRequest = workRequestBuilder.build()
+
+        activeWorkId = workRequest.id
+
+        val runningStatus = when {
+            isNetworkEngine && settings.wifiOnlyBatch && deviceStatus.isMetered ->
+                "Waiting for Wi-Fi before running remote checks..."
+            settings.validationMode.hasFixedDelay ->
+                "Running ${settings.validationMode.badgeLabel} (${effectiveDelayMs / 1000L}s pace)..."
+            settings.batterySaverMode || deviceStatus.shouldThrottleForBatteryOrData ->
+                "Eco run active (${effectiveConcurrency}x • ${effectiveDelayMs}ms pace)..."
+            else ->
+                "Checking $totalLines item(s) (${effectiveConcurrency}x • ${effectiveDelayMs}ms pace)..."
+        }
+
+        _localState.update {
+            it.copy(
+                isRunning = true,
+                processedCount = 0,
+                totalBatchCount = totalLines,
+                deviceNetworkStatus = deviceStatus,
+                statusBannerMessage = runningStatus
+            )
+        }
+
+        observeBatchResultsAndWork(
+            workId = workRequest.id,
+            batchId = batchId,
+            fallbackTotal = totalLines
+        )
+
+        workManager.enqueueUniqueWork(
+            BatchValidationWorker.UNIQUE_BATCH_WORK_NAME,
+            ExistingWorkPolicy.REPLACE,
+            workRequest
+        )
+        FirebaseMetrics.logBatchStarted(
+            mode = settings.validationMode,
+            sourceType = if (sourceName.equals("Console", ignoreCase = true)) "console" else "file",
+            lineCount = totalLines,
+            concurrency = effectiveConcurrency,
+            delayMs = effectiveDelayMs,
+            wifiOnly = settings.wifiOnlyBatch,
+            batterySaver = settings.batterySaverMode,
+            deduplicate = settings.deduplicateBatchInputs
+        )
     }
 
     private fun reconnectOngoingBatchWork() {
@@ -1053,9 +1161,9 @@ class ValidatorViewModel(
             if (newLive.isNotEmpty() || newDie.isNotEmpty() || newUnknown.isNotEmpty()) {
                 _localState.update { prev ->
                     prev.copy(
-                        liveRecords = if (newLive.isEmpty()) prev.liveRecords else newLive + prev.liveRecords,
-                        dieRecords = if (newDie.isEmpty()) prev.dieRecords else newDie + prev.dieRecords,
-                        unknownRecords = if (newUnknown.isEmpty()) prev.unknownRecords else newUnknown + prev.unknownRecords
+                        liveRecords = if (newLive.isEmpty()) prev.liveRecords else (newLive + prev.liveRecords).take(5_000),
+                        dieRecords = if (newDie.isEmpty()) prev.dieRecords else (newDie + prev.dieRecords).take(5_000),
+                        unknownRecords = if (newUnknown.isEmpty()) prev.unknownRecords else (newUnknown + prev.unknownRecords).take(5_000)
                     )
                 }
                 if (newLive.isNotEmpty()) {

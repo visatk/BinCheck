@@ -4,6 +4,12 @@ import android.content.Context
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
@@ -12,6 +18,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.dp
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -61,6 +69,7 @@ import com.example.ui.ValidatorUiState
 import com.example.ui.theme.MyApplicationTheme
 import com.example.worker.BatchValidationWorker
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -1443,6 +1452,149 @@ class ExampleRobolectricTest {
         assertEquals(1, savedBlocks.size)
         assertEquals("SKIP_NEXT", savedBlocks[0].extraParams["onFalse"])
     }
+
+    @Test
+    fun `listToolkitBottomSheet editor tab finds replaces and runs bulk operations`() {
+        val validVisa = CardValidatorEngine.resolveWildcardPan("45322500553600x3")
+        var appliedOutput = ""
+
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                ListToolkitBottomSheet(
+                    initialInputText = "  $validVisa|08|2029|113  \n$validVisa|08|2029|999",
+                    liveResultsText = "",
+                    allResultsText = "",
+                    liveResultsCount = 0,
+                    allResultsCount = 0,
+                    onPasteFromClipboard = { null },
+                    onCopyOutput = {},
+                    onApplyToConsole = { out, _ -> appliedOutput = out },
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        // Switch to 4th Editor tab
+        composeTestRule.onNodeWithTag("toolkit_tab_editor").performClick()
+        composeTestRule.waitForIdle()
+
+        // Search matches for "999"
+        composeTestRule.onNodeWithTag("toolkit_editor_find_input").performScrollTo().performTextInput("999")
+        composeTestRule.onNodeWithTag("toolkit_editor_find_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("toolkit_search_results_panel").performScrollTo().assertIsDisplayed()
+
+        // Replace All "999" -> "777" and also switch preset to Raw Text Dedupe so edited lines aren't collapsed by PAN dedup
+        composeTestRule.onNodeWithTag("toolkit_editor_replace_input").performScrollTo().performTextInput("777")
+        composeTestRule.onNodeWithTag("toolkit_editor_replace_all_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("toolkit_bulk_trim_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("toolkit_tab_clean").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("toolkit_preset_clean_text_dedupe").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("toolkit_apply_console_button").performClick()
+        composeTestRule.waitForIdle()
+
+        assertTrue(appliedOutput.contains("$validVisa|08|2029|113"))
+        assertTrue(appliedOutput.contains("$validVisa|08|2029|777"))
+    }
+
+    @Test
+    fun `largeFilePagedViewerCard navigates pages jumps to line and edits lines cleanly`() = runTest {
+        val tempDir = java.nio.file.Files.createTempDirectory("robo_paged_").toFile()
+        try {
+            val raw = (1..250).joinToString("\n") { idx -> "4532250055360003|08|2029|${100 + idx}" }
+            var session = com.example.domain.LargeFileWorkspace.ingestFileOrText(
+                cacheDir = tempDir,
+                fileName = "huge_sample.txt",
+                rawText = raw
+            ).getOrThrow()
+
+            try {
+                var pageIndex = 0
+                var pageLines = com.example.domain.LargeFileWorkspace.readPage(
+                    session.sourceFile,
+                    session.pageOffsets,
+                    session.totalLines,
+                    pageIndex
+                )
+
+                composeTestRule.setContent {
+                    var currentPg by remember { androidx.compose.runtime.mutableIntStateOf(pageIndex) }
+                    var linesState by remember { androidx.compose.runtime.mutableStateOf(pageLines) }
+                    var sessState by remember { androidx.compose.runtime.mutableStateOf(session) }
+                    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+
+                    MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                        com.example.ui.LargeFilePagedViewerCard(
+                            session = sessState,
+                            viewingOutput = false,
+                            onToggleViewOutput = {},
+                            currentPageIndex = currentPg,
+                            pageLines = linesState,
+                            highlightedLineInPage = null,
+                            isBusy = false,
+                            onSelectPage = { nextPg ->
+                                currentPg = nextPg
+                                kotlinx.coroutines.runBlocking {
+                                    linesState = com.example.domain.LargeFileWorkspace.readPage(
+                                        sessState.sourceFile,
+                                        sessState.pageOffsets,
+                                        sessState.totalLines,
+                                        nextPg,
+                                        overlayEdits = sessState.editedPages
+                                    )
+                                }
+                            },
+                            onUpdateLineInPage = { idx, updated ->
+                                val mutable = linesState.toMutableList()
+                                mutable[idx] = updated
+                                linesState = mutable
+                                val nextMap = sessState.editedPages.toMutableMap()
+                                nextMap[currentPg] = mutable
+                                sessState = sessState.copy(editedPages = nextMap)
+                            },
+                            onInsertLineAfter = { _, _ -> },
+                            onDeleteLineInPage = {},
+                            onReplaceWholePage = {},
+                            onCommitEditsToDisk = {
+                                coroutineScope.launch {
+                                    sessState = com.example.domain.LargeFileWorkspace.commitPageEditsToDisk(sessState).getOrThrow()
+                                }
+                            }
+                        )
+                    }
+                }
+                composeTestRule.waitForIdle()
+                composeTestRule.onNodeWithTag("toolkit_large_file_viewer").assertIsDisplayed()
+
+                // Go to Next page (lines 201..250)
+                composeTestRule.onNodeWithTag("toolkit_page_next_button").performClick()
+                composeTestRule.waitForIdle()
+
+                // Tap line index 0 on Page 2 (line #201) and edit it
+                composeTestRule.onNodeWithTag("toolkit_page_line_0").performClick()
+                composeTestRule.waitForIdle()
+                composeTestRule.onNodeWithTag("toolkit_edit_line_dialog_input").performTextReplacement("EDITED_LINE_201")
+                composeTestRule.onNodeWithTag("toolkit_edit_line_dialog_save").performClick()
+                composeTestRule.waitForIdle()
+
+                composeTestRule.onNodeWithText("EDITED_LINE_201").assertIsDisplayed()
+                composeTestRule.onNodeWithTag("toolkit_commit_page_edits_button").assertIsDisplayed()
+            } finally {
+                com.example.domain.LargeFileWorkspace.cleanupSession(session)
+            }
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
 }
+
 
 

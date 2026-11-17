@@ -324,7 +324,7 @@ fun FileImportBottomSheet(
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = "${preview.fileType.label} • ${FileTextExtractor.formatFileSize(preview.fileSizeBytes)} • ${preview.allNonEmptyLines.size} line(s) • ${preview.delimitedRecordLines.size} delimited",
+                                    text = "${preview.fileType.label} • ${FileTextExtractor.formatFileSize(preview.fileSizeBytes)} • ${preview.totalLineCount} line(s) • ${preview.delimitedLineCount} delimited",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = colorScheme.onSurfaceVariant,
                                     maxLines = 2,
@@ -370,10 +370,10 @@ fun FileImportBottomSheet(
                                 color = colorScheme.onSurface
                             )
                             Text(
-                                text = if (preview.delimitedRecordLines.isNotEmpty()) {
-                                    "Pulls ${preview.delimitedRecordLines.size} card line(s) and skips extra text"
+                                text = if (preview.delimitedLineCount > 0) {
+                                    "Pulls ${preview.delimitedLineCount} card line(s) and skips extra text"
                                 } else {
-                                    "No formatted cards spotted — will import all ${preview.allNonEmptyLines.size} line(s)"
+                                    "No formatted cards spotted — will import all ${preview.totalLineCount} line(s)"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = colorScheme.onSurfaceVariant
@@ -433,10 +433,16 @@ fun FileImportBottomSheet(
                     preview.allNonEmptyLines
                 }
 
+                val fullSelectedCount = if (onlyDelimitedRecords && preview.delimitedLineCount > 0) {
+                    preview.delimitedLineCount
+                } else {
+                    preview.totalLineCount
+                }
+
                 if (previewLines.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "Extracted Preview (${previewLines.size} lines)",
+                        text = "Extracted Preview ($fullSelectedCount total)",
                         style = MaterialTheme.typography.labelLarge,
                         color = colorScheme.onSurfaceVariant
                     )
@@ -461,15 +467,31 @@ fun FileImportBottomSheet(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            if (previewLines.size > 5) {
+                            if (fullSelectedCount > 5) {
                                 Text(
-                                    text = "... +${previewLines.size - 5} more line(s)",
+                                    text = "... +${fullSelectedCount - 5} more line(s)",
                                     style = MaterialTheme.typography.labelSmall,
                                     fontFamily = com.example.ui.theme.JetBrainsMonoFamily,
                                     color = consoleColors.unknownAccent
                                 )
                             }
                         }
+                    }
+                }
+
+                if (preview.isLargeStagedFile) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = colorScheme.primaryContainer.copy(alpha = 0.45f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Large file (${FileTextExtractor.formatFileSize(preview.fileSizeBytes)}) staged on disk: \"Load & Process\" streams all $fullSelectedCount lines directly; \"Load into Console\" loads a safe 5,000-line slice (open Toolkit to browse/edit all lines).",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                        )
                     }
                 }
 

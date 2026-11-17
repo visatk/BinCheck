@@ -70,6 +70,7 @@ import com.example.R
 import com.example.analytics.FirebaseMetrics
 import com.example.domain.BinLookupService
 import com.example.domain.CardValidatorEngine
+import com.example.domain.LargeFileWorkspace
 import com.example.domain.SandboxProvider
 import kotlinx.coroutines.launch
 
@@ -153,10 +154,20 @@ fun ValidatorScreen(
 
     fun copyToClipboard(label: String, text: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-        clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
+        val wasClipped = text.length > LargeFileWorkspace.MAX_SAFE_CLIPBOARD_BYTES
+        val safeText = if (wasClipped) {
+            val cut = text.lastIndexOf('\n', startIndex = LargeFileWorkspace.MAX_SAFE_CLIPBOARD_BYTES)
+                .takeIf { it > 0 } ?: LargeFileWorkspace.MAX_SAFE_CLIPBOARD_BYTES
+            text.substring(0, cut)
+        } else {
+            text
+        }
+        clipboard?.setPrimaryClip(ClipData.newPlainText(label, safeText))
         scope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
-            snackbarHostState.showSnackbar("Copied $label")
+            snackbarHostState.showSnackbar(
+                if (wasClipped) "Copied $label (safe ~350 KB cap)" else "Copied $label"
+            )
         }
     }
 
@@ -304,7 +315,8 @@ fun ValidatorScreen(
                     snackbarHostState.currentSnackbarData?.dismiss()
                     snackbarHostState.showSnackbar(msg)
                 }
-            }
+            },
+            onQueueLargeFileForBatch = viewModel::enqueueLargeFileBatch
         )
     }
 

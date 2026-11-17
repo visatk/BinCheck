@@ -5,10 +5,15 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.BufferedReader
+import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStreamReader
 import java.nio.charset.StandardCharsets
 import java.util.Locale
+import java.util.UUID
 
 enum class SupportedFileType(val label: String) {
     TXT("TXT"),
@@ -22,12 +27,18 @@ data class ImportedFilePreview(
     val fileType: SupportedFileType,
     val rawContent: String,
     val allNonEmptyLines: List<String>,
-    val delimitedRecordLines: List<String>
+    val delimitedRecordLines: List<String>,
+    val stagedFilePath: String? = null,
+    val totalLineCount: Int = allNonEmptyLines.size,
+    val delimitedLineCount: Int = delimitedRecordLines.size,
+    val isLargeStagedFile: Boolean = false
 )
 
 object FileTextExtractor {
 
-    private const val MAX_FILE_BYTES = 5L * 1024L * 1024L // 5 MB safety cap
+    private const val IN_MEMORY_MAX_BYTES = 2L * 1024L * 1024L // 2 MB fast inline console threshold
+    private const val MAX_FILE_BYTES = LargeFileWorkspace.MAX_SUPPORTED_FILE_BYTES // 260 MB streaming cap
+    private const val LARGE_PREVIEW_MAX_LINES = 2_500
     private val DELIMITED_RECORD_REGEX = Regex("""[0-9xX]{6,19}[|/:;][0-9xX]{1,2}[|/:;][0-9xX]{2,4}[|/:;][0-9xX]{3,4}""")
 
     fun detectFileType(fileName: String, mimeType: String?): SupportedFileType? {
@@ -73,40 +84,148 @@ object FileTextExtractor {
                 ?: throw IllegalArgumentException("Unsupported file format. Please select a .txt or .html file.")
 
             if (fileSize > MAX_FILE_BYTES) {
-                throw IllegalArgumentException("File exceeds 5 MB limit for in-memory console processing.")
+                throw IllegalArgumentException("File exceeds ${formatFileSize(MAX_FILE_BYTES)} streaming limit.")
             }
 
-            val rawContent = resolver.openInputStream(uri)?.use { stream ->
-                val reader = BufferedReader(InputStreamReader(stream, StandardCharsets.UTF_8))
-                val builder = StringBuilder()
-                val buffer = CharArray(8192)
-                var totalChars = 0
-                while (true) {
-                    val read = reader.read(buffer)
-                    if (read == -1) break
-                    totalChars += read
-                    if (totalChars > MAX_FILE_BYTES) {
-                        throw IllegalArgumentException("File content exceeds 5 MB limit.")
+            if (fileSize in 0L..IN_MEMORY_MAX_BYTES) {
+                val rawContent = resolver.openInputStream(uri)?.use { stream ->
+                    val reader = BufferedReader(InputStreamReader(BufferedInputStream(stream, 32 * 1024), StandardCharsets.UTF_8))
+                    val builder = StringBuilder()
+                    val buffer = CharArray(8192)
+                    var totalChars = 0L
+                    while (true) {
+                        val read = reader.read(buffer)
+                        if (read == -1) break
+                        totalChars += read
+                        if (totalChars <= IN_MEMORY_MAX_BYTES) {
+                            builder.append(buffer, 0, read)
+                        } else {
+                            // Spill to streaming path below
+                            break
+                        }
                     }
-                    builder.append(buffer, 0, read)
+                    if (totalChars <= IN_MEMORY_MAX_BYTES) builder.toString() else null
                 }
-                builder.toString()
-            } ?: throw IllegalStateException("Unable to open selected file stream.")
 
-            val actualBytes = if (fileSize >= 0) fileSize else rawContent.toByteArray(StandardCharsets.UTF_8).size.toLong()
-            val normalizedLines = extractLines(rawContent, detectedType)
-            val delimitedLines = extractDelimitedLines(normalizedLines)
+                if (rawContent != null) {
+                    val actualBytes = if (fileSize >= 0) fileSize else rawContent.toByteArray(StandardCharsets.UTF_8).size.toLong()
+                    val normalizedLines = extractLines(rawContent, detectedType)
+                    val delimitedLines = extractDelimitedLines(normalizedLines)
+                    return@runCatching ImportedFilePreview(
+                        uriString = uri.toString(),
+                        fileName = displayName,
+                        fileSizeBytes = actualBytes,
+                        fileType = detectedType,
+                        rawContent = rawContent,
+                        allNonEmptyLines = normalizedLines,
+                        delimitedRecordLines = delimitedLines,
+                        totalLineCount = normalizedLines.size,
+                        delimitedLineCount = delimitedLines.size,
+                        isLargeStagedFile = false
+                    )
+                }
+            }
+
+            // Streaming path for 2 MB – 260 MB files: stage to cacheDir without holding full content in heap
+            val stageDir = File(context.cacheDir, "staged_imports").apply { mkdirs() }
+            stageDir.listFiles()?.forEach { old ->
+                if (System.currentTimeMillis() - old.lastModified() > 6L * 60L * 60L * 1000L) {
+                    old.delete()
+                }
+            }
+            val stagedFile = File(stageDir, "import_${UUID.randomUUID().toString().take(10)}.txt")
+            val previewAll = ArrayList<String>(256)
+            val previewDelimited = ArrayList<String>(256)
+            var totalLineCount = 0
+            var totalDelimitedCount = 0
+            var totalBytes = 0L
+
+            resolver.openInputStream(uri)?.use { rawIn ->
+                val reader = BufferedReader(InputStreamReader(BufferedInputStream(rawIn, 64 * 1024), StandardCharsets.UTF_8), 64 * 1024)
+                BufferedOutputStream(FileOutputStream(stagedFile), 64 * 1024).use { out ->
+                    val nl = byteArrayOf('\n'.code.toByte())
+                    var inScript = false
+                    while (true) {
+                        val rawLine = reader.readLine() ?: break
+                        val linesOut = if (detectedType == SupportedFileType.HTML) {
+                            val pair = stripHtmlStreamingLine(rawLine, inScript)
+                            inScript = pair.second
+                            pair.first
+                        } else {
+                            val trimmed = rawLine.trim()
+                            if (trimmed.isNotEmpty()) listOf(trimmed) else emptyList()
+                        }
+
+                        for (cleanLine in linesOut) {
+                            val bytes = cleanLine.toByteArray(StandardCharsets.UTF_8)
+                            totalBytes += bytes.size + 1L
+                            if (totalBytes > MAX_FILE_BYTES) {
+                                stagedFile.delete()
+                                throw IllegalArgumentException("File exceeds ${formatFileSize(MAX_FILE_BYTES)} streaming limit.")
+                            }
+                            out.write(bytes)
+                            out.write(nl)
+                            totalLineCount++
+                            if (previewAll.size < LARGE_PREVIEW_MAX_LINES) {
+                                previewAll.add(cleanLine)
+                            }
+                            var matched = false
+                            for (m in DELIMITED_RECORD_REGEX.findAll(cleanLine)) {
+                                totalDelimitedCount++
+                                if (previewDelimited.size < LARGE_PREVIEW_MAX_LINES) {
+                                    previewDelimited.add(m.value)
+                                }
+                                matched = true
+                            }
+                            if (!matched && (cleanLine.contains('|') || cleanLine.contains('/'))) {
+                                val parts = cleanLine.split('|', '/', ':', ';').map { it.trim() }.filter { it.isNotEmpty() }
+                                if (parts.size >= 4 && parts[0].length >= 6) {
+                                    totalDelimitedCount++
+                                    if (previewDelimited.size < LARGE_PREVIEW_MAX_LINES) {
+                                        previewDelimited.add(parts.take(4).joinToString("|"))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    out.flush()
+                }
+            } ?: throw IllegalStateException("Unable to open selected file stream.")
 
             ImportedFilePreview(
                 uriString = uri.toString(),
                 fileName = displayName,
-                fileSizeBytes = actualBytes,
+                fileSizeBytes = if (fileSize >= 0L) fileSize else totalBytes,
                 fileType = detectedType,
-                rawContent = rawContent,
-                allNonEmptyLines = normalizedLines,
-                delimitedRecordLines = delimitedLines
+                rawContent = "",
+                allNonEmptyLines = previewAll,
+                delimitedRecordLines = previewDelimited,
+                stagedFilePath = stagedFile.absolutePath,
+                totalLineCount = totalLineCount,
+                delimitedLineCount = totalDelimitedCount,
+                isLargeStagedFile = true
             )
         }
+    }
+
+    private fun stripHtmlStreamingLine(rawLine: String, initialInScript: Boolean): Pair<List<String>, Boolean> {
+        var inIgnored = initialInScript
+        var work = rawLine
+        if (inIgnored) {
+            val endMatch = Regex("(?i)</(?:script|style|head)>").find(work) ?: return emptyList<String>() to true
+            work = work.substring(endMatch.range.last + 1)
+            inIgnored = false
+        }
+        work = work
+            .replace(Regex("(?is)<!--.*?-->"), "\n")
+            .replace(Regex("(?is)<(script|style|head)[^>]*>.*?</\\1>"), "\n")
+        val openTag = Regex("(?is)<(script|style|head)[^>]*>").find(work)
+        if (openTag != null) {
+            work = work.substring(0, openTag.range.first)
+            inIgnored = true
+        }
+        if (work.isBlank()) return emptyList<String>() to inIgnored
+        return stripHtmlToText(work).lines().map { it.trim() }.filter { it.isNotEmpty() } to inIgnored
     }
 
     /**
