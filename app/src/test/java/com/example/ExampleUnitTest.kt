@@ -1562,6 +1562,124 @@ class ExampleUnitTest {
             tempRoot.deleteRecursively()
         }
     }
+
+    @Test
+    fun customConfigStudio_resolveSampleInputAndRenderPreviewPreserveWildcardsAndTelemetry() {
+        val wildcardSample = com.example.domain.CustomConfigStudioEngine.resolveSampleInput(
+            "453225005536xxx3|xx|xxxx|xxx"
+        )
+        assertFalse(wildcardSample.isCombo)
+        assertTrue(CardValidatorEngine.verifyLuhn(wildcardSample.pan))
+        assertEquals(2, wildcardSample.mm.length)
+        assertTrue(wildcardSample.mm.toInt() in 1..12)
+        assertEquals(4, wildcardSample.yyyy.length)
+        assertFalse(wildcardSample.yyyy.contains('x', ignoreCase = true))
+        assertEquals(3, wildcardSample.cvv.length)
+        assertTrue(wildcardSample.cvv.all { it.isDigit() })
+
+        val normalizedSample = com.example.domain.CustomConfigStudioEngine.resolveSampleInput(
+            "4532250055360003|8|29|113"
+        )
+        assertEquals("08", normalizedSample.mm)
+        assertEquals("2029", normalizedSample.yyyy)
+
+        val comboCfg = CustomHttpConfig(skipLocalLuhnPrecheck = true)
+        val comboSample = com.example.domain.CustomConfigStudioEngine.resolveSampleInput(
+            "alice@example.com:p@ss:with|delim",
+            comboCfg
+        )
+        assertTrue(comboSample.isCombo)
+        assertEquals("alice@example.com", comboSample.pan)
+        assertEquals("p@ss:with|delim", comboSample.cvv)
+
+        val gzipBefore = com.example.domain.NetworkClientProvider.telemetry.snapshot().gzippedPayloadsSent
+        val gzipPreview = com.example.domain.CustomConfigStudioEngine.renderRequestPreview(
+            CustomHttpConfig(
+                url = "https://api.example.com/check",
+                method = HttpRequestMethod.POST_JSON,
+                bodyTemplate = """{"pan":"{card}"}""",
+                compressBodyGzip = true
+            ),
+            "4532250055360003|08|2028|113"
+        )
+        assertEquals("POST", gzipPreview.resolvedMethod)
+        assertEquals(
+            gzipBefore,
+            com.example.domain.NetworkClientProvider.telemetry.snapshot().gzippedPayloadsSent
+        )
+    }
+
+    @Test
+    fun largeFileWorkspace_externalSortPreservesControlCharactersAndColonsAcrossRuns() = runTest {
+        val tempRoot = java.nio.file.Files.createTempDirectory("lf_ctrl_sort_").toFile()
+        val inputFile = java.io.File(tempRoot, "ctrl_sort.txt")
+        val specialFirst = "000_alpha\u0001with:colon|08|2029|113"
+        val specialSecond = "001_beta\u0001payload|09|2030|224"
+        try {
+            inputFile.bufferedWriter().use { bw ->
+                bw.write(specialSecond)
+                bw.newLine()
+                for (i in 46_000 downTo 1) {
+                    bw.write("500_${i.toString().padStart(5, '0')}:record|08|2029|113")
+                    bw.newLine()
+                }
+                bw.write(specialFirst)
+                bw.newLine()
+            }
+
+            val ingested = com.example.domain.LargeFileWorkspace.ingestFileOrText(
+                cacheDir = tempRoot,
+                fileName = "ctrl_sort.txt",
+                existingFile = inputFile
+            ).getOrThrow()
+
+            try {
+                val sorted = com.example.domain.LargeFileWorkspace.applyBulkEdit(
+                    session = ingested,
+                    spec = com.example.domain.LargeFileWorkspace.BulkEditSpec(
+                        type = com.example.domain.LargeFileWorkspace.BulkEditType.SORT_ASC
+                    )
+                ).getOrThrow()
+
+                val firstPage = com.example.domain.LargeFileWorkspace.readPage(
+                    sorted.updatedSession.sourceFile,
+                    sorted.updatedSession.pageOffsets,
+                    sorted.updatedSession.totalLines,
+                    pageIndex = 0
+                )
+                assertEquals(specialFirst, firstPage[0])
+                assertEquals(specialSecond, firstPage[1])
+            } finally {
+                com.example.domain.LargeFileWorkspace.cleanupSession(ingested)
+            }
+        } finally {
+            tempRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun listToolkitEngine_andFileTextExtractor_handleRegexDollarAndMultiRecordLines() {
+        val edited = com.example.domain.ListToolkitEngine.transform(
+            rawInput = "id_1234",
+            options = com.example.domain.ListToolkitOptions.fromPreset(
+                com.example.domain.ToolkitPreset.CLEAN_TEXT_DEDUPE
+            ).copy(
+                findQuery = "\\d{4}",
+                findUseRegex = true,
+                replaceWith = "${'$'}99_USD"
+            )
+        )
+        assertEquals("id_${'$'}99_USD", edited.outputText)
+
+        val multi = FileTextExtractor.extractDelimitedRecordsFromLine(
+            "hit1=453225005536xxx3|08|2028|113 hit2=5412750012345678|11|2029|321"
+        )
+        assertEquals(2, multi.size)
+        val spaced = FileTextExtractor.extractDelimitedRecordsFromLine(
+            "453225005536xxx3 | 8 | 2028 | 113 | extra"
+        )
+        assertEquals(listOf("453225005536xxx3|8|2028|113"), spaced)
+    }
 }
 
 

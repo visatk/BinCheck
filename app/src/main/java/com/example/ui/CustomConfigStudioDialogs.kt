@@ -64,6 +64,20 @@ internal enum class TokenCategory(val label: String) {
     STEP1("Step 1 Captures")
 }
 
+internal fun adjustEditingIndexOnMove(editingIndex: Int, fromIndex: Int, toIndex: Int): Int =
+    when (editingIndex) {
+        fromIndex -> toIndex
+        toIndex -> fromIndex
+        else -> editingIndex
+    }
+
+internal fun adjustEditingIndexOnRemove(editingIndex: Int, removedIndex: Int): Int =
+    when {
+        editingIndex == removedIndex -> -1
+        editingIndex > removedIndex -> editingIndex - 1
+        else -> editingIndex
+    }
+
 @Composable
 internal fun PipelineStagePill(
     step: String,

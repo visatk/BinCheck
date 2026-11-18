@@ -1594,6 +1594,96 @@ class ExampleRobolectricTest {
             tempDir.deleteRecursively()
         }
     }
+
+    @Test
+    fun `batchValidationWorker streams delimited records with FileTextExtractor parity`() = runTest {
+        val appDb = AppDatabase.getInstance(context)
+        val appRepo = ValidationHistoryRepository(appDb.validationHistoryDao())
+        appRepo.clearAllHistory()
+
+        val tempStreamFile = java.io.File(context.cacheDir, "stream_filter_test_${System.currentTimeMillis()}.txt")
+        tempStreamFile.writeText(
+            """
+            # Header noise without delimiters
+            453225005536xxx3 | 8 | 2028 | 113
+            row_a 453225005536xxx3|09|2029|224 row_b 453225005536xxx3|10|2030|335
+            """.trimIndent()
+        )
+        val batchId = "stream_filter_batch_${System.currentTimeMillis()}"
+        try {
+            val worker = TestListenableWorkerBuilder<BatchValidationWorker>(context)
+                .setInputData(
+                    workDataOf(
+                        BatchValidationWorker.KEY_BATCH_ID to batchId,
+                        BatchValidationWorker.KEY_VALIDATION_MODE to ValidationMode.LOCAL_DETERMINISTIC.name,
+                        BatchValidationWorker.KEY_AUTO_RESOLVE_WILDCARDS to true,
+                        BatchValidationWorker.KEY_CONCURRENCY to 2,
+                        BatchValidationWorker.KEY_BATCH_DELAY_MS to 0L,
+                        BatchValidationWorker.KEY_SOURCE_NAME to "staged.txt",
+                        BatchValidationWorker.KEY_STREAM_FILE_PATH to tempStreamFile.absolutePath,
+                        BatchValidationWorker.KEY_STREAM_FILTER_DELIMITED to true
+                    )
+                )
+                .build()
+
+            val result = worker.doWork()
+            assertTrue(result is ListenableWorker.Result.Success)
+            val output = (result as ListenableWorker.Result.Success).outputData
+            assertEquals(3, output.getInt(BatchValidationWorker.KEY_TOTAL, -1))
+            assertEquals(3, output.getInt(BatchValidationWorker.KEY_PROCESSED, -1))
+            assertEquals(3, output.getInt(BatchValidationWorker.KEY_LIVE, -1))
+        } finally {
+            tempStreamFile.delete()
+            appRepo.clearAllHistory()
+        }
+    }
+
+    @Test
+    fun `customConfigBlocksTab adding second block edits newly inserted block without overwriting first`() {
+        var appliedConfig: CustomHttpConfig? = null
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+                com.example.ui.CustomConfigStudioBottomSheet(
+                    initialConfig = CustomHttpConfig(profileName = "Add Second Block Test"),
+                    savedProfiles = emptyList(),
+                    isTestingEndpoint = false,
+                    probeResult = null,
+                    onTestConfig = { _, _ -> },
+                    onClearProbeResult = {},
+                    onSaveAndUseConfig = { cfg -> appliedConfig = cfg },
+                    onSaveProfile = {},
+                    onDeleteProfile = {},
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("config_studio_tab_blocks").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("block_category_functions").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        // Add 1st block (FUNC_HASH), then add 2nd block (FUNC_BASE64_ENCODE)
+        composeTestRule.onNodeWithTag("add_block_type_func_hash").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("add_block_type_func_base64_encode").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        // Editor must point to block #2; saving edit must NOT clobber block #1
+        composeTestRule.onNodeWithTag("block_editor_primary_input").performScrollTo().performTextReplacement("SECOND_BLOCK_INPUT")
+        composeTestRule.onNodeWithTag("block_editor_save_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("config_studio_apply_button").performClick()
+        composeTestRule.waitForIdle()
+
+        val savedBlocks = appliedConfig?.parsedBlocks().orEmpty()
+        assertEquals(2, savedBlocks.size)
+        assertEquals(com.example.domain.BlockType.FUNC_HASH, savedBlocks[0].type)
+        assertEquals(com.example.domain.BlockType.FUNC_BASE64_ENCODE, savedBlocks[1].type)
+        assertEquals("SECOND_BLOCK_INPUT", savedBlocks[1].inputTarget)
+    }
 }
 
 

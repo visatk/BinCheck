@@ -470,7 +470,10 @@ fun CustomConfigStudioBottomSheet(
         bodyTemplate,
         userAgent,
         compressBodyGzip,
+        followRedirects,
+        skipLocalLuhnPrecheck,
         preRequestEnabled,
+        preRequestMethod,
         preRequestParseRules.toList(),
         sampleTestLine
     ) {

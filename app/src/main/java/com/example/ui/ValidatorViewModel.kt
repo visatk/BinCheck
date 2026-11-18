@@ -675,6 +675,9 @@ class ValidatorViewModel(
     }
 
     fun clearFilePreview() {
+        _localState.value.importedFilePreview?.stagedFilePath?.let { path ->
+            runCatching { File(path).delete() }
+        }
         _localState.update {
             it.copy(
                 importedFilePreview = null,
@@ -684,10 +687,14 @@ class ValidatorViewModel(
     }
 
     fun onFileUriSelected(uri: Uri) {
+        _localState.value.importedFilePreview?.stagedFilePath?.let { prevPath ->
+            runCatching { File(prevPath).delete() }
+        }
         _localState.update {
             it.copy(
                 isFileImportOpen = true,
                 isImportingFile = true,
+                importedFilePreview = null,
                 fileImportError = null
             )
         }
@@ -1505,6 +1512,13 @@ class ValidatorViewModel(
                 ResultBucket.UNKNOWN -> prev.copy(unknownRecords = prev.unknownRecords.filterNot { it.id == recordId })
             }
         }
+    }
+
+    override fun onCleared() {
+        _localState.value.importedFilePreview?.stagedFilePath?.let { path ->
+            runCatching { File(path).delete() }
+        }
+        super.onCleared()
     }
 
     companion object {

@@ -66,7 +66,6 @@ import com.example.domain.BlockCategory
 import com.example.domain.BlockPipelineResult
 import com.example.domain.BlockStepStatus
 import com.example.domain.BlockType
-import com.example.domain.CardValidatorEngine
 import com.example.domain.ConfigBlock
 import com.example.domain.ConfigBlockExecutor
 import com.example.domain.ConfigBlockSerialization
@@ -413,8 +412,9 @@ internal fun BlocksStudioTabContent(
                                         outputVar = bType.defaultOutputVar,
                                         captureToOutput = bType.category == BlockCategory.PARSING
                                     )
+                                    val insertedIndex = blocks.size
                                     onAddBlock(newBlock)
-                                    loadBlockForEdit(blocks.lastIndex.coerceAtLeast(0), newBlock)
+                                    loadBlockForEdit(insertedIndex, newBlock)
                                 }
                                 .testTag("add_block_type_${bType.name.lowercase()}")
                         ) {
@@ -463,8 +463,9 @@ internal fun BlocksStudioTabContent(
                                             outputVar = bType.defaultOutputVar,
                                             captureToOutput = bType.category == BlockCategory.PARSING
                                         )
+                                        val insertedIndex = blocks.size
                                         onAddBlock(newBlock)
-                                        loadBlockForEdit(blocks.lastIndex.coerceAtLeast(0), newBlock)
+                                        loadBlockForEdit(insertedIndex, newBlock)
                                     },
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                                     modifier = Modifier
@@ -717,33 +718,25 @@ internal fun BlocksStudioTabContent(
                         if (isRunningDryRun) return@FilledTonalButton
                         isRunningDryRun = true
                         scope.launch {
-                            val cleanSample = sampleTestLine.trim().ifEmpty { "4532250055360003|08|2028|113" }
-                            val isCombo = CustomConfigStudioEngine.isComboInputLine(cleanSample, currentConfig)
-                            val parts = cleanSample.split('|', ':', '/')
-                            val rawPan = parts.getOrElse(0) { "4532250055360003" }.trim()
-                            val pan = if (!isCombo && rawPan.any { it.equals('x', ignoreCase = true) }) {
-                                CardValidatorEngine.resolveWildcardPan(rawPan)
-                            } else rawPan
-                            val mm = parts.getOrElse(1) { "08" }.trim()
-                            val yyyy = parts.getOrElse(2) { "2028" }.trim()
-                            val cvv = parts.getOrElse(3) { "113" }.trim()
-                            val scheme = CardValidatorEngine.detectScheme(pan)
-
-                            val res = ConfigBlockExecutor.executeStack(
-                                blocks = blocks,
-                                normalizedLine = cleanSample,
-                                pan = pan,
-                                mm = mm,
-                                yyyy = yyyy,
-                                cvv = cvv,
-                                scheme = scheme,
-                                config = currentConfig,
-                                initialSourceBody = dryRunBodyText,
-                                initialStatusCode = dryRunStatusCode,
-                                dryRunNetwork = true
-                            )
-                            dryRunResult = res
-                            isRunningDryRun = false
+                            try {
+                                val sample = CustomConfigStudioEngine.resolveSampleInput(sampleTestLine, currentConfig)
+                                val res = ConfigBlockExecutor.executeStack(
+                                    blocks = blocks,
+                                    normalizedLine = sample.normalizedLine,
+                                    pan = sample.pan,
+                                    mm = sample.mm,
+                                    yyyy = sample.yyyy,
+                                    cvv = sample.cvv,
+                                    scheme = sample.scheme,
+                                    config = currentConfig,
+                                    initialSourceBody = dryRunBodyText,
+                                    initialStatusCode = dryRunStatusCode,
+                                    dryRunNetwork = true
+                                )
+                                dryRunResult = res
+                            } finally {
+                                isRunningDryRun = false
+                            }
                         }
                     },
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
@@ -858,7 +851,10 @@ internal fun BlocksStudioTabContent(
                                 Icon(Icons.Default.Edit, contentDescription = "Edit block", modifier = Modifier.size(16.dp))
                             }
                             IconButton(
-                                onClick = { onMoveBlock(idx, idx - 1) },
+                                onClick = {
+                                    editingIndex = adjustEditingIndexOnMove(editingIndex, idx, idx - 1)
+                                    onMoveBlock(idx, idx - 1)
+                                },
                                 enabled = idx > 0,
                                 modifier = Modifier
                                     .minimumInteractiveComponentSize()
@@ -873,7 +869,10 @@ internal fun BlocksStudioTabContent(
                                 )
                             }
                             IconButton(
-                                onClick = { onMoveBlock(idx, idx + 1) },
+                                onClick = {
+                                    editingIndex = adjustEditingIndexOnMove(editingIndex, idx, idx + 1)
+                                    onMoveBlock(idx, idx + 1)
+                                },
                                 enabled = idx < blocks.lastIndex,
                                 modifier = Modifier
                                     .minimumInteractiveComponentSize()
@@ -887,7 +886,7 @@ internal fun BlocksStudioTabContent(
                             }
                             IconButton(
                                 onClick = {
-                                    if (editingIndex == idx) editingIndex = -1
+                                    editingIndex = adjustEditingIndexOnRemove(editingIndex, idx)
                                     onRemoveBlock(idx)
                                 },
                                 modifier = Modifier

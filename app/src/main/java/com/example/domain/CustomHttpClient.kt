@@ -134,32 +134,34 @@ object CustomHttpClient {
         startNanos: Long,
         useCacheAndDedup: Boolean = true
     ): ValidationRecord {
-        val cacheKey = buildString(192) {
+        val canonicalConfig = buildString(256) {
             append(config.url.trim())
-            append('|').append(config.method.name)
-            append('|').append(config.headersText.hashCode())
-            append('|').append(config.bodyTemplate.hashCode())
-            append('|').append(config.liveKeywords.hashCode())
-            append('|').append(config.dieKeywords.hashCode())
-            append('|').append(config.parseRulesSpec.hashCode())
-            append('|').append(config.checkpointRulesSpec.hashCode())
-            append('|').append(config.preRequestEnabled)
-            append('|').append(config.preRequestUrl.hashCode())
-            append('|').append(config.preRequestBody.hashCode())
-            append('|').append(config.compressBodyGzip)
-            append('|').append(config.followRedirects)
-            append('|').append(config.userAgent.hashCode())
-            append('|').append(config.proxyEnabled)
-            append('|').append(config.proxyProtocol.name)
-            append('|').append(config.proxyRotation.name)
-            append('|').append(config.proxyListText.hashCode())
-            append('|').append(config.preRequestMethod.name)
-            append('|').append(config.preRequestHeaders.hashCode())
-            append('|').append(config.preRequestParseRulesSpec.hashCode())
-            append('|').append(config.skipLocalLuhnPrecheck)
-            append('|').append(config.blocksSpec.hashCode())
-            append('|').append(normalizedLine)
+            append('\u0000').append(config.method.name)
+            append('\u0000').append(config.headersText)
+            append('\u0000').append(config.bodyTemplate)
+            append('\u0000').append(config.liveKeywords)
+            append('\u0000').append(config.dieKeywords)
+            append('\u0000').append(config.parseRulesSpec)
+            append('\u0000').append(config.checkpointRulesSpec)
+            append('\u0000').append(config.preRequestEnabled)
+            append('\u0000').append(config.preRequestUrl)
+            append('\u0000').append(config.preRequestBody)
+            append('\u0000').append(config.compressBodyGzip)
+            append('\u0000').append(config.followRedirects)
+            append('\u0000').append(config.userAgent)
+            append('\u0000').append(config.proxyEnabled)
+            append('\u0000').append(config.proxyProtocol.name)
+            append('\u0000').append(config.proxyRotation.name)
+            append('\u0000').append(config.proxyListText)
+            append('\u0000').append(config.preRequestMethod.name)
+            append('\u0000').append(config.preRequestHeaders)
+            append('\u0000').append(config.preRequestParseRulesSpec)
+            append('\u0000').append(config.skipLocalLuhnPrecheck)
+            append('\u0000').append(config.blocksSpec)
         }
+        val configDigest = CustomConfigStudioEngine.sha256Hex(canonicalConfig)
+            .ifEmpty { canonicalConfig.hashCode().toString() }
+        val cacheKey = "$configDigest|$normalizedLine"
         if (useCacheAndDedup) {
             responseCache.get(cacheKey)?.let { cached ->
                 NetworkClientProvider.telemetry.recordCacheHit()
@@ -498,19 +500,13 @@ object CustomHttpClient {
             ?: CardValidatorEngine.expandPatternBatch("453225005536xxx3|08|2028|113", 1)
                 .firstOrNull() ?: "4532250055360003|08|2028|113"
 
-        val isCombo = CustomConfigStudioEngine.isComboInputLine(rawSample, config)
-        val parts = rawSample.split('|', ':', '/')
-        val rawPan = parts.getOrElse(0) { "4532250055360003" }.trim()
-        val pan = if (!isCombo && rawPan.any { it.equals('x', ignoreCase = true) }) {
-            CardValidatorEngine.resolveWildcardPan(rawPan)
-        } else {
-            rawPan
-        }
-        val mm = parts.getOrElse(1) { "08" }.trim().let { if (!isCombo) it.padStart(2, '0') else it }
-        val yyyy = parts.getOrElse(2) { "2028" }.trim().let { if (!isCombo) CardValidatorEngine.normalizeYear(it) else it }
-        val cvv = parts.getOrElse(3) { "113" }.trim()
-        val scheme = CardValidatorEngine.detectScheme(pan)
-        val normalizedSample = if (isCombo) rawSample.trim() else "$pan|$mm|$yyyy|$cvv"
+        val sample = CustomConfigStudioEngine.resolveSampleInput(rawSample, config)
+        val pan = sample.pan
+        val mm = sample.mm
+        val yyyy = sample.yyyy
+        val cvv = sample.cvv
+        val scheme = sample.scheme
+        val normalizedSample = sample.normalizedLine
 
         val selectedProxy = CustomConfigStudioEngine.selectProxyForRequest(config)
         var step1Executed = false
@@ -993,7 +989,8 @@ object CustomHttpClient {
         config: CustomHttpConfig,
         selectedProxy: ParsedProxyEndpoint? = null,
         step1Captures: Map<String, String> = emptyMap(),
-        step1Cookies: String = ""
+        step1Cookies: String = "",
+        recordTelemetry: Boolean = true
     ): Request? {
         val rawUrl = config.url.trim()
         if (rawUrl.isEmpty()) return null
@@ -1077,7 +1074,7 @@ object CustomHttpClient {
                 val mediaType = "application/json; charset=utf-8".toMediaType()
                 if (config.compressBodyGzip) {
                     builder.header("Content-Encoding", "gzip")
-                    builder.post(NetworkClientProvider.createGzipRequestBody(jsonPayload, mediaType))
+                    builder.post(NetworkClientProvider.createGzipRequestBody(jsonPayload, mediaType, recordTelemetry = recordTelemetry))
                 } else {
                     builder.post(jsonPayload.toRequestBody(mediaType))
                 }
@@ -1100,7 +1097,7 @@ object CustomHttpClient {
                     val mediaType = "application/x-www-form-urlencoded; charset=utf-8".toMediaType()
                     if (config.compressBodyGzip) {
                         builder.header("Content-Encoding", "gzip")
-                        builder.post(NetworkClientProvider.createGzipRequestBody(formBodyStr, mediaType))
+                        builder.post(NetworkClientProvider.createGzipRequestBody(formBodyStr, mediaType, recordTelemetry = recordTelemetry))
                     } else {
                         builder.post(formBodyStr.toRequestBody(mediaType))
                     }
@@ -1118,7 +1115,7 @@ object CustomHttpClient {
                         val encoded = okio.Buffer().apply { form.writeTo(this) }.readUtf8()
                         val mediaType = "application/x-www-form-urlencoded; charset=utf-8".toMediaType()
                         builder.header("Content-Encoding", "gzip")
-                        builder.post(NetworkClientProvider.createGzipRequestBody(encoded, mediaType))
+                        builder.post(NetworkClientProvider.createGzipRequestBody(encoded, mediaType, recordTelemetry = recordTelemetry))
                     } else {
                         builder.post(form)
                     }

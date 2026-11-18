@@ -487,7 +487,7 @@ fun FileImportBottomSheet(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = "Large file (${FileTextExtractor.formatFileSize(preview.fileSizeBytes)}) staged on disk: \"Load & Process\" streams all $fullSelectedCount lines directly; \"Load into Console\" loads a safe 5,000-line slice (open Toolkit to browse/edit all lines).",
+                            text = "Large file (${FileTextExtractor.formatFileSize(preview.fileSizeBytes)}) staged on disk: \"Load & Run\" streams all $fullSelectedCount lines directly; \"Load Only\" loads a safe 2,500-line preview (open Toolkit to browse/edit all lines).",
                             style = MaterialTheme.typography.labelSmall,
                             color = colorScheme.onPrimaryContainer,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)

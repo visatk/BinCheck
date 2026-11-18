@@ -1248,7 +1248,10 @@ internal fun ParseStudioTabContent(
                                 )
                             }
                             IconButton(
-                                onClick = { onMoveRule(idx, idx - 1) },
+                                onClick = {
+                                    editingIndex = adjustEditingIndexOnMove(editingIndex, idx, idx - 1)
+                                    onMoveRule(idx, idx - 1)
+                                },
                                 enabled = idx > 0,
                                 modifier = Modifier
                                     .minimumInteractiveComponentSize()
@@ -1263,7 +1266,10 @@ internal fun ParseStudioTabContent(
                                 )
                             }
                             IconButton(
-                                onClick = { onMoveRule(idx, idx + 1) },
+                                onClick = {
+                                    editingIndex = adjustEditingIndexOnMove(editingIndex, idx, idx + 1)
+                                    onMoveRule(idx, idx + 1)
+                                },
                                 enabled = idx < parseRules.lastIndex,
                                 modifier = Modifier
                                     .minimumInteractiveComponentSize()
@@ -1281,7 +1287,7 @@ internal fun ParseStudioTabContent(
                             )
                             IconButton(
                                 onClick = {
-                                    if (editingIndex == idx) editingIndex = -1
+                                    editingIndex = adjustEditingIndexOnRemove(editingIndex, idx)
                                     onRemoveRule(idx)
                                 },
                                 modifier = Modifier
@@ -1745,7 +1751,10 @@ internal fun CheckpointsStudioTabContent(
                                 )
                             }
                             IconButton(
-                                onClick = { onMoveCheckpoint(idx, idx - 1) },
+                                onClick = {
+                                    editingIndex = adjustEditingIndexOnMove(editingIndex, idx, idx - 1)
+                                    onMoveCheckpoint(idx, idx - 1)
+                                },
                                 enabled = idx > 0,
                                 modifier = Modifier
                                     .minimumInteractiveComponentSize()
@@ -1760,7 +1769,10 @@ internal fun CheckpointsStudioTabContent(
                                 )
                             }
                             IconButton(
-                                onClick = { onMoveCheckpoint(idx, idx + 1) },
+                                onClick = {
+                                    editingIndex = adjustEditingIndexOnMove(editingIndex, idx, idx + 1)
+                                    onMoveCheckpoint(idx, idx + 1)
+                                },
                                 enabled = idx < checkpointRules.lastIndex,
                                 modifier = Modifier
                                     .minimumInteractiveComponentSize()
@@ -1774,7 +1786,7 @@ internal fun CheckpointsStudioTabContent(
                             }
                             IconButton(
                                 onClick = {
-                                    if (editingIndex == idx) editingIndex = -1
+                                    editingIndex = adjustEditingIndexOnRemove(editingIndex, idx)
                                     onRemoveCheckpoint(idx)
                                 },
                                 modifier = Modifier

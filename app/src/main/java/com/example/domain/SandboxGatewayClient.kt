@@ -308,14 +308,7 @@ object SandboxGatewayClient {
                         .post(form)
                         .build()
                 }
-                client.newCall(request).execute().use { resp ->
-                    val bodyStr = resp.body?.string().orEmpty()
-                    HttpCallRawResponse(
-                        code = resp.code,
-                        body = bodyStr,
-                        retryAfterMs = RetryAndBackoffPolicy.parseRetryAfterMs(resp.header("Retry-After"), bodyStr)
-                    )
-                }
+                NetworkClientProvider.awaitRawCall(client, request)
             },
             onResult = { code, body, _ ->
                 parseStripeSandboxResponse(code, body)
@@ -373,14 +366,7 @@ object SandboxGatewayClient {
                     .header("Content-Type", "application/json")
                     .post(payload.toRequestBody(JSON_MEDIA_TYPE))
                     .build()
-                client.newCall(request).execute().use { resp ->
-                    val bodyStr = resp.body?.string().orEmpty()
-                    HttpCallRawResponse(
-                        code = resp.code,
-                        body = bodyStr,
-                        retryAfterMs = RetryAndBackoffPolicy.parseRetryAfterMs(resp.header("Retry-After"), bodyStr)
-                    )
-                }
+                NetworkClientProvider.awaitRawCall(client, request)
             },
             onResult = { code, body, _ ->
                 val approved = extractJsonBoolean(body, "approved")
@@ -425,14 +411,7 @@ object SandboxGatewayClient {
                     .header("Content-Type", "application/json")
                     .post(payload.toRequestBody(JSON_MEDIA_TYPE))
                     .build()
-                client.newCall(request).execute().use { resp ->
-                    val bodyStr = resp.body?.string().orEmpty()
-                    HttpCallRawResponse(
-                        code = resp.code,
-                        body = bodyStr,
-                        retryAfterMs = RetryAndBackoffPolicy.parseRetryAfterMs(resp.header("Retry-After"), bodyStr)
-                    )
-                }
+                NetworkClientProvider.awaitRawCall(client, request)
             },
             onResult = { code, body, _ ->
                 val cleanBody = body.trimStart('\uFEFF')
@@ -474,14 +453,7 @@ object SandboxGatewayClient {
                     .header("Content-Type", "application/json")
                     .post(payload.toRequestBody(JSON_MEDIA_TYPE))
                     .build()
-                client.newCall(request).execute().use { resp ->
-                    val bodyStr = resp.body?.string().orEmpty()
-                    HttpCallRawResponse(
-                        code = resp.code,
-                        body = bodyStr,
-                        retryAfterMs = RetryAndBackoffPolicy.parseRetryAfterMs(resp.header("Retry-After"), bodyStr)
-                    )
-                }
+                NetworkClientProvider.awaitRawCall(client, request)
             },
             onResult = { code, body, _ ->
                 when {

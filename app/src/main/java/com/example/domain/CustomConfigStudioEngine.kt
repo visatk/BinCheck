@@ -11,6 +11,16 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.random.Random
 
+data class ResolvedSampleInput(
+    val normalizedLine: String,
+    val pan: String,
+    val mm: String,
+    val yyyy: String,
+    val cvv: String,
+    val scheme: CardScheme,
+    val isCombo: Boolean
+)
+
 /**
  * Extraction mode for Custom Config Studio response parsing (Capture Rules).
  */
@@ -2157,11 +2167,15 @@ object CustomConfigStudioEngine {
         val sepIndex = trimmed.indexOfFirst { it == ':' || it == '|' || it == ';' }
         if (sepIndex <= 0 || sepIndex >= trimmed.lastIndex) return false
         val firstToken = trimmed.substring(0, sepIndex).trim()
+        val compactFirst = firstToken.replace(" ", "").replace("-", "")
+        val isCardLikeToken = compactFirst.length >= 6 &&
+            compactFirst.any { it.isDigit() } &&
+            compactFirst.all { it.isDigit() || it.equals('x', ignoreCase = true) }
         val hasFourCardFields = trimmed.split('|', '/', ':', ';').count { it.isNotBlank() } >= 4 &&
-            firstToken.none { it == '@' || it.isLetter() }
+            isCardLikeToken
         if (hasFourCardFields) return false
 
-        if (firstToken.contains('@') || firstToken.any { it.isLetter() }) {
+        if (firstToken.contains('@') || (!isCardLikeToken && firstToken.any { it.isLetter() })) {
             return true
         }
         if (config != null) {
@@ -2178,6 +2192,66 @@ object CustomConfigStudioEngine {
     }
 
     /**
+     * Normalizes a sample card or credential combo line and resolves 'x'/'X' wildcards across
+     * PAN, month, year, and CVV so Dry-Run, Probe, and Preview behave identically to [CardValidatorEngine].
+     */
+    fun resolveSampleInput(
+        rawSample: String,
+        config: CustomHttpConfig? = null
+    ): ResolvedSampleInput {
+        val cleanLine = rawSample.trim().ifEmpty { "4532250055360003|08|2028|113" }
+        val isCombo = isComboInputLine(cleanLine, config)
+        if (isCombo) {
+            val (userOrEmail, passPart) = CardValidatorEngine.splitComboLine(cleanLine)
+            return ResolvedSampleInput(
+                normalizedLine = cleanLine,
+                pan = userOrEmail,
+                mm = "--",
+                yyyy = "----",
+                cvv = passPart,
+                scheme = CardScheme.UNKNOWN,
+                isCombo = true
+            )
+        }
+        val parts = cleanLine.split('|', '/', ':', ';').map { it.trim() }
+        val rawPan = parts.getOrElse(0) { "4532250055360003" }.replace(" ", "").replace("-", "").ifEmpty { "4532250055360003" }
+        val rawMm = parts.getOrElse(1) { "08" }.ifEmpty { "08" }
+        val rawYyyy = parts.getOrElse(2) { "2028" }.ifEmpty { "2028" }
+        val rawCvv = parts.getOrElse(3) { "113" }.ifEmpty { "113" }
+
+        val hasWildcard = rawPan.any { it.equals('x', ignoreCase = true) } ||
+            rawMm.any { it.equals('x', ignoreCase = true) } ||
+            rawYyyy.any { it.equals('x', ignoreCase = true) } ||
+            rawCvv.any { it.equals('x', ignoreCase = true) }
+
+        var pan = rawPan
+        var mm = rawMm.padStart(2, '0')
+        var yyyy = CardValidatorEngine.normalizeYear(rawYyyy)
+        var cvv = rawCvv
+
+        if (hasWildcard) {
+            val expanded = CardValidatorEngine.expandPatternBatch("$rawPan|$rawMm|$rawYyyy|$rawCvv", 1).firstOrNull()
+            if (expanded != null) {
+                val expParts = expanded.split('|')
+                pan = expParts.getOrElse(0) { pan }
+                mm = expParts.getOrElse(1) { mm }
+                yyyy = expParts.getOrElse(2) { yyyy }
+                cvv = expParts.getOrElse(3) { cvv }
+            }
+        }
+        val scheme = CardValidatorEngine.detectScheme(pan)
+        return ResolvedSampleInput(
+            normalizedLine = "$pan|$mm|$yyyy|$cvv",
+            pan = pan,
+            mm = mm,
+            yyyy = yyyy,
+            cvv = cvv,
+            scheme = scheme,
+            isCombo = false
+        )
+    }
+
+    /**
      * Renders a live, deterministic preview of the HTTP request for the given [config] and [sampleLine]
      * so users can verify token substitution and JSON syntax before running a batch.
      */
@@ -2185,33 +2259,28 @@ object CustomConfigStudioEngine {
         config: CustomHttpConfig,
         sampleLine: String
     ): RenderedRequestPreview {
-        val cleanLine = sampleLine.trim().ifEmpty { "4532250055360003|08|2028|113" }
-        val isCombo = isComboInputLine(cleanLine, config)
-        val parts = cleanLine.split('|', ':', '/')
-        val rawPan = parts.getOrElse(0) { "4532250055360003" }.trim()
-        val pan = if (!isCombo && rawPan.any { it.equals('x', ignoreCase = true) }) {
-            CardValidatorEngine.resolveWildcardPan(rawPan)
-        } else {
-            rawPan
-        }
-        val mm = parts.getOrElse(1) { "08" }.trim().let { if (!isCombo) it.padStart(2, '0') else it }
-        val yyyy = parts.getOrElse(2) { "2028" }.trim().let { if (!isCombo) CardValidatorEngine.normalizeYear(it) else it }
-        val cvv = parts.getOrElse(3) { "113" }.trim()
-        val scheme = CardValidatorEngine.detectScheme(pan)
+        val sample = resolveSampleInput(sampleLine, config)
+        val isCombo = sample.isCombo
+        val pan = sample.pan
+        val mm = sample.mm
+        val yyyy = sample.yyyy
+        val cvv = sample.cvv
+        val scheme = sample.scheme
 
         val step1PreviewCaptures = config.parsedPreRequestParseRules().associate { rule ->
             rule.name to (rule.defaultValue.ifBlank { "step1_${rule.name}_val" })
         }
 
         val built = CustomHttpClient.buildRequest(
-            normalizedLine = if (isCombo) cleanLine else "$pan|$mm|$yyyy|$cvv",
+            normalizedLine = sample.normalizedLine,
             pan = pan,
             mm = mm,
             yyyy = yyyy,
             cvv = cvv,
             scheme = scheme,
             config = config,
-            step1Captures = step1PreviewCaptures
+            step1Captures = step1PreviewCaptures,
+            recordTelemetry = false
         )
 
         val resolvedMethod = built?.method ?: when (config.method) {
@@ -2227,7 +2296,7 @@ object CustomConfigStudioEngine {
             ""
         } else {
             CustomHttpClient.renderPreviewBody(
-                normalizedLine = if (isCombo) cleanLine else "$pan|$mm|$yyyy|$cvv",
+                normalizedLine = sample.normalizedLine,
                 pan = pan,
                 mm = mm,
                 yyyy = yyyy,

@@ -25,6 +25,7 @@ import com.example.domain.BinLookupService
 import com.example.domain.CardValidatorEngine
 import com.example.domain.CustomConfigStudioEngine
 import com.example.domain.CustomHttpConfig
+import com.example.domain.FileTextExtractor
 import com.example.domain.HttpRequestMethod
 import com.example.domain.NetworkClientProvider
 import com.example.domain.RequestDeduplicator
@@ -40,6 +41,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -178,7 +180,13 @@ class BatchValidationWorker(
                     var count = 0
                     while (true) {
                         val line = br.readLine() ?: break
-                        if (line.isNotBlank()) count++
+                        val trimmed = line.trim()
+                        if (trimmed.isEmpty()) continue
+                        count += if (streamFilterDelimited) {
+                            FileTextExtractor.extractDelimitedRecordsFromLine(trimmed).size
+                        } else {
+                            1
+                        }
                     }
                     count
                 }
@@ -431,7 +439,6 @@ class BatchValidationWorker(
             if (streamFile != null) {
                 // Lazy bounded-channel streaming for huge 100–200 MB queued files (O(1) memory)
                 val channel = Channel<String>(capacity = (workerCount * 32).coerceAtLeast(64))
-                val delimitedRegex = Regex("""[0-9xX]{6,19}[|/:;][0-9xX]{1,2}[|/:;][0-9xX]{2,4}[|/:;][0-9xX]{3,4}""")
                 coroutineScope {
                     val producer = launch(Dispatchers.IO) {
                         try {
@@ -439,14 +446,14 @@ class BatchValidationWorker(
                                 InputStreamReader(BufferedInputStream(FileInputStream(streamFile), 64 * 1024), StandardCharsets.UTF_8),
                                 64 * 1024
                             ).use { reader ->
-                                while (!isStopped) {
+                                while (isActive && !isStopped) {
                                     val rawLine = reader.readLine() ?: break
                                     val trimmed = rawLine.trim()
                                     if (trimmed.isEmpty()) continue
                                     if (streamFilterDelimited) {
-                                        val match = delimitedRegex.find(trimmed)?.value
-                                        if (match != null) {
-                                            channel.send(match)
+                                        for (recordLine in FileTextExtractor.extractDelimitedRecordsFromLine(trimmed)) {
+                                            if (!isActive || isStopped) break
+                                            channel.send(recordLine)
                                         }
                                     } else {
                                         channel.send(trimmed)
@@ -460,23 +467,34 @@ class BatchValidationWorker(
 
                     val consumers = List(workerCount) {
                         launch {
-                            for (lineText in channel) {
-                                if (isStopped) break
-                                val (record, wasDedupHit) = validateSingleLine(lineText)
-                                if (wasDedupHit) {
-                                    dedupSavedCounter.incrementAndGet()
+                            try {
+                                for (lineText in channel) {
+                                    if (isStopped) {
+                                        producer.cancel()
+                                        channel.cancel()
+                                        break
+                                    }
+                                    val (record, wasDedupHit) = validateSingleLine(lineText)
+                                    if (wasDedupHit) {
+                                        dedupSavedCounter.incrementAndGet()
+                                    }
+                                    persistRecord(sourceName, record)
+                                    when (record.bucket) {
+                                        ResultBucket.LIVE -> liveCounter.incrementAndGet()
+                                        ResultBucket.DIE -> dieCounter.incrementAndGet()
+                                        ResultBucket.UNKNOWN -> unknownCounter.incrementAndGet()
+                                    }
+                                    handleTelegramDispatch(record)
+                                    val done = processedCounter.incrementAndGet()
+                                    maybePublishProgress(done, force = false)
+                                    if (!wasDedupHit && effectiveDelayMs > 0L && !isStopped) {
+                                        delay(effectiveDelayMs)
+                                    }
                                 }
-                                persistRecord(sourceName, record)
-                                when (record.bucket) {
-                                    ResultBucket.LIVE -> liveCounter.incrementAndGet()
-                                    ResultBucket.DIE -> dieCounter.incrementAndGet()
-                                    ResultBucket.UNKNOWN -> unknownCounter.incrementAndGet()
-                                }
-                                handleTelegramDispatch(record)
-                                val done = processedCounter.incrementAndGet()
-                                maybePublishProgress(done, force = false)
-                                if (!wasDedupHit && effectiveDelayMs > 0L && !isStopped) {
-                                    delay(effectiveDelayMs)
+                            } finally {
+                                if (isStopped) {
+                                    producer.cancel()
+                                    channel.cancel()
                                 }
                             }
                         }

@@ -683,13 +683,20 @@ fun ListToolkitBottomSheet(
         } else {
             scope.launch {
                 val startNs = System.nanoTime()
-                val (updatedText, affected) = withContext(Dispatchers.Default) {
+                val editResult = withContext(Dispatchers.Default) {
                     applyInlineBulkEdit(sourceText, spec)
                 }
-                sourceText = updatedText
-                searchScanResult = null
-                val elapsed = ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(1L)
-                inlineFeedbackMessage = "${spec.type.label}: updated ($affected change(s)) in ${elapsed}ms"
+                editResult.fold(
+                    onSuccess = { (updatedText, affected) ->
+                        sourceText = updatedText
+                        searchScanResult = null
+                        val elapsed = ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(1L)
+                        inlineFeedbackMessage = "${spec.type.label}: updated ($affected change(s)) in ${elapsed}ms"
+                    },
+                    onFailure = { err ->
+                        inlineFeedbackMessage = err.localizedMessage ?: "Bulk edit failed."
+                    }
+                )
             }
         }
     }
@@ -1470,17 +1477,21 @@ fun ListToolkitBottomSheet(
     }
 }
 
-private fun applyInlineBulkEdit(rawInput: String, spec: BulkEditSpec): Pair<String, Int> {
+private fun applyInlineBulkEdit(rawInput: String, spec: BulkEditSpec): Result<Pair<String, Int>> {
     val normalizedLines = rawInput.replace("\r\n", "\n").replace('\r', '\n').split('\n')
     var affected = 0
     if (spec.type == BulkEditType.SORT_ASC) {
         val sorted = normalizedLines.sortedBy { it.lowercase(Locale.US) }
-        return sorted.joinToString("\n") to sorted.size
+        return Result.success(sorted.joinToString("\n") to sorted.size)
     }
 
     val findRegex = if (spec.useRegex && spec.findQuery.isNotEmpty()) {
         val opts = if (spec.ignoreCase) setOf(RegexOption.IGNORE_CASE) else emptySet()
-        runCatching { Regex(spec.findQuery, opts) }.getOrNull()
+        try {
+            Regex(spec.findQuery, opts)
+        } catch (e: Exception) {
+            return Result.failure(IllegalArgumentException("Invalid regex pattern: ${e.message ?: spec.findQuery}", e))
+        }
     } else null
 
     val parsedColumns = spec.columnIndices.split(',', ' ', ';', '|')
@@ -1495,7 +1506,7 @@ private fun applyInlineBulkEdit(rawInput: String, spec: BulkEditSpec): Pair<Stri
             BulkEditType.FIND_REPLACE -> {
                 if (spec.findQuery.isNotEmpty()) {
                     next = if (findRegex != null) {
-                        val rep = findRegex.replace(line, spec.replaceWith)
+                        val rep = ListToolkitEngine.safeRegexReplace(findRegex, line, spec.replaceWith)
                         if (rep != line) affected++
                         rep
                     } else {
@@ -1563,7 +1574,7 @@ private fun applyInlineBulkEdit(rawInput: String, spec: BulkEditSpec): Pair<Stri
         }
         if (keep) out.add(next)
     }
-    return out.joinToString("\n") to affected
+    return Result.success(out.joinToString("\n") to affected)
 }
 
 @OptIn(ExperimentalLayoutApi::class)

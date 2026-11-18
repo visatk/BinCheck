@@ -202,8 +202,8 @@ object ListToolkitEngine {
         """([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\s*[:|;\t,]\s*([^\s|;,"'<>]+)"""
     )
 
-    // Matches `url:user:pass` or `user:pass` / `user|pass` / `user;pass`
-    private val URL_PREFIX_REGEX = Regex("""^(?:https?://)?[A-Za-z0-9._\-]+\.[A-Za-z]{2,}(?::\d+)?(?:/[^\s:|;,]*)?[:|;\s]+""", RegexOption.IGNORE_CASE)
+    // Matches `url:user:pass` or `user:pass` / `user|pass` / `user;pass` across http(s)/ftp(s)/sftp/ssh/etc.
+    private val URL_PREFIX_REGEX = Regex("""^(?:[a-z][a-z0-9+.\-]*://)?[A-Za-z0-9._\-]+\.[A-Za-z]{2,}(?::\d+)?(?:/[^\s:|;,]*)?[:|;\s]+""", RegexOption.IGNORE_CASE)
     private val GENERIC_USER_PASS_REGEX = Regex("""^([^\s:|;,"'<>]{2,128})\s*[:|;\t]\s*([^\s|;,"'<>]{1,128})$""")
 
     data class ParsedCardEntry(
@@ -231,6 +231,14 @@ object ListToolkitEngine {
         return runCatching { Regex(options.findQuery, regexOptions) }.getOrNull()
     }
 
+    internal fun safeRegexReplace(regex: Regex, input: String, replacement: String): String {
+        return try {
+            regex.replace(input, replacement)
+        } catch (_: RuntimeException) {
+            regex.replace(input, Regex.escapeReplacement(replacement))
+        }
+    }
+
     fun applyLineEdits(
         line: String,
         options: ListToolkitOptions,
@@ -239,7 +247,7 @@ object ListToolkitEngine {
         var out = if (options.trimWhitespace) line.trim() else line
         if (options.findQuery.isNotEmpty()) {
             out = if (options.findUseRegex && compiledFindRegex != null) {
-                compiledFindRegex.replace(out, options.replaceWith)
+                safeRegexReplace(compiledFindRegex, out, options.replaceWith)
             } else {
                 out.replace(options.findQuery, options.replaceWith, ignoreCase = options.findIgnoreCase)
             }
@@ -658,7 +666,12 @@ object ListToolkitEngine {
         if (lowerPass == "password" || lowerPass == "pass" || lowerPass == "null" || lowerPass == "none") {
             return emptyList()
         }
-        val domain = if ('@' in user) user.substringAfter('@') else urlMatch?.value?.substringBefore(':').orEmpty().ifEmpty { "user" }
+        val domain = if ('@' in user) {
+            user.substringAfter('@')
+        } else {
+            val hostPart = urlMatch?.value?.substringAfter("://")?.substringBefore('/')?.substringBefore(':')?.trim().orEmpty()
+            hostPart.ifEmpty { "user" }
+        }
         return listOf(EmailPassEntry(email = user, password = pass, domain = domain))
     }
 

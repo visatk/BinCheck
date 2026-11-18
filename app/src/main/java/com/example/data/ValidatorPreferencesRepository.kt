@@ -223,7 +223,7 @@ class ValidatorPreferencesRepository(private val context: Context) {
             batchDelayMs = (prefs[Keys.BATCH_DELAY_MS] ?: 55L).coerceIn(0L, ValidationMode.MAX_CUSTOM_DELAY_MS),
             concurrency = (prefs[Keys.CONCURRENCY] ?: 4).coerceIn(1, 8),
             patternTemplate = prefs[Keys.PATTERN_TEMPLATE] ?: "453225005536xxx3|08|2028|113",
-            generateQuantity = prefs[Keys.GENERATE_QUANTITY] ?: 10,
+            generateQuantity = (prefs[Keys.GENERATE_QUANTITY] ?: 10).coerceIn(1, 100),
             themeMode = themeMode,
             useDynamicColor = prefs[Keys.USE_DYNAMIC_COLOR] ?: true,
             telegramWebhookEnabled = prefs[Keys.TELEGRAM_WEBHOOK_ENABLED] ?: false,

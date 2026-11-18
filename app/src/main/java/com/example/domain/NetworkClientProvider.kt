@@ -232,10 +232,13 @@ object NetworkClientProvider {
      */
     fun createGzipRequestBody(
         plainText: String,
-        contentType: MediaType
+        contentType: MediaType,
+        recordTelemetry: Boolean = true
     ): RequestBody {
         val rawBytes = plainText.toByteArray(Charsets.UTF_8)
-        telemetry.recordGzippedPayload()
+        if (recordTelemetry) {
+            telemetry.recordGzippedPayload()
+        }
         return object : RequestBody() {
             override fun contentType(): MediaType = contentType
             override fun contentLength(): Long = -1L
@@ -359,7 +362,9 @@ object NetworkClientProvider {
                                 )
                             )
                         } catch (t: Throwable) {
-                            continuation.resumeWithException(t)
+                            if (continuation.isActive) {
+                                continuation.resumeWithException(t)
+                            }
                         }
                     }
                 }

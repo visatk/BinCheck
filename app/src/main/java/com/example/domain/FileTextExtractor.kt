@@ -169,21 +169,10 @@ object FileTextExtractor {
                             if (previewAll.size < LARGE_PREVIEW_MAX_LINES) {
                                 previewAll.add(cleanLine)
                             }
-                            var matched = false
-                            for (m in DELIMITED_RECORD_REGEX.findAll(cleanLine)) {
+                            for (record in extractDelimitedRecordsFromLine(cleanLine)) {
                                 totalDelimitedCount++
                                 if (previewDelimited.size < LARGE_PREVIEW_MAX_LINES) {
-                                    previewDelimited.add(m.value)
-                                }
-                                matched = true
-                            }
-                            if (!matched && (cleanLine.contains('|') || cleanLine.contains('/'))) {
-                                val parts = cleanLine.split('|', '/', ':', ';').map { it.trim() }.filter { it.isNotEmpty() }
-                                if (parts.size >= 4 && parts[0].length >= 6) {
-                                    totalDelimitedCount++
-                                    if (previewDelimited.size < LARGE_PREVIEW_MAX_LINES) {
-                                        previewDelimited.add(parts.take(4).joinToString("|"))
-                                    }
+                                    previewDelimited.add(record)
                                 }
                             }
                         }
@@ -245,23 +234,29 @@ object FileTextExtractor {
     }
 
     /**
+     * Extracts one or more pipe/slash/colon delimited card/pattern records from a single cleaned line,
+     * falling back to delimited token normalization for spaced records.
+     */
+    fun extractDelimitedRecordsFromLine(cleanLine: String): List<String> {
+        if (cleanLine.isBlank()) return emptyList()
+        val found = DELIMITED_RECORD_REGEX.findAll(cleanLine).map { it.value }.toList()
+        if (found.isNotEmpty()) return found
+        if (cleanLine.contains('|') || cleanLine.contains('/')) {
+            val parts = cleanLine.split('|', '/', ':', ';').map { it.trim() }.filter { it.isNotEmpty() }
+            if (parts.size >= 4 && parts[0].length >= 6) {
+                return listOf(parts.take(4).joinToString("|"))
+            }
+        }
+        return emptyList()
+    }
+
+    /**
      * Extracts pipe/slash/colon delimited card/pattern records from lines (including inline matches inside HTML/log lines).
      */
     fun extractDelimitedLines(lines: List<String>): List<String> {
         val matches = LinkedHashSet<String>()
         for (line in lines) {
-            val found = DELIMITED_RECORD_REGEX.findAll(line)
-            var matchedAny = false
-            for (match in found) {
-                matches.add(match.value)
-                matchedAny = true
-            }
-            if (!matchedAny && (line.contains('|') || line.contains('/'))) {
-                val parts = line.split('|', '/', ':', ';').map { it.trim() }.filter { it.isNotEmpty() }
-                if (parts.size >= 4 && parts[0].length >= 6) {
-                    matches.add(parts.take(4).joinToString("|"))
-                }
-            }
+            matches.addAll(extractDelimitedRecordsFromLine(line))
         }
         return matches.toList()
     }

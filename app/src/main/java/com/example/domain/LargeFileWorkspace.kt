@@ -414,7 +414,11 @@ object LargeFileWorkspace {
             val nextActive = File(session.workspaceDir, "active_next.txt")
             val findRegex = if (spec.useRegex && spec.findQuery.isNotEmpty()) {
                 val opts = if (spec.ignoreCase) setOf(RegexOption.IGNORE_CASE) else emptySet()
-                Regex(spec.findQuery, opts)
+                try {
+                    Regex(spec.findQuery, opts)
+                } catch (e: Exception) {
+                    throw IllegalArgumentException("Invalid regex pattern: ${e.message ?: spec.findQuery}", e)
+                }
             } else null
 
             val parsedColumns = spec.columnIndices.split(',', ' ', ';', '|')
@@ -466,7 +470,7 @@ object LargeFileWorkspace {
                             BulkEditType.FIND_REPLACE -> {
                                 if (spec.findQuery.isNotEmpty()) {
                                     transformed = if (findRegex != null) {
-                                        val replaced = findRegex.replace(rawLine, spec.replaceWith)
+                                        val replaced = ListToolkitEngine.safeRegexReplace(findRegex, rawLine, spec.replaceWith)
                                         if (replaced != rawLine) affectedCount++
                                         replaced
                                     } else {
@@ -1139,10 +1143,7 @@ object LargeFileWorkspace {
                     val runFile = File(workDir, "sort_run_${runSeq++}.tmp")
                     BufferedWriter(OutputStreamWriter(BufferedOutputStream(FileOutputStream(runFile), STREAM_BUFFER_BYTES), StandardCharsets.UTF_8)).use { bw ->
                         for (item in chunkBuffer) {
-                            bw.write(item.key)
-                            bw.write('\u0001'.code)
-                            bw.write(item.line)
-                            bw.newLine()
+                            writeExternalRunLine(bw, item.key, item.line)
                         }
                     }
                     runFiles.add(runFile)
@@ -1178,10 +1179,7 @@ object LargeFileWorkspace {
                 val runFile = File(workDir, "sort_run_${runSeq++}.tmp")
                 BufferedWriter(OutputStreamWriter(BufferedOutputStream(FileOutputStream(runFile), STREAM_BUFFER_BYTES), StandardCharsets.UTF_8)).use { bw ->
                     for (item in chunkBuffer) {
-                        bw.write(item.key)
-                        bw.write('\u0001'.code)
-                        bw.write(item.line)
-                        bw.newLine()
+                        writeExternalRunLine(bw, item.key, item.line)
                     }
                 }
                 runFiles.add(runFile)
@@ -1205,9 +1203,7 @@ object LargeFileWorkspace {
                 val br = BufferedReader(InputStreamReader(BufferedInputStream(FileInputStream(rf), 16 * 1024), StandardCharsets.UTF_8), 16 * 1024)
                 openReaders.add(br)
                 val first = br.readLine() ?: continue
-                val sep = first.indexOf('\u0001')
-                val k = if (sep >= 0) first.substring(0, sep) else first
-                val v = if (sep >= 0) first.substring(sep + 1) else first
+                val (k, v) = decodeExternalRunLine(first)
                 pq.add(MergeCursor(k, v, br))
             }
 
@@ -1225,9 +1221,7 @@ object LargeFileWorkspace {
 
                     val nextRaw = head.reader.readLine()
                     if (nextRaw != null) {
-                        val sep = nextRaw.indexOf('\u0001')
-                        val k = if (sep >= 0) nextRaw.substring(0, sep) else nextRaw
-                        val v = if (sep >= 0) nextRaw.substring(sep + 1) else nextRaw
+                        val (k, v) = decodeExternalRunLine(nextRaw)
                         pq.add(MergeCursor(k, v, head.reader))
                     }
                     if (count % 16_384 == 0) {
@@ -1243,6 +1237,30 @@ object LargeFileWorkspace {
 
         if (offsets.isEmpty()) offsets.add(0L)
         Triple(count, outBytes, offsets.toLongArray())
+    }
+
+    /**
+     * Writes an external sort run record using length-prefixed framing (`<keyLen>:<key><line>`)
+     * so arbitrary characters (including control bytes) inside keys or lines never collide.
+     */
+    private fun writeExternalRunLine(bw: BufferedWriter, key: String, line: String) {
+        bw.write(key.length.toString())
+        bw.write(':'.code)
+        bw.write(key)
+        bw.write(line)
+        bw.newLine()
+    }
+
+    private fun decodeExternalRunLine(raw: String): Pair<String, String> {
+        val colonIdx = raw.indexOf(':')
+        if (colonIdx > 0) {
+            val keyLen = raw.substring(0, colonIdx).toIntOrNull()
+            val startIdx = colonIdx + 1
+            if (keyLen != null && keyLen >= 0 && startIdx + keyLen <= raw.length) {
+                return raw.substring(startIdx, startIdx + keyLen) to raw.substring(startIdx + keyLen)
+            }
+        }
+        return raw to raw
     }
 
     private fun copyAndIndexFile(
