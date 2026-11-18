@@ -1441,7 +1441,9 @@ class ExampleUnitTest {
                 )
         )
         assertEquals(3, rawTextRes.totalInputLines)
-        assertEquals("ID=alpha_token;\nID=beta_token;\nID=alpha_token;", rawTextRes.outputText)
+        assertEquals(2, rawTextRes.outputCount)
+        assertEquals(1, rawTextRes.removedDuplicates)
+        assertEquals("ID=alpha_token;\nID=beta_token;", rawTextRes.outputText)
 
         val rawExactDedup = com.example.domain.ListToolkitEngine.transform(
             rawInput = "item_a\nitem_b\nitem_a",
